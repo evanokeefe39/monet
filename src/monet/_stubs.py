@@ -1,12 +1,36 @@
-"""Stub implementations for SDK functions not yet wired to real services.
+"""SDK utility functions backed by infrastructure.
 
-write_artifact() raises NotImplementedError until the catalogue is built.
+write_artifact() calls the catalogue client from context.
 emit_progress() is a no-op until LangGraph's get_stream_writer() is available.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, Literal
+
+from ._context import get_run_context
+
+if TYPE_CHECKING:
+    from ._types import ArtifactPointer
+    from .catalogue._protocol import CatalogueClient
+
+_catalogue_client: ContextVar[CatalogueClient | None] = ContextVar(
+    "_catalogue_client", default=None
+)
+
+
+def set_catalogue_client(client: CatalogueClient) -> None:
+    """Set the catalogue client for the current context.
+
+    Called at server startup or in test fixtures.
+    """
+    _catalogue_client.set(client)
+
+
+def get_catalogue_client() -> CatalogueClient | None:
+    """Get the current catalogue client, or None if not configured."""
+    return _catalogue_client.get(None)
 
 
 def write_artifact(
@@ -14,24 +38,45 @@ def write_artifact(
     content_type: str,
     summary: str = "",
     confidence: float = 0.0,
-    completeness: str = "complete",
-    sensitivity_label: str = "internal",
+    completeness: Literal["complete", "partial", "resource-bounded"] = "complete",
+    sensitivity_label: Literal[
+        "public", "internal", "confidential", "restricted"
+    ] = "internal",
     **kwargs: Any,
-) -> Any:
+) -> ArtifactPointer:
     """Write an artifact to the catalogue.
 
     Preconditions:
         Must be called inside a decorated agent function.
+        A catalogue client must be configured via set_catalogue_client().
     Postconditions:
         Returns an ArtifactPointer with the artifact ID and URL.
-
-    Currently raises NotImplementedError — will be wired to the
-    CatalogueClient in Phase 2.
     """
-    raise NotImplementedError(
-        "write_artifact() is not yet connected to a catalogue. "
-        "The catalogue will be built in Phase 2."
+    client = _catalogue_client.get(None)
+    if client is None:
+        msg = (
+            "No catalogue client configured. "
+            "Call set_catalogue_client() at startup or in test fixtures."
+        )
+        raise RuntimeError(msg)
+
+    from .catalogue._metadata import ArtifactMetadata
+
+    ctx = get_run_context()
+    metadata = ArtifactMetadata(
+        content_type=content_type,
+        summary=summary,
+        created_by=ctx.agent_id or "unknown",
+        trace_id=ctx.trace_id,
+        run_id=ctx.run_id,
+        invocation_command=ctx.command,
+        invocation_effort=ctx.effort,
+        confidence=confidence,
+        completeness=completeness,
+        sensitivity_label=sensitivity_label,
+        **kwargs,
     )
+    return client.write(content, metadata)
 
 
 def emit_progress(data: dict[str, Any]) -> None:

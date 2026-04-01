@@ -52,3 +52,7 @@ GitHub Actions runs ruff, mypy, and pytest on push/PR to main. All checks must p
 - Modify CI workflow without explicit approval
 - Create files outside the established layout
 - Add compatibility shims or backwards-compat code
+
+# Architecture
+
+System design is outlined in ./SPEC.md
