@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, overload
 
 from ._context import _agent_context
 from ._registry import default_registry
+from ._stubs import get_catalogue_client
+from ._tracing import end_span, start_agent_span
 from ._types import (
     AgentResult,
     AgentRunContext,
@@ -27,6 +29,9 @@ from ._types import (
     SemanticErrorInfo,
 )
 from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
+
+# Default content limit for automatic offload (bytes)
+DEFAULT_CONTENT_LIMIT = 4000
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -66,11 +71,38 @@ def _wrap_result(
     return_value: Any,
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
+    content_limit: int = DEFAULT_CONTENT_LIMIT,
 ) -> AgentResult:
-    """Assemble a successful AgentResult from a function's return value."""
+    """Assemble a successful AgentResult from a function's return value.
+
+    If the output exceeds content_limit and a catalogue client is
+    configured, automatically offloads to the catalogue and returns
+    a pointer instead.
+    """
+    output_str = str(return_value)
+    output: str | ArtifactPointer = output_str
+
+    # Automatic content offload
+    if len(output_str) > content_limit:
+        client = get_catalogue_client()
+        if client is not None:
+            from .catalogue._metadata import ArtifactMetadata
+
+            metadata = ArtifactMetadata(
+                content_type="text/plain",
+                summary=output_str[:200],
+                created_by=ctx.agent_id or "unknown",
+                trace_id=ctx.trace_id,
+                run_id=ctx.run_id,
+                invocation_command=ctx.command,
+            )
+            pointer = client.write(output_str.encode(), metadata)
+            artifacts = [*artifacts, pointer]
+            output = pointer
+
     return AgentResult(
         success=True,
-        output=str(return_value),
+        output=output,
         artifacts=list(artifacts),
         signals=AgentSignals(),
         trace_id=ctx.trace_id,
@@ -159,6 +191,13 @@ def agent(
         @functools.wraps(fn)
         async def wrapper(ctx: AgentRunContext) -> AgentResult:
             artifacts: list[ArtifactPointer] = []
+            span = start_agent_span(
+                agent_id=agent_id,
+                command=command,
+                effort=ctx.effort,
+                run_id=ctx.run_id,
+                trace_id=ctx.trace_id,
+            )
             token = _agent_context.set(ctx)
             try:
                 kwargs = _inject_params(fn, ctx)
@@ -166,9 +205,13 @@ def agent(
                     result = await fn(**kwargs)
                 else:
                     result = fn(**kwargs)
-                return _wrap_result(result, ctx, artifacts)
+                agent_result = _wrap_result(result, ctx, artifacts)
+                end_span(span, success=True)
+                return agent_result
             except Exception as exc:
-                return _handle_exception(exc, ctx, artifacts)
+                agent_result = _handle_exception(exc, ctx, artifacts)
+                end_span(span, success=False, error_message=str(exc))
+                return agent_result
             finally:
                 _agent_context.reset(token)
 
