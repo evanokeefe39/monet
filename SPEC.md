@@ -52,6 +52,10 @@ The decorator uses Python's standard `contextvars.ContextVar` to set an `AgentRu
 
 The decorator wraps the function in a try/except and always returns an `AgentResult` regardless of what happens inside. The orchestrator always receives a well-formed result. There is no code path that produces an unexpected shape.
 
+**Internal composition note**: the decorator accumulates multiple responsibilities — context injection, exception wrapping, content offload, progress emission, artifact collection, parameter injection. These are composed internally as discrete functions that the decorator orchestrates. The public API is a single decorator. The internal implementation separates these concerns to keep each testable and replaceable independently. The ~300 line estimate is aspirational — proper error handling, type annotations, and edge case coverage will exceed this. Line count must not drive architectural shortcuts.
+
+**OTel is a hard dependency**: the SDK imports and configures OpenTelemetry unconditionally. The architecture states observability is non-negotiable. Conditional import paths add complexity for no benefit. Agents that run without an OTel collector configured will emit spans to a no-op exporter — this is the correct degraded behaviour, not an import error.
+
 **`@agent` decorator**
 
 Wraps any Python callable. Registers the function as the handler for a specific agent ID and command. Parameters: `agent_id` (string, mandatory), `command` (string, optional, defaults to `"fast"`).
@@ -103,17 +107,21 @@ The `command` field is available for injection if the function declares it, usef
 
 **Effort — invocation-time concern**
 
-Effort is not part of command registration. It is passed in the input envelope at call time by the orchestrator, expressing how much work the caller wants done for this particular invocation. The agent author reads `effort` from the injected context and decides what it means internally — fewer iterations, a lighter model, shallower search, a draft pass versus a thorough pass.
+Effort is not part of command registration. It is passed in the input envelope at call time by the orchestrator, expressing how much work the caller wants done for this particular invocation. The agent author reads `effort` from the injected context and decides what it means internally — fewer iterations, shallower search, a draft pass versus a thorough pass.
 
-`effort` is optional with no fixed vocabulary. Sensible values are strings like `"low"`, `"high"`, `"draft"`, `"thorough"` — whatever the agent author documents in their capability descriptor. An agent that does not meaningfully vary its approach ignores the field entirely. The orchestrator passes effort at invocation time based on what the graph needs at that point — a targeted replan calls the planner with `effort="low"`, a full brief production calls it with `effort="high"`.
+`effort` is an optional enum with three values: `"low"`, `"medium"`, `"high"`. Absent means the agent uses its own default, which should be `"high"` for most production invocations. The three-value vocabulary is intentionally constrained — it is expressive enough for the orchestrator to communicate intent and stable enough that every agent author knows what each value means without per-agent documentation.
 
 ```python
 @agent(agent_id="planner", command="plan")
 async def planner(task: str, context: list, effort: str = "high"):
     if effort == "low":
         return await quick_replan(task, context)
+    elif effort == "medium":
+        return await focused_plan(task, context)
     return await full_plan(task, context)
 ```
+
+The orchestrator does not control which model an agent uses internally. Model selection is an internal agent concern. The capability descriptor carries advisory SLA characteristics per command but the orchestrator does not inject model parameters into the input envelope.
 
 **Automatic content offload**
 
@@ -141,7 +149,7 @@ Available via `get_run_context()` anywhere inside a decorated function. Also the
 | `task` | Natural language instruction from input envelope |
 | `context` | Typed context entry list from input envelope |
 | `command` | The command name this function was registered for (e.g. `"fast"`, `"deep"`, `"translate"`, `"ask"`) |
-| `effort` | Optional invocation-time effort hint from the orchestrator (e.g. `"low"`, `"high"`). Absent if not passed |
+| `effort` | Invocation-time effort level from the orchestrator. One of `"low"`, `"medium"`, `"high"`. Absent if not passed by the orchestrator |
 | `trace_id` | OTel trace ID |
 | `run_id` | LangGraph run ID |
 | `agent_id` | The agent's registered ID |
@@ -312,7 +320,7 @@ Universal across all agents and all commands.
 | `task` | string | mandatory | Natural language instruction |
 | `context` | list of typed entries | optional | Artifact pointers, instructions, constraints, skill references |
 | `command` | string | optional | Which command to invoke. Defaults to `"fast"` if omitted |
-| `effort` | string | optional | Invocation-time effort hint. No fixed vocabulary — agent author documents what values they support. Absent means the agent uses its own default |
+| `effort` | enum | optional | Invocation-time effort level. One of `"low"`, `"medium"`, `"high"`. Absent means the agent uses its own default |
 | `trace_id` | string | mandatory | OTel trace ID for continuity |
 | `run_id` | string | mandatory | LangGraph run ID for correlation |
 
@@ -413,15 +421,19 @@ For Python agents using the SDK, `write_artifact()` is the interface to the cata
 Static typed configuration loaded at startup. Not a runtime service. Not queried dynamically. Each agent has a descriptor defining:
 
 - Capability description
-- Registered commands with their calling convention (synchronous or async), expected effort vocabulary, and SLA characteristics per command: expected latency envelope, cost tier, model selection
+- Registered commands with their calling convention (synchronous or async) and SLA characteristics per command: expected latency envelope per effort level, cost tier
 - Confidence model
 - Retry semantics
 
 The calling convention for each command determines how the node wrapper calls the agent — synchronous request-response, or async 202 with polling or SSE. The conventional commands `fast` and `deep` have their calling conventions implied by name. All other commands declare their calling convention explicitly in the descriptor.
 
+Model selection is an internal agent concern and is not present in the descriptor. The orchestrator does not control which LLM an agent uses. The descriptor describes observable capability — what the agent produces and how reliably — not internal implementation choices.
+
 Descriptors serve three purposes: human documentation, LangGraph `RetryPolicy` configuration per node, and comparison of actuals captured in Langfuse against declared SLA characteristics over time (kaizen input).
 
 The graph is the authoritative source for which agents exist and when they are invoked. Descriptors describe capability and inform policy, not routing.
+
+**Implementation note**: the descriptor registry is a module-level instance, not a global mutable dict. Test isolation requires a `clear_registry()` context manager or equivalent scoping mechanism to prevent concurrent test runs from colliding on shared registry state.
 
 ---
 
