@@ -84,8 +84,14 @@ def test_result_success() -> None:
     r = AgentResult(success=True, output="done", trace_id="t1", run_id="r1")
     assert r.success is True
     assert r.output == "done"
+    assert r.confidence == 0.0
     assert r.artifacts == []
     assert r.signals.needs_human_review is False
+
+
+def test_result_with_confidence() -> None:
+    r = AgentResult(success=True, output="done", confidence=0.85)
+    assert r.confidence == 0.85
 
 
 def test_result_with_artifacts() -> None:

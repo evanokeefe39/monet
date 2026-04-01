@@ -131,7 +131,13 @@ class AgentRunContext:
     """
 
     task: str = ""
-    context: list[Any] = field(default_factory=list)  # list[ContextEntry]
+    context: list[
+        ArtifactEntry
+        | WorkBriefEntry
+        | ConstraintEntry
+        | InstructionEntry
+        | SkillReferenceEntry
+    ] = field(default_factory=list)
     command: str = "fast"
     effort: Effort | None = None
     trace_id: str = ""
@@ -153,6 +159,7 @@ class AgentResult:
 
     success: bool
     output: str | ArtifactPointer
+    confidence: float = 0.0
     artifacts: list[ArtifactPointer] = field(default_factory=list)
     signals: AgentSignals = field(default_factory=AgentSignals)
     trace_id: str = ""
