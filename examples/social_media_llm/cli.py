@@ -18,7 +18,6 @@ import asyncio
 import os
 import sys
 import uuid
-from pathlib import Path
 from typing import Any
 
 # Load environment variables before importing agents
@@ -26,10 +25,7 @@ from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-_sandpit_env = Path.home() / "repos" / "deepagents-sandpit" / ".env"
-if _sandpit_env.exists():
-    load_dotenv(_sandpit_env)
-load_dotenv()  # local .env overrides
+load_dotenv()  # loads from .env in repo root
 
 from monet._stubs import set_catalogue_client  # noqa: E402
 from monet.catalogue._memory import InMemoryCatalogueClient  # noqa: E402
