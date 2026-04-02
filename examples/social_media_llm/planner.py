@@ -55,13 +55,29 @@ The work brief MUST follow this exact schema:
   "assumptions": ["list of assumptions"]
 }
 
+IMPORTANT: Use ONLY these exact agent_id/command combinations:
+- {"agent_id": "sm-researcher", "command": "deep"} for research
+- {"agent_id": "sm-writer", "command": "deep"} for writing
+- {"agent_id": "sm-qa", "command": "fast"} for quality review
+- {"agent_id": "sm-publisher", "command": "publish"} for publishing
+
 Always include exactly 2 phases:
-1. "Research & Draft" — wave 1: researcher, wave 2: writers (one per platform)
-2. "QA & Publish" — wave 1: QA per piece, wave 2: publisher per piece
+1. "Research & Draft" — wave 1: sm-researcher/deep,
+   wave 2: sm-writer/deep (one per platform)
+2. "QA & Publish" — wave 1: sm-qa/fast per piece, wave 2: sm-publisher/publish per piece
 
 Set is_sensitive to true if the topic involves politics, health claims,
 financial advice, or other sensitive areas requiring human review.
 """
+
+
+def _strip_code_fences(text: str) -> str:
+    """Strip markdown code fences from LLM output."""
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0]
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0]
+    return text.strip()
 
 
 async def run_planner_triage(task: str) -> str:
@@ -77,7 +93,7 @@ async def run_planner_triage(task: str) -> str:
             HumanMessage(content=task),
         ]
     )
-    return str(response.content)
+    return _strip_code_fences(str(response.content))
 
 
 async def run_planner_plan(task: str, feedback: str | None = None) -> dict[str, object]:
@@ -97,12 +113,5 @@ async def run_planner_plan(task: str, feedback: str | None = None) -> dict[str, 
             HumanMessage(content=prompt),
         ]
     )
-    content = str(response.content)
-
-    # Extract JSON from response (may be wrapped in markdown code blocks)
-    if "```json" in content:
-        content = content.split("```json")[1].split("```")[0]
-    elif "```" in content:
-        content = content.split("```")[1].split("```")[0]
-
+    content = _strip_code_fences(str(response.content))
     return json.loads(content)

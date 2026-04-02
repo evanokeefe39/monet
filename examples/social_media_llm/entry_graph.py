@@ -31,7 +31,14 @@ async def triage_node(state: EntryState) -> dict[str, Any]:
         agent_id="sm-planner",
     )
     result = await handler(ctx)
-    triage = json.loads(result.output) if isinstance(result.output, str) else {}
+    try:
+        triage = json.loads(result.output) if isinstance(result.output, str) else {}
+    except json.JSONDecodeError:
+        triage = {
+            "complexity": "complex",
+            "suggested_agents": [],
+            "requires_planning": True,
+        }
     return {"triage": triage}
 
 
