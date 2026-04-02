@@ -14,8 +14,9 @@ from langgraph.types import interrupt
 
 from monet._decorator import agent
 from monet._registry import default_registry
-from monet._types import AgentResult, AgentRunContext
+from monet._types import AgentResult, AgentRunContext, SignalType
 from monet.exceptions import NeedsHumanReview
+from monet.orchestration._state import has_signal
 
 # --- Lean graph state ---
 
@@ -80,16 +81,18 @@ async def _call_agent(agent_id: str, state: GraphState) -> dict[str, Any]:
     )
     result: AgentResult = await handler(ctx)
 
+    needs_review = has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
+
     entry: dict[str, Any] = {
         "agent_id": agent_id,
         "output": result.output,
         "success": result.success,
-        "needs_human_review": result.signals.needs_human_review,
+        "needs_human_review": needs_review,
     }
 
     return {
         "results": [entry],
-        "needs_review": result.signals.needs_human_review,
+        "needs_review": needs_review,
     }
 
 

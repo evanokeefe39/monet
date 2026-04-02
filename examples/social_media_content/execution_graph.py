@@ -27,7 +27,8 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
 from monet._registry import default_registry
-from monet._types import AgentRunContext, ArtifactEntry
+from monet._types import AgentRunContext, ArtifactEntry, SignalType
+from monet.orchestration._state import has_signal
 
 from .state import ExecutionState, WaveItem, WaveResult
 
@@ -83,11 +84,8 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
     )
     result = await handler(ctx)
 
-    signals = {
-        "needs_human_review": result.signals.needs_human_review,
-        "escalation_requested": result.signals.escalation_requested,
-        "review_reason": result.signals.review_reason,
-    }
+    # Convert list-based signals to serializable dict for state
+    signals_data = [dict(s) for s in result.signals]
 
     entry: WaveResult = {
         "phase_index": item["phase_index"],
@@ -98,7 +96,7 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
         "output": (
             result.output if isinstance(result.output, str) else result.output.url
         ),
-        "signals": signals,
+        "signals": signals_data,
     }
 
     return {"wave_results": [entry]}
@@ -124,8 +122,8 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
     ]
 
     has_blocking = any(
-        r.get("signals", {}).get("needs_human_review")
-        or r.get("signals", {}).get("escalation_requested")
+        has_signal(r.get("signals", []), SignalType.NEEDS_HUMAN_REVIEW)
+        or has_signal(r.get("signals", []), SignalType.ESCALATION_REQUIRED)
         for r in current_results
     )
 

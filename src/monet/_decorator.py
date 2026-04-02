@@ -19,14 +19,14 @@ from typing import TYPE_CHECKING, Any, overload
 
 from ._context import _agent_context
 from ._registry import default_registry
-from ._stubs import get_catalogue_client
+from ._stubs import _signal_collector, get_catalogue_client
 from ._tracing import end_span, start_agent_span
 from ._types import (
     AgentResult,
     AgentRunContext,
-    AgentSignals,
     ArtifactPointer,
-    SemanticErrorInfo,
+    Signal,
+    SignalType,
 )
 from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
 
@@ -71,6 +71,7 @@ def _wrap_result(
     return_value: Any,
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
+    signals: list[Signal],
     content_limit: int = DEFAULT_CONTENT_LIMIT,
 ) -> AgentResult:
     """Assemble a successful AgentResult from a function's return value.
@@ -104,7 +105,7 @@ def _wrap_result(
         success=True,
         output=output,
         artifacts=list(artifacts),
-        signals=AgentSignals(),
+        signals=list(signals),
         trace_id=ctx.trace_id,
         run_id=ctx.run_id,
     )
@@ -114,33 +115,51 @@ def _handle_exception(
     exc: Exception,
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
+    signals: list[Signal],
 ) -> AgentResult:
-    """Translate typed or unexpected exceptions into AgentResult with signals."""
+    """Translate typed or unexpected exceptions into AgentResult with signals.
+
+    Appends an appropriate signal to the accumulated list, then builds
+    a failed AgentResult.
+    """
     if isinstance(exc, NeedsHumanReview):
-        signals = AgentSignals(
-            needs_human_review=True,
-            review_reason=exc.reason,
+        signals.append(
+            Signal(
+                type=SignalType.NEEDS_HUMAN_REVIEW,
+                reason=exc.reason,
+                metadata=None,
+            )
         )
     elif isinstance(exc, EscalationRequired):
-        signals = AgentSignals(
-            escalation_requested=True,
-            escalation_reason=exc.reason,
+        signals.append(
+            Signal(
+                type=SignalType.ESCALATION_REQUIRED,
+                reason=exc.reason,
+                metadata=None,
+            )
         )
     elif isinstance(exc, SemanticError):
-        signals = AgentSignals(
-            semantic_error=SemanticErrorInfo(type=exc.type, message=exc.message),
+        signals.append(
+            Signal(
+                type=SignalType.SEMANTIC_ERROR,
+                reason=exc.message,
+                metadata={"error_type": exc.type},
+            )
         )
     else:
-        # Unexpected exception — wrap as semantic error
-        signals = AgentSignals(
-            semantic_error=SemanticErrorInfo(type="unexpected_error", message=str(exc)),
+        signals.append(
+            Signal(
+                type=SignalType.SEMANTIC_ERROR,
+                reason=str(exc),
+                metadata={"error_type": "unexpected_error"},
+            )
         )
 
     return AgentResult(
         success=False,
         output="",
         artifacts=list(artifacts),
-        signals=signals,
+        signals=list(signals),
         trace_id=ctx.trace_id,
         run_id=ctx.run_id,
     )
@@ -191,6 +210,7 @@ def agent(
         @functools.wraps(fn)
         async def wrapper(ctx: AgentRunContext) -> AgentResult:
             artifacts: list[ArtifactPointer] = []
+            signal_list: list[Signal] = []
             span = start_agent_span(
                 agent_id=agent_id,
                 command=command,
@@ -198,22 +218,24 @@ def agent(
                 run_id=ctx.run_id,
                 trace_id=ctx.trace_id,
             )
-            token = _agent_context.set(ctx)
+            ctx_token = _agent_context.set(ctx)
+            sig_token = _signal_collector.set(signal_list)
             try:
                 kwargs = _inject_params(fn, ctx)
                 if asyncio.iscoroutinefunction(fn):
                     result = await fn(**kwargs)
                 else:
                     result = fn(**kwargs)
-                agent_result = _wrap_result(result, ctx, artifacts)
+                agent_result = _wrap_result(result, ctx, artifacts, signal_list)
                 end_span(span, success=True)
                 return agent_result
             except Exception as exc:
-                agent_result = _handle_exception(exc, ctx, artifacts)
+                agent_result = _handle_exception(exc, ctx, artifacts, signal_list)
                 end_span(span, success=False, error_message=str(exc))
                 return agent_result
             finally:
-                _agent_context.reset(token)
+                _signal_collector.reset(sig_token)
+                _agent_context.reset(ctx_token)
 
         # Register in the default registry
         default_registry.register(agent_id, command, wrapper)

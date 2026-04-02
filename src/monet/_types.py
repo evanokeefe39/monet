@@ -7,7 +7,8 @@ Named _types.py to avoid shadowing the stdlib types module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from enum import StrEnum
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -18,27 +19,33 @@ Effort = Literal["low", "medium", "high"]
 VALID_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high"})
 
 
-# --- Signals ---
+# --- Signals (list-based accumulation model) ---
 
 
-@dataclass(frozen=True)
-class SemanticErrorInfo:
-    """Structured info for a semantic error signal."""
+class SignalType(StrEnum):
+    """Standard signal types emitted by agents."""
+
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
+    ESCALATION_REQUIRED = "escalation_required"
+    LOW_CONFIDENCE = "low_confidence"
+    PARTIAL_RESULT = "partial_result"
+    REVISION_SUGGESTED = "revision_suggested"
+    SENSITIVE_CONTENT = "sensitive_content"
+    SEMANTIC_ERROR = "semantic_error"
+
+
+class Signal(TypedDict):
+    """A single signal emitted by an agent.
+
+    Signals accumulate — multiple can be true simultaneously.
+    Non-fatal: the agent can continue execution and return a result
+    alongside signals via emit_signal().
+    Fatal conditions use typed exceptions instead.
+    """
 
     type: str
-    message: str
-
-
-@dataclass(frozen=True)
-class AgentSignals:
-    """Signals emitted by an agent, read by the orchestrator."""
-
-    needs_human_review: bool = False
-    review_reason: str | None = None
-    escalation_requested: bool = False
-    escalation_reason: str | None = None
-    revision_notes: dict[str, Any] | None = None
-    semantic_error: SemanticErrorInfo | None = None
+    reason: str
+    metadata: dict[str, Any] | None
 
 
 # --- Artifact pointer ---
@@ -161,6 +168,6 @@ class AgentResult:
     output: str | ArtifactPointer
     confidence: float = 0.0
     artifacts: list[ArtifactPointer] = field(default_factory=list)
-    signals: AgentSignals = field(default_factory=AgentSignals)
+    signals: list[Signal] = field(default_factory=list)
     trace_id: str = ""
     run_id: str = ""

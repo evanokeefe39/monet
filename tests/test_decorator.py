@@ -130,8 +130,9 @@ async def test_needs_human_review_signal() -> None:
     ctx = AgentRunContext(task="x", agent_id="test-review")
     result = await review_agent(ctx)
     assert result.success is False
-    assert result.signals.needs_human_review is True
-    assert result.signals.review_reason == "Low confidence"
+    assert len(result.signals) == 1
+    assert result.signals[0]["type"] == "needs_human_review"
+    assert result.signals[0]["reason"] == "Low confidence"
 
 
 async def test_escalation_signal() -> None:
@@ -142,8 +143,9 @@ async def test_escalation_signal() -> None:
     ctx = AgentRunContext(task="x", agent_id="test-escalate")
     result = await escalation_agent(ctx)
     assert result.success is False
-    assert result.signals.escalation_requested is True
-    assert result.signals.escalation_reason == "Needs admin"
+    assert len(result.signals) == 1
+    assert result.signals[0]["type"] == "escalation_required"
+    assert result.signals[0]["reason"] == "Needs admin"
 
 
 async def test_semantic_error_signal() -> None:
@@ -154,9 +156,10 @@ async def test_semantic_error_signal() -> None:
     ctx = AgentRunContext(task="x", agent_id="test-semantic")
     result = await semantic_agent(ctx)
     assert result.success is False
-    assert result.signals.semantic_error is not None
-    assert result.signals.semantic_error.type == "no_results"
-    assert result.signals.semantic_error.message == "Empty search"
+    assert len(result.signals) == 1
+    assert result.signals[0]["type"] == "semantic_error"
+    assert result.signals[0]["reason"] == "Empty search"
+    assert result.signals[0]["metadata"] == {"error_type": "no_results"}
 
 
 async def test_unexpected_error_wrapped() -> None:
@@ -167,9 +170,10 @@ async def test_unexpected_error_wrapped() -> None:
     ctx = AgentRunContext(task="x", agent_id="test-crash")
     result = await crash_agent(ctx)
     assert result.success is False
-    assert result.signals.semantic_error is not None
-    assert result.signals.semantic_error.type == "unexpected_error"
-    assert "boom" in result.signals.semantic_error.message
+    assert len(result.signals) == 1
+    assert result.signals[0]["type"] == "semantic_error"
+    assert result.signals[0]["metadata"] == {"error_type": "unexpected_error"}
+    assert "boom" in result.signals[0]["reason"]
 
 
 # --- Registry integration ---

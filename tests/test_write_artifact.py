@@ -20,14 +20,14 @@ def _clean_registry() -> None:  # type: ignore[misc]
 # --- write_artifact() tests ---
 
 
-def test_write_artifact_no_client() -> None:
+async def test_write_artifact_no_client() -> None:
     """write_artifact() raises RuntimeError without a client."""
     from monet._stubs import _catalogue_client
 
     token = _catalogue_client.set(None)
     try:
         with pytest.raises(RuntimeError, match="No catalogue client"):
-            write_artifact(b"test", "text/plain")
+            await write_artifact(b"test", "text/plain")
     finally:
         _catalogue_client.reset(token)
 
@@ -39,7 +39,7 @@ async def test_write_artifact_with_client() -> None:
 
     @agent(agent_id="artifact-writer")
     async def my_agent(task: str) -> str:
-        ptr = write_artifact(
+        ptr = await write_artifact(
             b"Hello catalogue",
             "text/plain",
             summary="Test artifact",
@@ -70,7 +70,7 @@ async def test_write_artifact_populates_metadata() -> None:
 
     @agent(agent_id="meta-agent", command="deep")
     async def meta_agent(task: str) -> str:
-        ptr = write_artifact(
+        ptr = await write_artifact(
             b"metadata test",
             "application/json",
             summary="Meta test",
