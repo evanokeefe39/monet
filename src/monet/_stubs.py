@@ -82,6 +82,14 @@ def write_artifact(
 def emit_progress(data: dict[str, Any]) -> None:
     """Emit a progress event for intra-node streaming.
 
-    No-op outside the LangGraph execution context. Will be wired
-    to LangGraph's get_stream_writer() when orchestration is built.
+    Calls LangGraph's get_stream_writer() to emit custom events
+    that appear in astream_events with stream_mode=["custom"].
+    No-op outside the LangGraph execution context.
     """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        writer(data)
+    except Exception:
+        pass
