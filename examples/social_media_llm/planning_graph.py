@@ -61,7 +61,21 @@ async def planner_node(state: PlanningState) -> dict[str, Any]:
         context=context_entries,
     )
     result = await handler(ctx)
-    brief = json.loads(result.output) if isinstance(result.output, str) else {}
+
+    # Handle both inline string output and ArtifactPointer (auto-offloaded)
+    if isinstance(result.output, str) and result.output.strip():
+        brief = json.loads(result.output)
+    else:
+        # Output was auto-offloaded to catalogue — read it back
+        from monet._stubs import get_catalogue_client
+
+        client = get_catalogue_client()
+        if client and hasattr(result.output, "artifact_id"):
+            content_bytes, _meta = client.read(result.output.artifact_id)
+            brief = json.loads(content_bytes.decode())
+        else:
+            brief = {}
+
     return {"work_brief": brief}
 
 

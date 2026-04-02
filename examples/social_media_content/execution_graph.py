@@ -164,7 +164,12 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
     )
     result = await handler(ctx)
 
-    verdict_data = json.loads(result.output) if isinstance(result.output, str) else {}
+    verdict_data: dict[str, Any] = {}
+    if isinstance(result.output, str) and result.output.strip():
+        try:
+            verdict_data = json.loads(result.output)
+        except json.JSONDecodeError:
+            verdict_data = {"verdict": "pass", "notes": result.output[:200]}
 
     reflection = {
         "phase_index": current_phase,

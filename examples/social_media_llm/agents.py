@@ -76,10 +76,10 @@ async def planner_plan(task: str, context: list[Any] | None = None) -> str:
 
     brief = await run_planner_plan(task, feedback=feedback)
 
-    # Write full brief to catalogue
-    brief_json = json.dumps(brief, indent=2)
+    # Write pretty-printed brief to catalogue for reference
+    brief_pretty = json.dumps(brief, indent=2)
     await write_artifact(
-        content=brief_json.encode(),
+        content=brief_pretty.encode(),
         content_type="application/json",
         summary=str(brief.get("goal", task[:100])),
         confidence=0.85,
@@ -93,7 +93,10 @@ async def planner_plan(task: str, context: list[Any] | None = None) -> str:
         )
 
     emit_progress({"status": "complete", "agent": "planner/plan"})
-    return brief_json
+    # Return compact JSON to stay under content limit (4000 bytes)
+    # so the decorator doesn't auto-offload the inline output.
+    # The graph needs this as a parseable JSON string.
+    return json.dumps(brief, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------
