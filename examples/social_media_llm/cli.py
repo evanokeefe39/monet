@@ -204,8 +204,12 @@ async def main() -> None:
     print(f"  Suggested agents: {', '.join(agents_list)}")
 
     if complexity != "complex":
-        print("\n  Simple request -- returning direct result.")
-        return
+        print(f"\n  Triage classified as '{complexity}' — not complex.")
+        override = input("  Force full workflow? [y/n] > ").strip().lower()
+        if override != "y":
+            print("  Exiting.")
+            return
+        print("  Overriding triage — proceeding to planning.")
 
     # ---------------------------------------------------------------
     # 2. Planning graph — build and approve work brief
