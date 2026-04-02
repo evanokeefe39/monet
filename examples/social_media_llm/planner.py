@@ -22,9 +22,11 @@ Return JSON only:
 }
 
 Rules:
-- "simple": greeting or FAQ, no content generation needed
-- "bounded": single platform, single piece of content
-- "complex": multi-platform content requiring research, writing, QA, publishing
+- "simple": greeting, FAQ, or off-topic — no content generation needed
+- "bounded": explicitly asks for ONE specific platform only, no research needed
+- "complex": anything involving content creation, research, or multiple platforms
+
+When in doubt, classify as "complex". Most content requests are complex.
 """
 
 _PLAN_SYSTEM = """You are a content planning agent. Given a topic and optional
