@@ -2,21 +2,21 @@
 
 Each node calls an agent, translates AgentResult to a lean state entry,
 enforces content limits, reads signals, and triggers HITL interrupt
-when needs_human_review is True.
+when needs_human_review is signaled.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from typing import TYPE_CHECKING, Any
 
 from langgraph.types import interrupt
 
 from monet._tracing import end_span, start_agent_span
-from monet._types import AgentResult, AgentRunContext
+from monet._types import AgentResult, AgentRunContext, SignalType
 
 from ._content_limit import enforce_content_limit
 from ._invoke import invoke_agent
+from ._state import get_signal, has_signal
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -38,7 +38,8 @@ def create_node(
     2. Calls the agent via invoke_agent() (local or HTTP based on config)
     3. Translates AgentResult to a lean state entry
     4. Enforces content limit
-    5. Calls interrupt() if needs_human_review and interrupt_on_review is True
+    5. Calls interrupt() if needs_human_review signal present and
+       interrupt_on_review is True
     6. Returns state update dict
 
     Args:
@@ -68,10 +69,8 @@ def create_node(
 
             result: AgentResult = await invoke_agent(agent_id, command, ctx)
 
-            # Translate to lean state entry
-            error_dict = None
-            if result.signals.semantic_error is not None:
-                error_dict = dataclasses.asdict(result.signals.semantic_error)
+            # Translate signals to serializable dicts for lean state
+            signals_data = [dict(s) for s in result.signals]
 
             entry: dict[str, Any] = {
                 "agent_id": agent_id,
@@ -81,9 +80,7 @@ def create_node(
                 else result.output.url,
                 "success": result.success,
                 "confidence": result.confidence,
-                "needs_human_review": (result.signals.needs_human_review),
-                "escalation_requested": (result.signals.escalation_requested),
-                "semantic_error": error_dict,
+                "signals": signals_data,
                 "trace_id": result.trace_id,
                 "run_id": result.run_id,
             }
@@ -93,10 +90,16 @@ def create_node(
 
             end_span(span, success=result.success)
 
-            # HITL: interrupt if agent requests human review
-            if interrupt_on_review and result.signals.needs_human_review:
+            # HITL: interrupt if agent signals needs_human_review
+            needs_review = has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
+            if interrupt_on_review and needs_review:
+                review_signal = get_signal(
+                    result.signals, SignalType.NEEDS_HUMAN_REVIEW
+                )
                 review_reason = (
-                    result.signals.review_reason or "Agent requested human review"
+                    review_signal.get("reason", "Agent requested human review")
+                    if review_signal
+                    else "Agent requested human review"
                 )
                 interrupt(
                     {
@@ -108,7 +111,7 @@ def create_node(
 
             return {
                 "results": [entry],
-                "needs_review": result.signals.needs_human_review,
+                "needs_review": needs_review,
             }
 
         except Exception as exc:

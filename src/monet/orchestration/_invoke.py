@@ -15,8 +15,7 @@ from monet._registry import default_registry
 from monet._types import (
     AgentResult,
     AgentRunContext,
-    AgentSignals,
-    SemanticErrorInfo,
+    Signal,
 )
 
 # Transport mode from environment
@@ -98,25 +97,21 @@ async def _invoke_http(
         response.raise_for_status()
         data = response.json()
 
-    signals_data = data.get("signals", {})
-    semantic_error = signals_data.get("semantic_error")
-    semantic_error_info = None
-    if semantic_error:
-        semantic_error_info = SemanticErrorInfo(
-            type=semantic_error.get("type", "unknown"),
-            message=semantic_error.get("message", ""),
+    # Reconstruct signals as list[Signal] from response
+    raw_signals = data.get("signals", [])
+    signals: list[Signal] = [
+        Signal(
+            type=s.get("type", ""),
+            reason=s.get("reason", ""),
+            metadata=s.get("metadata"),
         )
+        for s in raw_signals
+    ]
 
     return AgentResult(
         success=data["success"],
         output=data["output"],
-        signals=AgentSignals(
-            needs_human_review=signals_data.get("needs_human_review", False),
-            review_reason=signals_data.get("review_reason"),
-            escalation_requested=signals_data.get("escalation_requested", False),
-            escalation_reason=signals_data.get("escalation_reason"),
-            semantic_error=semantic_error_info,
-        ),
+        signals=signals,
         trace_id=data.get("trace_id", ""),
         run_id=data.get("run_id", ""),
     )

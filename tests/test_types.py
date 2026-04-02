@@ -8,41 +8,44 @@ from pydantic import TypeAdapter, ValidationError
 from monet._types import (
     AgentResult,
     AgentRunContext,
-    AgentSignals,
     ArtifactEntry,
     ArtifactPointer,
     ConstraintEntry,
     ContextEntry,
     InstructionEntry,
-    SemanticErrorInfo,
+    Signal,
+    SignalType,
     SkillReferenceEntry,
     WorkBriefEntry,
 )
 
-# --- AgentSignals ---
+# --- Signal and SignalType ---
 
 
-def test_signals_defaults() -> None:
-    s = AgentSignals()
-    assert s.needs_human_review is False
-    assert s.review_reason is None
-    assert s.escalation_requested is False
-    assert s.semantic_error is None
+def test_signal_type_values() -> None:
+    assert SignalType.NEEDS_HUMAN_REVIEW.value == "needs_human_review"
+    assert SignalType.ESCALATION_REQUIRED.value == "escalation_required"
+    assert SignalType.SEMANTIC_ERROR.value == "semantic_error"
+    assert SignalType.LOW_CONFIDENCE.value == "low_confidence"
 
 
-def test_signals_frozen() -> None:
-    s = AgentSignals()
-    with pytest.raises(AttributeError):
-        s.needs_human_review = True  # type: ignore[misc]
+def test_signal_creation() -> None:
+    s: Signal = {
+        "type": SignalType.NEEDS_HUMAN_REVIEW,
+        "reason": "Low confidence",
+        "metadata": None,
+    }
+    assert s["type"] == "needs_human_review"
+    assert s["reason"] == "Low confidence"
 
 
-# --- SemanticErrorInfo ---
-
-
-def test_semantic_error_info() -> None:
-    e = SemanticErrorInfo(type="no_results", message="Nothing found")
-    assert e.type == "no_results"
-    assert e.message == "Nothing found"
+def test_signal_with_metadata() -> None:
+    s: Signal = {
+        "type": SignalType.SEMANTIC_ERROR,
+        "reason": "No results",
+        "metadata": {"error_type": "no_results"},
+    }
+    assert s["metadata"] == {"error_type": "no_results"}
 
 
 # --- ArtifactPointer ---
@@ -86,7 +89,7 @@ def test_result_success() -> None:
     assert r.output == "done"
     assert r.confidence == 0.0
     assert r.artifacts == []
-    assert r.signals.needs_human_review is False
+    assert r.signals == []
 
 
 def test_result_with_confidence() -> None:
@@ -99,6 +102,17 @@ def test_result_with_artifacts() -> None:
     r = AgentResult(success=True, output="done", artifacts=[ptr])
     assert len(r.artifacts) == 1
     assert r.artifacts[0].artifact_id == "a1"
+
+
+def test_result_with_signals() -> None:
+    signals: list[Signal] = [
+        {"type": SignalType.NEEDS_HUMAN_REVIEW, "reason": "Low", "metadata": None},
+        {"type": SignalType.LOW_CONFIDENCE, "reason": "0.3", "metadata": None},
+    ]
+    r = AgentResult(success=True, output="done", signals=signals)
+    assert len(r.signals) == 2
+    assert r.signals[0]["type"] == "needs_human_review"
+    assert r.signals[1]["type"] == "low_confidence"
 
 
 # --- ContextEntry discriminated union ---

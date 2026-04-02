@@ -6,7 +6,12 @@ Only summaries, pointers, confidence, and signals.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, TypedDict
+from typing import TYPE_CHECKING, Annotated, Any, TypedDict
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+from monet._types import Signal, SignalType
 
 
 def _append_reducer(
@@ -15,6 +20,31 @@ def _append_reducer(
 ) -> list[dict[str, Any]]:
     """Reducer that appends new entries to existing list."""
     return existing + new
+
+
+# --- Signal helpers for routing functions ---
+
+
+def has_signal(
+    signals: Sequence[Signal | dict[str, Any]], signal_type: SignalType
+) -> bool:
+    """Check if a signal list contains a signal of the given type."""
+    target = signal_type.value if isinstance(signal_type, SignalType) else signal_type
+    return any(
+        (s.get("type") if isinstance(s, dict) else s["type"]) == target for s in signals
+    )
+
+
+def get_signal(
+    signals: Sequence[Signal | dict[str, Any]], signal_type: SignalType
+) -> Signal | dict[str, Any] | None:
+    """Get the first signal of the given type, or None."""
+    target = signal_type.value if isinstance(signal_type, SignalType) else signal_type
+    for s in signals:
+        s_type = s.get("type") if isinstance(s, dict) else s["type"]
+        if s_type == target:
+            return s
+    return None
 
 
 class AgentStateEntry(TypedDict, total=False):
@@ -29,9 +59,7 @@ class AgentStateEntry(TypedDict, total=False):
     confidence: float
     completeness: str
     success: bool
-    needs_human_review: bool
-    escalation_requested: bool
-    semantic_error: dict[str, str] | None
+    signals: list[dict[str, Any]]
     trace_id: str
     run_id: str
 

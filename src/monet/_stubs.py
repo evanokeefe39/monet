@@ -1,7 +1,8 @@
 """SDK utility functions backed by infrastructure.
 
 write_artifact() calls the catalogue client from context.
-emit_progress() is a no-op until LangGraph's get_stream_writer() is available.
+emit_progress() emits to LangGraph's stream writer.
+emit_signal() accumulates non-fatal signals during agent execution.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from ._context import get_run_context
 
 if TYPE_CHECKING:
-    from ._types import ArtifactPointer
+    from ._types import ArtifactPointer, Signal
     from .catalogue._protocol import CatalogueClient
 
 _catalogue_client: ContextVar[CatalogueClient | None] = ContextVar(
@@ -33,7 +34,7 @@ def get_catalogue_client() -> CatalogueClient | None:
     return _catalogue_client.get(None)
 
 
-def write_artifact(
+async def write_artifact(
     content: bytes,
     content_type: str,
     summary: str = "",
@@ -83,7 +84,7 @@ def emit_progress(data: dict[str, Any]) -> None:
     """Emit a progress event for intra-node streaming.
 
     Calls LangGraph's get_stream_writer() to emit custom events
-    that appear in astream_events with stream_mode=["custom"].
+    that appear in astream output with stream_mode=["custom"].
     No-op outside the LangGraph execution context.
     """
     try:
@@ -93,3 +94,25 @@ def emit_progress(data: dict[str, Any]) -> None:
         writer(data)
     except Exception:
         pass
+
+
+# --- Signal accumulation ---
+
+_signal_collector: ContextVar[list[Signal] | None] = ContextVar(
+    "_signal_collector", default=None
+)
+
+
+def emit_signal(signal: Signal) -> None:
+    """Emit a non-fatal signal to the orchestrator.
+
+    Signals accumulate — multiple can be true simultaneously.
+    The agent continues execution and can return a result alongside signals.
+    No-op outside the @agent decorator context.
+
+    For fatal conditions where the agent cannot continue, raise
+    NeedsHumanReview, EscalationRequired, or SemanticError instead.
+    """
+    collector = _signal_collector.get()
+    if collector is not None:
+        collector.append(signal)
