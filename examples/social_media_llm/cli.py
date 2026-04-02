@@ -203,13 +203,44 @@ async def main() -> None:
     agents_list = triage.get("suggested_agents", [])
     print(f"  Suggested agents: {', '.join(agents_list)}")
 
-    if complexity != "complex":
-        print(f"\n  Triage classified as '{complexity}' — not complex.")
-        override = input("  Force full workflow? [y/n] > ").strip().lower()
+    if complexity == "simple":
+        print("\n  Simple request — no content generation needed.")
+        return
+
+    if complexity == "bounded":
+        # Bounded: run a single writer agent directly and show the result
+        _print_header("Bounded: Single Agent Execution")
+        from monet._registry import default_registry
+        from monet._types import AgentRunContext
+
+        handler = default_registry.lookup("sm-writer", "deep")
+        if handler:
+            ctx = AgentRunContext(
+                task=f"Write a social media post about: {topic}",
+                agent_id="sm-writer",
+                command="deep",
+                trace_id=f"trace-{run_id}",
+                run_id=run_id,
+            )
+            result = await handler(ctx)
+            output = (
+                result.output
+                if isinstance(result.output, str)
+                else "(content written to catalogue)"
+            )
+            print(f"  {output}")
+        print()
+        override = (
+            input("  Run full multi-platform workflow instead? [y/n] > ")
+            .strip()
+            .lower()
+        )
         if override != "y":
-            print("  Exiting.")
+            _print_header("Complete")
+            print(f"  Run ID: {run_id}")
+            print("  Mode: bounded (single agent)")
             return
-        print("  Overriding triage — proceeding to planning.")
+        print("  Proceeding to full workflow.")
 
     # ---------------------------------------------------------------
     # 2. Planning graph — build and approve work brief
