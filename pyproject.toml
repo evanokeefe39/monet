@@ -53,8 +53,11 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "examples"]
 asyncio_mode = "auto"
+markers = [
+    "integration: requires external services (docker-compose)",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -80,3 +83,7 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "examples.*"
+ignore_errors = true
