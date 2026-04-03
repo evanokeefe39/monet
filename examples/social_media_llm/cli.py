@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import uuid
+from pathlib import Path
 from typing import Any
 
 # Load environment variables before importing agents
@@ -27,17 +29,40 @@ from langgraph.types import Command
 
 load_dotenv()  # loads from .env in repo root
 
-from monet._stubs import set_catalogue_client  # noqa: E402
-from monet.catalogue._memory import InMemoryCatalogueClient  # noqa: E402
+from monet._stubs import get_catalogue_client, set_catalogue_client  # noqa: E402
+from monet.catalogue import CatalogueService, FilesystemStorage  # noqa: E402
+from monet.catalogue._index import SQLiteIndex  # noqa: E402
 
-set_catalogue_client(InMemoryCatalogueClient())
+_catalogue_root = Path(os.environ.get("CATALOGUE_ROOT", ".catalogue"))
+_catalogue_db = os.environ.get("CATALOGUE_DB_URL", f"sqlite:///{_catalogue_root / 'index.db'}")
+_catalogue_root.mkdir(parents=True, exist_ok=True)
+set_catalogue_client(CatalogueService(
+    storage=FilesystemStorage(root=_catalogue_root / "artifacts"),
+    index=SQLiteIndex(db_url=_catalogue_db),
+))
 
 # Import agents to trigger registration (AFTER env loading)
 from . import agents as _agents  # noqa: F401, E402
-from .entry_graph import build_entry_graph  # noqa: E402
-from .execution_graph import build_execution_graph  # noqa: E402
-from .planning_graph import build_planning_graph  # noqa: E402
+from .graphs import build_entry_graph, build_execution_graph, build_planning_graph  # noqa: E402
 from .state import EntryState, ExecutionState, PlanningState  # noqa: TC001, E402
+
+
+_ARTIFACT_REPR_RE = re.compile(r"artifact_id='([^']+)'")
+_UUID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+
+
+def _extract_artifact_id(output: str) -> str | None:
+    """Extract artifact_id from ArtifactPointer repr or URL string."""
+    # ArtifactPointer(artifact_id='UUID', url='...')
+    m = _ARTIFACT_REPR_RE.search(output)
+    if m:
+        return m.group(1)
+    # file://.catalogue/artifacts/UUID/content or memory://UUID
+    if output.strip().startswith(("file://", "memory://")):
+        m = _UUID_RE.search(output)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _print_header(text: str) -> None:
@@ -180,7 +205,6 @@ async def main() -> None:
 
     run_id = str(uuid.uuid4())[:8]
     checkpointer = MemorySaver()
-
     # ---------------------------------------------------------------
     # 1. Entry graph — triage
     # ---------------------------------------------------------------
@@ -369,14 +393,33 @@ async def main() -> None:
         print(f"  Aborted: {final_exec['abort_reason']}")
 
     print("\n  Wave results:")
+    catalogue = get_catalogue_client()
     for wr in wave_results:
-        output_preview = str(wr.get("output", ""))[:80]
+        output = str(wr.get("output", ""))
         pi = wr.get("phase_index")
         wi = wr.get("wave_index")
         ii = wr.get("item_index")
         aid = wr.get("agent_id")
         cmd = wr.get("command")
-        print(f"    [{pi}.{wi}.{ii}] {aid}/{cmd}: {output_preview}...")
+        print(f"\n    [{pi}.{wi}.{ii}] {aid}/{cmd}:")
+
+        # Resolve catalogue artifacts to show full content.
+        # ArtifactPointer stringifies as:
+        #   ArtifactPointer(artifact_id='UUID', url='file://...')
+        artifact_id = _extract_artifact_id(output)
+        if artifact_id and catalogue:
+            try:
+                content, meta = catalogue.read(artifact_id)
+                print(f"    [artifact {artifact_id[:8]}... "
+                      f"type={meta.content_type} "
+                      f"size={meta.content_length}b]")
+                text = content.decode("utf-8", errors="replace")
+                for line in text.splitlines():
+                    print(f"      {line}")
+            except (KeyError, ValueError) as e:
+                print(f"    (could not read artifact: {e})")
+        else:
+            print(f"    {output[:200]}")
 
     print("\n  QA reflections:")
     for ref in reflections:
@@ -385,6 +428,7 @@ async def main() -> None:
             f"Wave {ref.get('wave_index')}: "
             f"{ref.get('verdict')} -- {ref.get('notes', '')}"
         )
+
 
 
 def cli_main() -> None:

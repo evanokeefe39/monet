@@ -6,10 +6,14 @@ OTEL_EXPORTER_OTLP_ENDPOINT is not set, spans go to a no-op exporter.
 
 from __future__ import annotations
 
+import atexit
+import os
 import re
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import StatusCode
 
@@ -22,17 +26,40 @@ _TRACEPARENT_RE = re.compile(
 )
 
 _tracer: Tracer | None = None
+_exporter_attached: bool = False
 
 
 def get_tracer() -> Tracer:
     """Get or create the monet tracer."""
-    global _tracer
+    global _tracer, _exporter_attached
     if _tracer is None:
         provider = trace.get_tracer_provider()
         if not isinstance(provider, TracerProvider):
-            # No provider configured — set up a basic one
-            provider = TracerProvider()
+            resource = Resource.create({
+                SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "monet"),
+                "monet.version": "0.1.0",
+            })
+            provider = TracerProvider(resource=resource)
             trace.set_tracer_provider(provider)
+            atexit.register(provider.shutdown)
+
+        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        if endpoint and not _exporter_attached:
+            try:
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter,
+                )
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+                _exporter_attached = True
+            except ImportError:
+                warnings.warn(
+                    "opentelemetry-exporter-otlp-proto-http not installed; "
+                    "spans will not be exported",
+                    stacklevel=2,
+                )
+
         _tracer = trace.get_tracer("monet.agent")
     return _tracer
 

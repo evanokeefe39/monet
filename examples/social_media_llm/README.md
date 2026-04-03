@@ -26,6 +26,22 @@ export GROQ_API_KEY=...
 export TAVILY_API_KEY=...
 ```
 
+## Services (Logging / Tracing)
+
+Start the dev services from the repo root before running the example if you want tracing:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+```
+
+This brings up Langfuse at http://localhost:3000 (plus Postgres, ClickHouse, Redis, MinIO). Create a project in Langfuse and add the keys to your `.env`:
+
+```
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
+LANGFUSE_HOST=http://localhost:3000
+```
+
 ## Quick Start
 
 ```bash
@@ -45,18 +61,23 @@ uv run pytest examples/social_media_llm/ -v -m llm_integration
 ## Architecture
 
 ```
-agents.py (thin @agent wrappers — monet envelope)
-    |
+agents/
+  __init__.py (thin @agent wrappers — monet envelope)
     +-- planner.py     (Gemini Flash — triage + work brief)
     +-- researcher.py  (Gemini Flash + Tavily — create_react_agent)
     +-- writer.py      (Gemini Flash — platform-specific content)
     +-- qa.py          (Groq llama-3.3-70b — fast quality evaluation)
     +-- publisher.py   (subprocess -> publisher_cli.py)
         +-- publisher_cli.py  (emits event vocabulary to stdout)
+
+graphs/
+  entry.py     — triage and routing
+  planning.py  — iterative plan with HITL approval
+  execution.py — wave-based parallel execution with QA reflection
 ```
 
-The graph files (state.py, entry_graph.py, planning_graph.py, execution_graph.py,
-run.py) are identical to the stub example. Only the agent registrations differ.
+The graph files (state.py, graphs/) are identical in topology to the stub
+example. Only the agent registrations differ.
 
 ## SDK Helper Coverage
 
@@ -71,14 +92,25 @@ run.py) are identical to the stub example. Only the agent registrations differ.
 
 ## File Structure
 
-| File | Purpose |
-|------|---------|
-| `agents.py` | Thin @agent wrappers — SDK envelope translation |
-| `planner.py` | Pure LangChain planner (zero monet imports) |
-| `researcher.py` | Pure LangChain researcher with Tavily (zero monet imports) |
-| `writer.py` | Pure LangChain writer (zero monet imports) |
-| `qa.py` | Pure LangChain QA with Groq (zero monet imports) |
-| `publisher.py` | Subprocess launcher (zero monet imports) |
-| `publisher_cli.py` | Standalone CLI emitting event vocabulary |
-| `cli.py` | Interactive terminal client with env loading |
-| `test_social_media_llm.py` | Unit tests (mocked) + integration tests (real LLM) |
+```
+social_media_llm/
+  state.py              — shared state schemas (Entry, Planning, Execution)
+  run.py                — top-level orchestrator sequencing the three graphs
+  cli.py                — interactive terminal client with env loading
+  run_cli.py            — convenience entry point (no PYTHONPATH needed)
+  agents/
+    __init__.py         — thin @agent wrappers (SDK envelope translation)
+    planner.py          — pure LangChain planner (zero monet imports)
+    researcher.py       — pure LangChain researcher + Tavily (zero monet imports)
+    writer.py           — pure LangChain writer (zero monet imports)
+    qa.py               — pure LangChain QA with Groq (zero monet imports)
+    publisher.py        — subprocess launcher (zero monet imports)
+    publisher_cli.py    — standalone CLI emitting event vocabulary
+  graphs/
+    __init__.py         — re-exports build_*_graph functions
+    entry.py            — entry/triage graph
+    planning.py         — planning graph with HITL approval
+    execution.py        — execution graph with wave-based parallelism
+  tests/
+    test_agents.py      — unit tests (mocked) + integration tests (real LLM)
+```

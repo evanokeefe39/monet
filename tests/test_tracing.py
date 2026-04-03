@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pytest
+
 from monet._tracing import (
+    end_span,
     format_traceparent,
     get_tracer,
     parse_traceparent,
@@ -16,8 +22,6 @@ def test_get_tracer() -> None:
 
 
 def test_start_and_end_span() -> None:
-    from monet._tracing import end_span
-
     span = start_agent_span(
         agent_id="test-agent",
         command="fast",
@@ -30,8 +34,6 @@ def test_start_and_end_span() -> None:
 
 
 def test_start_error_span() -> None:
-    from monet._tracing import end_span
-
     span = start_agent_span(agent_id="err-agent", command="fast")
     end_span(span, success=False, error_message="something failed")
 
@@ -59,3 +61,60 @@ def test_parse_traceparent_invalid() -> None:
     assert parse_traceparent("invalid") is None
     assert parse_traceparent("") is None
     assert parse_traceparent("00-short-id-01") is None
+
+
+def test_spans_exported_with_correct_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify spans carry correct attributes when exported."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import (
+        SimpleSpanProcessor,
+        SpanExporter,
+        SpanExportResult,
+    )
+
+    import monet._tracing as tracing_mod
+
+    class _Collector(SpanExporter):
+        def __init__(self) -> None:
+            self.spans: list[object] = []
+
+        def export(self, spans: object) -> SpanExportResult:
+            assert isinstance(spans, (list, tuple))
+            self.spans.extend(spans)
+            return SpanExportResult.SUCCESS
+
+        def shutdown(self) -> None:
+            pass
+
+    # Create a fresh provider+tracer and inject it directly into the module,
+    # bypassing set_tracer_provider() which can only be called once per process.
+    collector = _Collector()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(collector))
+    tracer = provider.get_tracer("monet.agent")
+    monkeypatch.setattr(tracing_mod, "_tracer", tracer)
+
+    span = start_agent_span(
+        agent_id="test-agent",
+        command="fast",
+        effort="high",
+        run_id="r-1",
+        trace_id="t-1",
+    )
+    end_span(span, success=True)
+
+    assert len(collector.spans) == 1
+
+    exported = collector.spans[0]
+    assert exported.name == "agent.test-agent.fast"  # type: ignore[union-attr]
+    attrs = exported.attributes  # type: ignore[union-attr]
+    assert attrs is not None
+    assert attrs.get("gen_ai.agent.id") == "test-agent"
+    assert attrs.get("gen_ai.agent.command") == "fast"
+    assert attrs.get("monet.effort") == "high"
+    assert attrs.get("monet.run_id") == "r-1"
+    assert attrs.get("monet.trace_id") == "t-1"
+
+    provider.shutdown()

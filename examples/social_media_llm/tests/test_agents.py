@@ -31,7 +31,7 @@ def _clean_registry_and_catalogue(monkeypatch: pytest.MonkeyPatch):
     with default_registry.registry_scope():
         import importlib
 
-        from . import agents
+        from .. import agents
 
         importlib.reload(agents)
         yield
@@ -65,7 +65,7 @@ def _mock_groq(response_content: str) -> AsyncMock:
 # ---------------------------------------------------------------------------
 
 
-@patch("examples.social_media_llm.planner.ChatGoogleGenerativeAI")
+@patch("examples.social_media_llm.agents.planner.ChatGoogleGenerativeAI")
 async def test_planner_triage_mocked(mock_cls: MagicMock) -> None:
     """Planner triage returns valid JSON classification."""
     triage_response = json.dumps(
@@ -87,7 +87,7 @@ async def test_planner_triage_mocked(mock_cls: MagicMock) -> None:
     assert parsed["complexity"] == "complex"
 
 
-@patch("examples.social_media_llm.planner.ChatGoogleGenerativeAI")
+@patch("examples.social_media_llm.agents.planner.ChatGoogleGenerativeAI")
 async def test_planner_plan_mocked(mock_cls: MagicMock) -> None:
     """Planner plan produces a work brief and writes artifact."""
     brief = {
@@ -112,7 +112,7 @@ async def test_planner_plan_mocked(mock_cls: MagicMock) -> None:
     assert parsed["goal"] == "Create content about AI"
 
 
-@patch("examples.social_media_llm.planner.ChatGoogleGenerativeAI")
+@patch("examples.social_media_llm.agents.planner.ChatGoogleGenerativeAI")
 async def test_planner_sensitive_topic(mock_cls: MagicMock) -> None:
     """Planner raises NeedsHumanReview for sensitive topics."""
     brief = {
@@ -132,7 +132,7 @@ async def test_planner_sensitive_topic(mock_cls: MagicMock) -> None:
     assert has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
 
 
-@patch("examples.social_media_llm.writer.ChatGoogleGenerativeAI")
+@patch("examples.social_media_llm.agents.writer.ChatGoogleGenerativeAI")
 async def test_writer_mocked(mock_cls: MagicMock) -> None:
     """Writer generates content and writes artifact."""
     mock_cls.return_value = _mock_gemini("AI is transforming marketing. #AI")
@@ -149,7 +149,7 @@ async def test_writer_mocked(mock_cls: MagicMock) -> None:
     assert "AI" in result.output
 
 
-@patch("examples.social_media_llm.qa.ChatGroq")
+@patch("examples.social_media_llm.agents.qa.ChatGroq")
 async def test_qa_pass_mocked(mock_cls: MagicMock) -> None:
     """QA returns pass verdict for good content."""
     verdict = {"verdict": "pass", "confidence": 0.9, "notes": "Good quality"}
@@ -166,7 +166,7 @@ async def test_qa_pass_mocked(mock_cls: MagicMock) -> None:
     assert result.signals == []
 
 
-@patch("examples.social_media_llm.qa.ChatGroq")
+@patch("examples.social_media_llm.agents.qa.ChatGroq")
 async def test_qa_low_confidence_semantic_error(mock_cls: MagicMock) -> None:
     """QA raises SemanticError when confidence < 0.5."""
     verdict = {"verdict": "fail", "confidence": 0.3, "notes": "Very poor"}
@@ -181,7 +181,7 @@ async def test_qa_low_confidence_semantic_error(mock_cls: MagicMock) -> None:
     assert has_signal(result.signals, SignalType.SEMANTIC_ERROR)
 
 
-@patch("examples.social_media_llm.qa.ChatGroq")
+@patch("examples.social_media_llm.agents.qa.ChatGroq")
 async def test_qa_marginal_emits_signal(mock_cls: MagicMock) -> None:
     """QA emits NeedsHumanReview signal for marginal confidence."""
     verdict = {"verdict": "pass", "confidence": 0.6, "notes": "Marginal"}
