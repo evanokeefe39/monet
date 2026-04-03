@@ -44,4 +44,19 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - API Reference: api.md
+  - Guides:
+    - Defining Agents: guides/agents.md
+    - Artifact Catalogue: guides/catalogue.md
+    - Orchestration: guides/orchestration.md
+    - Server & Transport: guides/server.md
+    - Observability: guides/observability.md
+  - API Reference:
+    - Core SDK: api/core.md
+    - Catalogue: api/catalogue.md
+    - Orchestration: api/orchestration.md
+    - Descriptors: api/descriptors.md
+    - Server: api/server.md
+  - Architecture:
+    - Design Principles: architecture/design-principles.md
+    - Graph Topology: architecture/graph-topology.md
+    - Roadmap: architecture/roadmap.md

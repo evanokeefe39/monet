@@ -60,7 +60,7 @@ The decorator wraps the function in a try/except and always returns an `AgentRes
 
 Wraps any Python callable. Registers the function as the handler for a specific agent ID and command. Parameters: `agent_id` (string, mandatory), `command` (string, optional, defaults to `"fast"`).
 
-The decorator is structural metadata — it declares what capability this function implements and under what command name it can be invoked. Runtime context (task, context entries, trace ID, run ID, skills, command, effort) is injected into the function as arguments by name matching against `AgentRunContext` fields. The function declares only what it needs. Fields not declared as parameters are silently omitted. Fields declared that are not in `AgentRunContext` raise a clear error at decoration time, not at call time.
+The decorator is structural metadata — it declares what capability this function implements and under what command name it can be invoked. Runtime context (task, context entries, trace ID, run ID, skills, command) is injected into the function as arguments by name matching against `AgentRunContext` fields. The function declares only what it needs. Fields not declared as parameters are silently omitted. Fields declared that are not in `AgentRunContext` raise a clear error at decoration time, not at call time.
 
 **Command description from docstring**: at decoration time the decorator captures the function's docstring via `inspect.getdoc()` and stores it in the command registration alongside the agent ID, command name, and calling convention. No additional decorator parameter is needed — the docstring is the Python convention for describing what a function does and the decorator respects that convention. The description is stored in the capability descriptor and is available to the planner when reasoning about which agent and command to invoke.
 
@@ -68,14 +68,14 @@ If no docstring is present, the decorator emits a warning at decoration time. Th
 
 ```python
 @agent(agent_id="researcher", command="deep")
-async def researcher_deep(task: str, context: list, effort: str = "high"):
+async def researcher_deep(task: str, context: list):
     """
     Exhaustive research across all available sources for a given topic.
     Produces one or more catalogue artifacts with findings, citations,
     and a confidence-weighted synthesis. Suitable for topics requiring
     comprehensive coverage before writing begins.
     """
-    return await deep_research(task, context, effort=effort)
+    return await deep_research(task, context)
 ```
 
 ```python
@@ -87,28 +87,28 @@ async def researcher(task: str):
 
 # Domain-specific commands — same agent, different capabilities
 @agent(agent_id="writer", command="translate")
-async def writer_translate(task: str, context: list, effort: str):
+async def writer_translate(task: str, context: list):
     """
     Translate existing content into a target language specified in the task.
     Preserves structure, tone, and domain terminology. Uses the same system
     prompt and toolset as the standard writing commands.
     """
-    return await translate(task, context, effort=effort)
+    return await translate(task, context)
 
 @agent(agent_id="analyst", command="ask")
 async def analyst_ask(task: str):
-    """Ad hoc query against available data sources. Returns an inline answer."""
+    """Ad hoc analytical query against available data. Returns an inline answer."""
     return await ad_hoc_query(task)
 
 @agent(agent_id="analyst", command="deep-analysis")
-async def analyst_deep(task: str, context: list, effort: str):
+async def analyst_deep(task: str, context: list):
     """
     Multi-step analysis across structured and unstructured data sources.
     Produces catalogue artifacts with methodology, findings, and confidence
     scores per finding. Suitable for complex analytical questions where
     a single query is insufficient.
     """
-    return await multi_step_analysis(task, context, effort=effort)
+    return await multi_step_analysis(task, context)
 
 # HTTP adapter to an external service in any language
 @agent(agent_id="rust-analyst")
@@ -128,24 +128,6 @@ Commands are plain strings. The SDK defines two conventional command names that 
 Domain-specific commands have no implied calling convention at the SDK level. Their calling convention — synchronous or async, inline result or catalogue artifacts — is declared in the capability descriptor and the node wrapper uses this to determine the right HTTP pattern at call time.
 
 The `command` field is available for injection if the function declares it, useful for logging or passing downstream. It is always the registered command name for that function — it does not vary at call time.
-
-**Effort — invocation-time concern**
-
-Effort is not part of command registration. It is passed in the input envelope at call time by the orchestrator, expressing how much work the caller wants done for this particular invocation. The agent author reads `effort` from the injected context and decides what it means internally — fewer iterations, shallower search, a draft pass versus a thorough pass.
-
-`effort` is an optional enum with three values: `"low"`, `"medium"`, `"high"`. Absent means the agent uses its own default, which should be `"high"` for most production invocations. The three-value vocabulary is intentionally constrained — it is expressive enough for the orchestrator to communicate intent and stable enough that every agent author knows what each value means without per-agent documentation.
-
-```python
-@agent(agent_id="planner", command="plan")
-async def planner(task: str, context: list, effort: str = "high"):
-    if effort == "low":
-        return await quick_replan(task, context)
-    elif effort == "medium":
-        return await focused_plan(task, context)
-    return await full_plan(task, context)
-```
-
-The orchestrator does not control which model an agent uses internally. Model selection is an internal agent concern. The capability descriptor carries advisory SLA characteristics per command but the orchestrator does not inject model parameters into the input envelope.
 
 **Automatic content offload**
 
@@ -173,13 +155,12 @@ Available via `get_run_context()` anywhere inside a decorated function. Also the
 | `task` | Natural language instruction from input envelope |
 | `context` | Typed context entry list from input envelope |
 | `command` | The command name this function was registered for (e.g. `"fast"`, `"deep"`, `"translate"`, `"ask"`) |
-| `effort` | Invocation-time effort level from the orchestrator. One of `"low"`, `"medium"`, `"high"`. Absent if not passed by the orchestrator |
 | `trace_id` | OTel trace ID |
 | `run_id` | LangGraph run ID |
 | `agent_id` | The agent's registered ID |
 | `skills` | List of skill identifiers loaded for this invocation |
 
-Any field can be declared as a function parameter to receive it. Fields not declared are simply not injected — no error, no boilerplate. A function that declares `command` receives it for logging or passing downstream. A function that declares `effort` receives it for internal branching. A function that declares neither does not receive them. The decorator does not impose unused arguments on the function author.
+Any field can be declared as a function parameter to receive it. Fields not declared are simply not injected — no error, no boilerplate. A function that declares `command` receives it for logging or passing downstream. The decorator does not impose unused arguments on the function author.
 
 `ctx.context` is strongly typed at the envelope level (each entry has `type`, `summary`, `url`, `content_type`) but the payload behind a `url` is intentionally opaque. The agent inspects entries by type, decides from the summary whether to fetch, and interprets the bytes according to `content_type`. No agent-to-agent content contracts exist — this is the blackbox principle applied to context.
 
@@ -207,6 +188,12 @@ Unexpected exceptions are caught and wrapped as `SemanticError(type="unexpected_
 
 `@agent`, `AgentResult`, `AgentRunContext`, `get_run_context()`, `get_run_logger()`, `write_artifact()`, `emit_progress()`, `NeedsHumanReview`, `EscalationRequired`, `SemanticError`
 
+**Onboarding existing agents**
+
+Developers integrating an existing agent — a compiled CLI, an HTTP service, a pi agent, a Claude Code skill set, or any agent with documented entry points — can use the agent onboarding mechanism to generate a monet client rather than writing SDK integration code from scratch. The onboarding mechanism reads the agent's existing documentation and produces decorated stub functions that wrap its native entry points, giving the orchestrator a fully registered agent without requiring changes to the agent itself.
+
+See [agent-onboarding.md](./agent-onboarding.md) for the full protocol and available prompt templates.
+
 ### Streaming — Granularity Tradeoff and Illustrative Patterns
 
 Streaming granularity is a tradeoff the agent developer works around. The architecture is not prescriptive about how agents implement streaming internally. The following are illustrative patterns showing how different agent types can optionally provide intra-node progress events. None of these are requirements.
@@ -221,8 +208,8 @@ A Python agent that wants to emit progress calls `emit_progress()` at whatever g
 
 ```python
 @agent(agent_id="researcher", command="deep")
-async def researcher(task: str, context: list, effort: str = "high"):
-    sources = await gather_sources(task, depth=effort)
+async def researcher(task: str, context: list):
+    sources = await gather_sources(task)
     results = []
     for i, source in enumerate(sources):
         result = await process(source)
@@ -238,9 +225,9 @@ A CLI compiled from any language writes progress events as newline-delimited JSO
 
 ```python
 @agent(agent_id="rust-analyst", command="deep-analysis")
-async def rust_analyst(task: str, run_id: str, effort: str = "high"):
+async def rust_analyst(task: str, run_id: str):
     proc = await asyncio.create_subprocess_exec(
-        "./analyst", "--task", task, "--run-id", run_id, "--effort", effort,
+        "./analyst", "--task", task, "--run-id", run_id,
         stdout=asyncio.subprocess.PIPE
     )
     result_line = None
@@ -262,11 +249,11 @@ For HTTP agents doing long-running work, holding an HTTP connection open for man
 
 ```python
 @agent(agent_id="deep-researcher", command="deep")
-async def deep_researcher(task: str, run_id: str, trace_id: str, effort: str = "high"):
+async def deep_researcher(task: str, run_id: str, trace_id: str):
     response = await http_client.post(
         "http://researcher-service/deep",
         headers={"traceparent": trace_id},
-        json={"task": task, "run_id": run_id, "effort": effort}
+        json={"task": task, "run_id": run_id}
     )
 
     if response.status_code == 202:
@@ -327,7 +314,7 @@ Every agent exposes one or more named command endpoints. The command name is par
 
 Two conventional commands carry implied calling conventions that the orchestrator and SDK understand natively:
 
-**`fast`** — synchronous, bounded effort, returns an inline result directly. Suitable for quick questions, ad hoc queries, targeted replanning, single bounded tasks. The default command when none is specified.
+**`fast`** — synchronous, bounded, returns an inline result directly. Suitable for quick questions, ad hoc queries, targeted replanning, single bounded tasks. The default command when none is specified.
 
 **`deep`** — async, long-running, writes one or more artifacts to the catalogue and returns pointers and summaries. Suitable for exhaustive research, full document production, comprehensive analysis.
 
@@ -344,7 +331,6 @@ Universal across all agents and all commands.
 | `task` | string | mandatory | Natural language instruction |
 | `context` | list of typed entries | optional | Artifact pointers, instructions, constraints, skill references |
 | `command` | string | optional | Which command to invoke. Defaults to `"fast"` if omitted |
-| `effort` | enum | optional | Invocation-time effort level. One of `"low"`, `"medium"`, `"high"`. Absent means the agent uses its own default |
 | `trace_id` | string | mandatory | OTel trace ID for continuity |
 | `run_id` | string | mandatory | LangGraph run ID for correlation |
 
@@ -427,7 +413,6 @@ For Python agents using the SDK, `write_artifact()` is the interface to the cata
 | `trace_id` | mandatory | OTel trace ID |
 | `run_id` | mandatory | LangGraph run ID |
 | `invocation_command` | mandatory | Command name that produced this artifact |
-| `invocation_effort` | optional | Effort level at the time of invocation |
 | `confidence` | mandatory | Numeric 0–1 |
 | `completeness` | mandatory | complete / partial / resource-bounded |
 | `sensitivity_label` | mandatory | public / internal / confidential / restricted |
@@ -445,7 +430,7 @@ For Python agents using the SDK, `write_artifact()` is the interface to the cata
 Static typed configuration loaded at startup. Not a runtime service. Not queried dynamically. Each agent has a descriptor defining:
 
 - Capability description
-- Registered commands, each carrying: name, description (captured from docstring at decoration time), calling convention (synchronous or async), and SLA characteristics per command: expected latency envelope per effort level, cost tier
+- Registered commands, each carrying: name, description (captured from docstring at decoration time), calling convention (synchronous or async), and SLA characteristics per command: expected latency envelope, cost tier
 - Confidence model
 - Retry semantics
 
@@ -467,11 +452,13 @@ The graph is the authoritative source for which agents exist and when they are i
 
 A LangGraph StateGraph whose nodes are thin wrappers around agent interface calls. The graph owns all routing, branching, iteration, and parallelism decisions via conditional edges. Agent selection is fixed at graph construction time.
 
+The concrete implementation of the three-graph topology is specified in [supervisor-graph.md](./supervisor-graph.md), including full state schemas, node implementations, routing functions, and the kaizen hook.
+
 ### Node Wrapper
 
 Each LangGraph node calls the agent (directly as a Python function in the co-located deployment, or via HTTP when distributed) and receives either an `AgentResult` (Python SDK agents) or a raw output envelope (non-Python agents). The node wrapper:
 
-- Starts an OTel span with agent ID, command, effort, run ID, and sensitivity label as attributes
+- Starts an OTel span with agent ID, command, run ID, and sensitivity label as attributes
 - Injects the W3C `traceparent` header into outbound HTTP calls for distributed agents
 - Receives the result and translates `AgentResult` to the output envelope if needed
 - Calls `enforce_content_limit` if the summary exceeds the configured limit
@@ -494,7 +481,6 @@ LangGraph state entries are always lean. Full artifact content never lives in gr
 | Run ID | For LangGraph state continuity |
 | Agent ID | Which agent produced this entry |
 | Command | Which command was invoked |
-| Effort | Effort level passed at invocation time |
 
 ### Content Limit Enforcement
 
@@ -592,7 +578,7 @@ The planner is the translation layer between vague user intent and structured wo
 | Out of scope | What is explicitly excluded |
 | Quality criteria | What good looks like — the agent's termination condition |
 | Constraints | Time, length, format, cost, audience, sensitivity |
-| Capability requirements | Which agents, which commands, which effort level, which skills to load per agent |
+| Capability requirements | Which agents, which commands, and which skills to load per agent |
 | Human checkpoint policy | Where explicit human approval is required and what happens on rejection |
 | Assumptions | Every significant interpretive decision the planner made in translating user intent |
 
@@ -623,7 +609,7 @@ Five reference agents implemented using pi as the runtime, all decorated with `@
 | QA | Evaluates content against work brief quality rubric | `fast`, `deep` | Thinking, Todo | When confidence below threshold |
 | Publisher | Format transformation and platform optimisation | `plan`, `publish` | Todo | Always, before any publication artifact is produced |
 
-Domain specialisation comes from skills loaded at invocation time from the work brief capability requirements. Behavioural depth comes from extensions loaded based on command and task complexity. Effort is passed by the orchestrator at invocation time. The base agent is thin — skills, extensions, and effort handling carry the domain weight.
+Domain specialisation comes from skills loaded at invocation time from the work brief capability requirements. Behavioural depth comes from extensions loaded based on command and task complexity. The base agent is thin — skills and extensions carry the domain weight.
 
 ---
 
@@ -812,7 +798,7 @@ When agents become separate services, the node wrapper injects `traceparent` exp
 
 ### Langfuse
 
-Self-hosted. Receives OTel traces via OTLP over HTTP. Extended with additional span attributes: agent ID, run ID, command, effort, sensitivity label, and signals from the output envelope.
+Self-hosted. Receives OTel traces via OTLP over HTTP. Extended with additional span attributes: agent ID, run ID, command, sensitivity label, and signals from the output envelope.
 
 Pi session logs provide the full intra-agent record independently of OTel — the genchi genbutsu layer for when a trace shows something unexpected.
 
@@ -916,7 +902,7 @@ Future application: The weakest jidoka point remains confidence score reliabilit
 
 **Principle 6: Standardisation**
 
-Current alignment: The uniform agent interface is the primary standardisation. The artifact metadata schema is the secondary standardisation. The output envelope signals schema is the third. The command vocabulary and effort enum are standardised vocabularies. These standards are the foundation on which composability, mixed runtimes, and future agent additions are possible.
+Current alignment: The uniform agent interface is the primary standardisation. The artifact metadata schema is the secondary standardisation. The output envelope signals schema is the third. The command vocabulary is a standardised naming convention. These standards are the foundation on which composability, mixed runtimes, and future agent additions are possible.
 
 Future application: The skill file format is not yet standardised beyond "markdown files." A more structured skill schema — with defined sections for domain context, working methodology, output format expectations, and quality criteria — would make skills more composable and easier to evaluate. This is a future standardisation opportunity that should be deferred until there are enough skills to identify the natural structure empirically rather than designing it speculatively.
 

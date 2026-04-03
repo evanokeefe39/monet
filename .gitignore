@@ -20,7 +20,6 @@ ENV/
 .idea/
 *.swp
 *.swo
-.claude
 
 # OS
 .DS_Store
@@ -40,3 +39,18 @@ site/
 
 # Distribution
 *.tar.gz
+
+
+# Temp stuff
+.*
+
+# Keep these
+!.github
+!.gitmodules
+!.gitattributes
+!.env.example
+!.editorconfig
+!.nvmrc
+!.node-version
+!.python-version
+!.tool-versions

@@ -30,7 +30,7 @@ from monet._registry import default_registry
 from monet._types import AgentRunContext, ArtifactEntry, SignalType
 from monet.orchestration._state import has_signal
 
-from .state import ExecutionState, WaveItem, WaveResult
+from ..state import ExecutionState, WaveItem, WaveResult
 
 MAX_WAVE_RETRIES = 3
 
