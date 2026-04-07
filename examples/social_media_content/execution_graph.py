@@ -26,9 +26,8 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
-from monet._registry import default_registry
-from monet._types import AgentRunContext, ArtifactEntry, SignalType
-from monet.orchestration._state import has_signal
+from monet.orchestration import invoke_agent
+from monet.types import SignalType
 
 from .state import ExecutionState, WaveItem, WaveResult
 
@@ -72,20 +71,23 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
     The append reducer on wave_results accumulates results from all
     parallel Send invocations.
     """
-    handler = default_registry.lookup(item["agent_id"], item["command"])
-    assert handler is not None, f"{item['agent_id']}/{item['command']} not registered"
-
-    ctx = AgentRunContext(
-        task=item["task"],
+    result = await invoke_agent(
+        item["agent_id"],
         command=item["command"],
+        task=item["task"],
         trace_id=item.get("trace_id", ""),
         run_id=item.get("run_id", ""),
-        agent_id=item["agent_id"],
     )
-    result = await handler(ctx)
 
     # Convert list-based signals to serializable dict for state
     signals_data = [dict(s) for s in result.signals]
+
+    if isinstance(result.output, str):
+        output_str = result.output
+    elif isinstance(result.output, dict):
+        output_str = result.output.get("url", "")
+    else:
+        output_str = ""
 
     entry: WaveResult = {
         "phase_index": item["phase_index"],
@@ -93,9 +95,7 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
         "item_index": item["item_index"],
         "agent_id": item["agent_id"],
         "command": item["command"],
-        "output": (
-            result.output if isinstance(result.output, str) else result.output.url
-        ),
+        "output": output_str,
         "signals": signals_data,
     }
 
@@ -121,9 +121,12 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
         if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
     ]
 
+    def _has(signals: list[dict], stype: SignalType) -> bool:
+        return any(s.get("type") == stype.value for s in signals)
+
     has_blocking = any(
-        has_signal(r.get("signals", []), SignalType.NEEDS_HUMAN_REVIEW)
-        or has_signal(r.get("signals", []), SignalType.ESCALATION_REQUIRED)
+        _has(r.get("signals", []), SignalType.NEEDS_HUMAN_REVIEW)
+        or _has(r.get("signals", []), SignalType.ESCALATION_REQUIRED)
         for r in current_results
     )
 
@@ -137,9 +140,6 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
 
 async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
     """Call sm-qa/fast to evaluate the current wave's results."""
-    handler = default_registry.lookup("sm-qa", "fast")
-    assert handler is not None, "sm-qa/fast not registered"
-
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
 
@@ -149,20 +149,20 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
         if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
     ]
 
-    ctx = AgentRunContext(
-        task=f"Evaluate wave {current_phase}.{current_wave} results",
+    result = await invoke_agent(
+        "sm-qa",
         command="fast",
+        task=f"Evaluate wave {current_phase}.{current_wave} results",
+        context=[
+            {
+                "type": "artifact",
+                "summary": f"Wave {current_phase}.{current_wave} results",
+                "content": json.dumps(current_results),
+            }
+        ],
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),
-        agent_id="sm-qa",
-        context=[
-            ArtifactEntry(
-                summary=f"Wave {current_phase}.{current_wave} results",
-                content=json.dumps(current_results),
-            )
-        ],
     )
-    result = await handler(ctx)
 
     verdict_data: dict[str, Any] = {}
     if isinstance(result.output, str) and result.output.strip():

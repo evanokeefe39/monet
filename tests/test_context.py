@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from monet._context import get_run_context, get_run_logger
+from monet import get_run_context, get_run_logger
 
 
 def test_get_run_context_outside_decorator() -> None:
     ctx = get_run_context()
-    assert ctx.task == ""
-    assert ctx.command == "fast"
-    assert ctx.agent_id == ""
+    assert ctx["task"] == ""
+    assert ctx["command"] == ""
+    assert ctx["agent_id"] == ""
 
 
 def test_get_run_logger_outside_decorator() -> None:

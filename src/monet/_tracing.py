@@ -1,138 +1,65 @@
-"""OpenTelemetry tracing utilities.
+"""OTel tracing setup. Internal.
 
-OTel is a hard dependency. Spans are always created. When
-OTEL_EXPORTER_OTLP_ENDPOINT is not set, spans go to a no-op exporter.
+The backend is any OTLP-compatible service: Langfuse, LangSmith, SigNoz, etc.
+No backend-specific code. Configure via standard OTEL_* environment variables.
 """
 
 from __future__ import annotations
 
 import atexit
 import os
-import re
 import warnings
-from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.trace import StatusCode
 
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span, Tracer
-
-# W3C traceparent format: version-trace_id-parent_id-trace_flags
-_TRACEPARENT_RE = re.compile(
-    r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$"
-)
-
-_tracer: Tracer | None = None
+_provider: TracerProvider | None = None
 _exporter_attached: bool = False
 
 
-def get_tracer() -> Tracer:
-    """Get or create the monet tracer."""
-    global _tracer, _exporter_attached
-    if _tracer is None:
-        provider = trace.get_tracer_provider()
-        if not isinstance(provider, TracerProvider):
-            resource = Resource.create({
-                SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", "monet"),
-                "monet.version": "0.1.0",
-            })
-            provider = TracerProvider(resource=resource)
-            trace.set_tracer_provider(provider)
-            atexit.register(provider.shutdown)
-
-        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-        if endpoint and not _exporter_attached:
-            try:
-                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-                    OTLPSpanExporter,
-                )
-                from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-                _exporter_attached = True
-            except ImportError:
-                warnings.warn(
-                    "opentelemetry-exporter-otlp-proto-http not installed; "
-                    "spans will not be exported",
-                    stacklevel=2,
-                )
-
-        _tracer = trace.get_tracer("monet.agent")
-    return _tracer
-
-
-def start_agent_span(
-    agent_id: str,
-    command: str,
-    effort: str | None = None,
-    run_id: str = "",
-    trace_id: str = "",
-    sensitivity_label: str = "internal",
-) -> Span:
-    """Start an OTel span for an agent invocation.
-
-    Attributes follow gen_ai.* semantic conventions where applicable.
-    """
-    tracer = get_tracer()
-    span = tracer.start_span(
-        name=f"agent.{agent_id}.{command}",
-        attributes={
-            "gen_ai.agent.id": agent_id,
-            "gen_ai.agent.command": command,
-            "monet.effort": effort or "",
-            "monet.run_id": run_id,
-            "monet.trace_id": trace_id,
-            "monet.sensitivity_label": sensitivity_label,
-        },
-    )
-    return span
-
-
-def end_span(
-    span: Span,
-    success: bool,
-    error_message: str = "",
+def configure_tracing(
+    endpoint: str | None = None,
+    service_name: str = "monet",
 ) -> None:
-    """End an OTel span with status."""
-    if success:
-        span.set_status(StatusCode.OK)
-    else:
-        span.set_status(StatusCode.ERROR, error_message)
-    span.end()
+    """Configure OTel tracing. Idempotent — safe to call multiple times.
 
-
-def format_traceparent(
-    trace_id: str,
-    span_id: str,
-    trace_flags: str = "01",
-) -> str:
-    """Format a W3C traceparent header value."""
-    return f"00-{trace_id}-{span_id}-{trace_flags}"
-
-
-def parse_traceparent(
-    header: str,
-) -> dict[str, str] | None:
-    """Parse a W3C traceparent header.
-
-    Returns dict with version, trace_id, parent_id, trace_flags
-    or None if invalid.
+    Reads OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_SERVICE_NAME from environment.
     """
-    match = _TRACEPARENT_RE.match(header)
-    if not match:
-        return None
-    return {
-        "version": match.group(1),
-        "trace_id": match.group(2),
-        "parent_id": match.group(3),
-        "trace_flags": match.group(4),
-    }
+    global _provider, _exporter_attached
+
+    if _provider is None:
+        resource = Resource.create(
+            {
+                SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", service_name),
+                "monet.version": "0.1.0",
+            }
+        )
+        _provider = TracerProvider(resource=resource)
+        trace.set_tracer_provider(_provider)
+        atexit.register(_provider.shutdown)
+
+    ep = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if ep and not _exporter_attached:
+        try:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter,
+            )
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+            _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            _exporter_attached = True
+        except ImportError:
+            warnings.warn(
+                "OTEL_EXPORTER_OTLP_ENDPOINT is set but "
+                "opentelemetry-exporter-otlp-proto-http is not installed. "
+                "Traces will not be exported.",
+                stacklevel=2,
+            )
 
 
-def inject_traceparent(headers: dict[str, Any], trace_id: str) -> None:
-    """Inject traceparent header for outbound HTTP calls."""
-    if trace_id:
-        headers["traceparent"] = trace_id
+def get_tracer(name: str = "monet") -> trace.Tracer:
+    """Get an OTel tracer. Auto-configures on first call."""
+    if _provider is None:
+        configure_tracing()
+    return trace.get_tracer(name)

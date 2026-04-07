@@ -1,0 +1,94 @@
+"""Public types for the monet agent SDK.
+
+All types used across the SDK, catalogue, and orchestration layers.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any, TypedDict
+
+# --- Signals (list-based accumulation model) ---
+
+
+class SignalType(StrEnum):
+    """Standard signal types emitted by agents."""
+
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
+    ESCALATION_REQUIRED = "escalation_required"
+    LOW_CONFIDENCE = "low_confidence"
+    PARTIAL_RESULT = "partial_result"
+    REVISION_SUGGESTED = "revision_suggested"
+    SENSITIVE_CONTENT = "sensitive_content"
+    SEMANTIC_ERROR = "semantic_error"
+
+
+class Signal(TypedDict):
+    """A single signal emitted by an agent.
+
+    Signals accumulate — multiple can be true simultaneously.
+    Non-fatal: the agent can continue execution and return a result
+    alongside signals via emit_signal().
+    Fatal conditions use typed exceptions instead.
+    """
+
+    type: str
+    reason: str
+    metadata: dict[str, Any] | None
+
+
+# --- Artifact pointer ---
+
+
+class ArtifactPointer(TypedDict):
+    """Reference to an artifact in the catalogue."""
+
+    artifact_id: str
+    url: str
+
+
+# --- Agent run context ---
+
+
+class AgentRunContext(TypedDict):
+    """Runtime context available inside a decorated agent function.
+
+    Set via ContextVar by the decorator. Accessible via get_run_context()
+    or by declaring matching parameter names on the agent function.
+    """
+
+    task: str
+    context: list[dict[str, Any]]
+    command: str
+    trace_id: str
+    run_id: str
+    agent_id: str
+    skills: list[str]
+
+
+# --- Agent result ---
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    """Wrapped result from an agent invocation.
+
+    Never constructed manually by the function author. The decorator
+    builds this from the function's return value or raised exception.
+    """
+
+    success: bool
+    output: str | ArtifactPointer | None = None
+    artifacts: list[ArtifactPointer] = field(default_factory=list)
+    signals: list[Signal] = field(default_factory=list)
+    trace_id: str = ""
+    run_id: str = ""
+
+    def has_signal(self, signal_type: SignalType) -> bool:
+        """Check if signals contain a signal of the given type."""
+        return any(s["type"] == signal_type for s in self.signals)
+
+    def get_signal(self, signal_type: SignalType) -> Signal | None:
+        """Get the first signal of the given type, or None."""
+        return next((s for s in self.signals if s["type"] == signal_type), None)

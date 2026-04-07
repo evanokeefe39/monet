@@ -7,14 +7,30 @@ from typing import Any
 import pytest
 from langgraph.graph import END, StateGraph
 
-from monet._decorator import agent
-from monet._registry import default_registry
-from monet._types import AgentRunContext
-from monet.catalogue._memory import InMemoryCatalogueClient
-from monet.exceptions import NeedsHumanReview
+from monet import NeedsHumanReview, agent
+from monet._registry import (
+    default_registry,  # internal: needed for registry_scope test fixture
+)
+from monet.catalogue import InMemoryCatalogueClient
 from monet.orchestration._content_limit import enforce_content_limit
 from monet.orchestration._node_wrapper import create_node
 from monet.orchestration._state import GraphState
+from monet.types import AgentRunContext
+
+
+def _ctx(**overrides: object) -> AgentRunContext:
+    """Build an AgentRunContext dict with defaults."""
+    base: AgentRunContext = {
+        "task": "",
+        "context": [],
+        "command": "fast",
+        "trace_id": "",
+        "run_id": "",
+        "agent_id": "",
+        "skills": [],
+    }
+    base.update(overrides)  # type: ignore[typeddict-item]
+    return base
 
 
 @pytest.fixture(autouse=True)
@@ -44,29 +60,28 @@ async def mock_review_agent(task: str) -> str:
 # --- Content limit tests ---
 
 
-def test_content_limit_within_limit() -> None:
+async def test_content_limit_within_limit() -> None:
     entry: dict[str, Any] = {"output": "short", "agent_id": "test"}
-    result = enforce_content_limit(entry, limit=100)
+    result = await enforce_content_limit(entry, limit=100)
     assert result["output"] == "short"
 
 
-def test_content_limit_exceeds_truncates() -> None:
+async def test_content_limit_exceeds_truncates() -> None:
     long_output = "x" * 5000
     entry: dict[str, Any] = {"output": long_output, "agent_id": "test"}
-    result = enforce_content_limit(entry, limit=100)
+    result = await enforce_content_limit(entry, limit=100)
     assert len(result["output"]) == 100
     assert "summary" in result
 
 
-def test_content_limit_with_catalogue() -> None:
+async def test_content_limit_with_catalogue() -> None:
     catalogue = InMemoryCatalogueClient()
     long_output = "y" * 5000
     entry: dict[str, Any] = {
         "output": long_output,
         "agent_id": "test",
-        "confidence": 0.9,
     }
-    result = enforce_content_limit(entry, limit=100, catalogue=catalogue)
+    result = await enforce_content_limit(entry, limit=100, catalogue=catalogue)
     assert len(result["output"]) == 100
     assert "artifact_url" in result
     assert result["artifact_url"].startswith("memory://")
@@ -96,14 +111,14 @@ async def test_create_node_signals_review() -> None:
 
     node = create_node("orch-review-needed")
     graph = StateGraph(GraphState)
-    graph.add_node("review", node)  # type: ignore[call-overload]
+    graph.add_node("review", node)  # type: ignore[call-overload,arg-type]
     graph.set_entry_point("review")
     graph.add_edge("review", END)
 
     checkpointer = MemorySaver()
     app = graph.compile(checkpointer=checkpointer)
     config = {"configurable": {"thread_id": "review-test"}}
-    result = await app.ainvoke(  # type: ignore[call-overload]
+    result = await app.ainvoke(  # type: ignore[call-overload,arg-type]
         {"task": "Risky", "trace_id": "t-2", "run_id": "r-2"},
         config=config,
     )
@@ -127,14 +142,14 @@ async def test_create_node_missing_handler() -> None:
 
 async def test_graph_with_create_node() -> None:
     graph = StateGraph(GraphState)
-    graph.add_node("planner", create_node("orch-planner"))  # type: ignore[call-overload]
-    graph.add_node("writer", create_node("orch-writer"))  # type: ignore[call-overload]
+    graph.add_node("planner", create_node("orch-planner"))  # type: ignore[call-overload,arg-type]
+    graph.add_node("writer", create_node("orch-writer"))  # type: ignore[call-overload,arg-type]
     graph.set_entry_point("planner")
     graph.add_edge("planner", "writer")
     graph.add_edge("writer", END)
 
     app = graph.compile()
-    result = await app.ainvoke(  # type: ignore[call-overload]
+    result = await app.ainvoke(  # type: ignore[call-overload,arg-type]
         {"task": "Full graph test", "trace_id": "t-3", "run_id": "r-3"}
     )
 
@@ -148,21 +163,19 @@ async def test_graph_with_create_node() -> None:
 
 
 async def test_invoke_agent_local() -> None:
-    from monet.orchestration._invoke import invoke_agent
+    from monet.orchestration import invoke_agent
 
-    ctx = AgentRunContext(task="Test invoke", agent_id="orch-planner", command="fast")
-    result = await invoke_agent("orch-planner", "fast", ctx)
+    result = await invoke_agent("orch-planner", task="Test invoke")
     assert result.success is True
     assert isinstance(result.output, str)
     assert "Test invoke" in result.output
 
 
 async def test_invoke_agent_missing() -> None:
-    from monet.orchestration._invoke import invoke_agent
+    from monet.orchestration import invoke_agent
 
-    ctx = AgentRunContext(task="x", agent_id="ghost", command="fast")
     with pytest.raises(LookupError, match="No handler"):
-        await invoke_agent("ghost", "fast", ctx)
+        await invoke_agent("ghost", task="x")
 
 
 # --- HITL interrupt ---
@@ -175,7 +188,7 @@ async def test_node_interrupt_on_review() -> None:
 
     node = create_node("orch-review-needed", interrupt_on_review=True)
     graph = StateGraph(GraphState)
-    graph.add_node("reviewer", node)  # type: ignore[call-overload]
+    graph.add_node("reviewer", node)  # type: ignore[call-overload,arg-type]
     graph.set_entry_point("reviewer")
     graph.add_edge("reviewer", END)
 
@@ -183,7 +196,7 @@ async def test_node_interrupt_on_review() -> None:
     app = graph.compile(checkpointer=checkpointer)
 
     config = {"configurable": {"thread_id": "hitl-test"}}
-    result = await app.ainvoke(  # type: ignore[call-overload]
+    result = await app.ainvoke(  # type: ignore[call-overload,arg-type]
         {"task": "Needs review", "trace_id": "t-hitl", "run_id": "r-hitl"},
         config=config,
     )
@@ -198,12 +211,12 @@ async def test_node_no_interrupt_when_disabled() -> None:
     """interrupt_on_review=False skips interrupt even with review signal."""
     node = create_node("orch-review-needed", interrupt_on_review=False)
     graph = StateGraph(GraphState)
-    graph.add_node("reviewer", node)  # type: ignore[call-overload]
+    graph.add_node("reviewer", node)  # type: ignore[call-overload,arg-type]
     graph.set_entry_point("reviewer")
     graph.add_edge("reviewer", END)
 
     app = graph.compile()
-    result = await app.ainvoke(  # type: ignore[call-overload]
+    result = await app.ainvoke(  # type: ignore[call-overload,arg-type]
         {"task": "No interrupt", "trace_id": "t-ni", "run_id": "r-ni"}
     )
     assert result["needs_review"] is True

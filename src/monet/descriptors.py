@@ -9,46 +9,51 @@ from __future__ import annotations
 
 import contextlib
 import threading
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
-
-from pydantic import BaseModel
-
-from ._types import Effort  # noqa: TC001
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+Effort = Literal["low", "medium", "high"]
 
-class SLACharacteristics(BaseModel):
+
+@dataclass
+class SLACharacteristics:
     """Expected performance characteristics per effort level."""
 
-    expected_latency_ms: dict[str, int] = {}
+    expected_latency_ms: dict[str, int] = field(default_factory=dict)
     cost_tier: str = "standard"
 
 
-class RetryConfig(BaseModel):
+@dataclass
+class RetryConfig:
     """Retry semantics for a command."""
 
     max_retries: int = 3
-    retryable_errors: list[str] = ["unexpected_error"]
+    retryable_errors: list[str] = field(default_factory=lambda: ["unexpected_error"])
     backoff_factor: float = 1.0
 
 
-class CommandDescriptor(BaseModel):
+@dataclass
+class CommandDescriptor:
     """Descriptor for a single agent command."""
 
     calling_convention: Literal["sync", "async"] = "sync"
-    effort_vocabulary: list[Effort] = ["low", "medium", "high"]
-    sla: SLACharacteristics = SLACharacteristics()
-    retry: RetryConfig = RetryConfig()
+    effort_vocabulary: list[Effort] = field(
+        default_factory=lambda: ["low", "medium", "high"]
+    )
+    sla: SLACharacteristics = field(default_factory=SLACharacteristics)
+    retry: RetryConfig = field(default_factory=RetryConfig)
 
 
-class AgentDescriptor(BaseModel):
+@dataclass
+class AgentDescriptor:
     """Capability descriptor for an agent."""
 
-    agent_id: str
+    agent_id: str = ""
     description: str = ""
-    commands: dict[str, CommandDescriptor] = {}
+    commands: dict[str, CommandDescriptor] = field(default_factory=dict)
     confidence_model: str = "self-reported"
 
 
@@ -85,8 +90,31 @@ class DescriptorRegistry:
                 self._descriptors = snapshot
 
     def load_from_dict(self, data: dict[str, Any]) -> AgentDescriptor:
-        """Load and register a descriptor from a dict."""
-        descriptor = AgentDescriptor(**data)
+        """Load and register a descriptor from a dict.
+
+        Nested dicts are converted to their respective dataclass types.
+        """
+        commands_data = data.get("commands", {})
+        commands: dict[str, CommandDescriptor] = {}
+        for cmd_name, cmd_dict in commands_data.items():
+            if isinstance(cmd_dict, dict):
+                sla_data = cmd_dict.pop("sla", None)
+                retry_data = cmd_dict.pop("retry", None)
+                cmd = CommandDescriptor(**cmd_dict)
+                if sla_data:
+                    cmd.sla = SLACharacteristics(**sla_data)
+                if retry_data:
+                    cmd.retry = RetryConfig(**retry_data)
+                commands[cmd_name] = cmd
+            else:
+                commands[cmd_name] = cmd_dict
+
+        descriptor = AgentDescriptor(
+            agent_id=data.get("agent_id", ""),
+            description=data.get("description", ""),
+            commands=commands,
+            confidence_model=data.get("confidence_model", "self-reported"),
+        )
         self.register(descriptor)
         return descriptor
 

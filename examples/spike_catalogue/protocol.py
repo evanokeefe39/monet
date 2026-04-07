@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from pathlib import Path
 
-from monet._types import ArtifactPointer
+from monet.types import ArtifactPointer
 
 
 @dataclass

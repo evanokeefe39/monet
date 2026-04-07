@@ -1,77 +1,77 @@
-"""CatalogueService — composes storage backend + metadata index."""
+"""Reference implementation of CatalogueClient.
+
+Wires FilesystemStorage (bytes on disk) with SQLiteIndex (queryable metadata).
+Production applications implement CatalogueClient directly against their
+own storage backend. This service is for development and simple deployments.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
-from monet._types import ArtifactPointer
-
-from ._metadata import ArtifactMetadata
-
-if TYPE_CHECKING:
-    from ._index import SQLiteIndex
-    from ._storage import StorageBackend
+from monet.catalogue._index import SQLiteIndex
+from monet.catalogue._metadata import ArtifactMetadata
+from monet.catalogue._storage import FilesystemStorage
+from monet.types import ArtifactPointer
 
 
 class CatalogueService:
-    """Composes a storage backend and metadata index.
+    """Composes FilesystemStorage and SQLiteIndex."""
 
-    Enforces write-time invariants, computes content hash,
-    and manages artifact lifecycle.
-    """
-
-    def __init__(self, storage: StorageBackend, index: SQLiteIndex) -> None:
+    def __init__(self, storage: FilesystemStorage, index: SQLiteIndex) -> None:
         self._storage = storage
         self._index = index
 
-    def write(self, content: bytes, metadata: ArtifactMetadata) -> ArtifactPointer:
+    async def initialise(self) -> None:
+        """Call at startup to ensure index tables exist."""
+        await self._index.initialise()
+
+    async def write(
+        self,
+        content: bytes,
+        content_type: str,
+        summary: str,
+        confidence: float,
+        completeness: str,
+        sensitivity_label: str = "internal",
+        **kwargs: object,
+    ) -> ArtifactPointer:
         """Write an artifact to storage and index.
 
-        Preconditions:
-            metadata passes pydantic validation (invariants enforced).
-        Postconditions:
-            Content stored, metadata indexed, hash computed.
+        Auto-pulls run context for agent_id/run_id/trace_id if available.
+        Context is optional — write() can be called outside the decorator.
         """
-        # Generate ID if not provided
-        if not metadata.artifact_id:
-            metadata.artifact_id = str(uuid.uuid4())
+        # Get run context if available — not required
+        try:
+            from monet._context import get_run_context
 
-        # Compute derived fields
-        metadata.content_length = len(content)
-        metadata.content_hash = hashlib.sha256(content).hexdigest()
-        if not metadata.created_at:
-            metadata.created_at = datetime.now(tz=UTC).isoformat()
+            ctx = get_run_context()
+            run_id = ctx.get("run_id")
+            trace_id = ctx.get("trace_id")
+            agent_id = ctx.get("agent_id")
+        except Exception:
+            run_id = trace_id = agent_id = None
 
-        # Write to storage
-        meta_dict = metadata.model_dump()
-        url = self._storage.write(metadata.artifact_id, content, meta_dict)
+        artifact_id = str(uuid.uuid4())
+        metadata = ArtifactMetadata(
+            artifact_id=artifact_id,
+            content_type=content_type,
+            content_length=len(content),
+            summary=summary,
+            confidence=confidence,
+            completeness=completeness,
+            sensitivity_label=sensitivity_label,
+            agent_id=agent_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            tags=dict(kwargs.get("tags", {})) if "tags" in kwargs else {},
+            created_at=datetime.now(tz=UTC).isoformat(),
+        )
+        pointer = await self._storage.write(content, metadata)
+        await self._index.put(metadata)
+        return pointer
 
-        # Index metadata
-        self._index.insert(metadata)
-
-        return ArtifactPointer(artifact_id=metadata.artifact_id, url=url)
-
-    def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]:
-        """Read an artifact from storage and verify integrity.
-
-        Preconditions:
-            artifact_id exists in storage.
-        Postconditions:
-            Content hash verified against stored hash.
-        """
-        content, meta_dict = self._storage.read(artifact_id)
-        metadata = ArtifactMetadata(**meta_dict)
-
-        # Verify integrity
-        actual_hash = hashlib.sha256(content).hexdigest()
-        if actual_hash != metadata.content_hash:
-            msg = (
-                f"Content hash mismatch for {artifact_id}: "
-                f"expected {metadata.content_hash}, got {actual_hash}"
-            )
-            raise ValueError(msg)
-
-        return content, metadata
+    async def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]:
+        """Read an artifact from storage."""
+        return await self._storage.read(artifact_id)

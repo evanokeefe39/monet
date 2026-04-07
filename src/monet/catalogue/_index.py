@@ -1,93 +1,90 @@
-"""SQLite metadata index via SQLAlchemy."""
+"""SQLite metadata index via SQLAlchemy async with aiosqlite."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import sqlalchemy as sa
-from sqlalchemy import Column, Float, Integer, String, Table, create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy import Float, Integer, String, Text, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 if TYPE_CHECKING:
-    from ._metadata import ArtifactMetadata
+    from monet.catalogue._metadata import ArtifactMetadata
 
-_metadata_obj = sa.MetaData()
 
-artifacts_table = Table(
-    "artifacts",
-    _metadata_obj,
-    Column("artifact_id", String, primary_key=True),
-    Column("content_type", String, nullable=False),
-    Column("content_length", Integer, nullable=False),
-    Column("content_hash", String, nullable=False),
-    Column("summary", String, default=""),
-    Column("created_by", String, nullable=False),
-    Column("created_at", String, nullable=False),
-    Column("trace_id", String, default=""),
-    Column("run_id", String, default=""),
-    Column("invocation_command", String, default=""),
-    Column("confidence", Float, default=0.0),
-    Column("completeness", String, default="complete"),
-    Column("sensitivity_label", String, default="internal"),
-    Column("data_residency", String, default="local"),
-    Column("pii_flag", Integer, default=0),  # SQLite bool
-)
+class Base(DeclarativeBase):
+    pass
+
+
+class ArtifactRecord(Base):
+    """ORM model for the artifacts table. Distinct from ArtifactMetadata TypedDict."""
+
+    __tablename__ = "artifacts"
+    artifact_id: Mapped[str] = mapped_column(String, primary_key=True)
+    content_type: Mapped[str] = mapped_column(String)
+    content_length: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Float)
+    completeness: Mapped[str] = mapped_column(String)
+    sensitivity_label: Mapped[str] = mapped_column(String)
+    agent_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    tags: Mapped[str] = mapped_column(Text, default="{}")  # JSON string
+    created_at: Mapped[str] = mapped_column(String)
 
 
 class SQLiteIndex:
-    """SQLite-backed metadata index."""
+    """SQLite-backed metadata index using async SQLAlchemy.
 
-    def __init__(self, db_url: str = "sqlite:///catalogue.db") -> None:
-        self._engine = create_engine(db_url)
-        _metadata_obj.create_all(self._engine)
+    DB URL must use sqlite+aiosqlite:// scheme.
+    """
 
-    def insert(self, metadata: ArtifactMetadata) -> None:
-        """Insert artifact metadata into the index."""
-        with Session(self._engine) as session:
-            session.execute(
-                artifacts_table.insert().values(
-                    artifact_id=metadata.artifact_id,
-                    content_type=metadata.content_type,
-                    content_length=metadata.content_length,
-                    content_hash=metadata.content_hash,
-                    summary=metadata.summary,
-                    created_by=metadata.created_by,
-                    created_at=metadata.created_at,
-                    trace_id=metadata.trace_id,
-                    run_id=metadata.run_id,
-                    invocation_command=metadata.invocation_command,
-                    confidence=metadata.confidence,
-                    completeness=metadata.completeness,
-                    sensitivity_label=metadata.sensitivity_label,
-                    data_residency=metadata.data_residency,
-                    pii_flag=int(metadata.pii_flag),
-                )
-            )
-            session.commit()
+    def __init__(self, db_url: str = "sqlite+aiosqlite:///.catalogue/index.db") -> None:
+        self._engine = create_async_engine(db_url)
 
-    def query_by_id(self, artifact_id: str) -> dict[str, Any] | None:
+    async def initialise(self) -> None:
+        """Create tables. Call once at startup."""
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def put(self, metadata: ArtifactMetadata) -> None:
+        """Insert artifact metadata into the index.
+
+        Receives an ArtifactMetadata TypedDict and maps it to an ArtifactRecord.
+        """
+        import json
+
+        record_data = dict(metadata)
+        # Convert tags dict to JSON string for storage
+        record_data["tags"] = json.dumps(record_data.get("tags", {}))
+        async with AsyncSession(self._engine) as session:
+            session.add(ArtifactRecord(**record_data))
+            await session.commit()
+
+    async def get(self, artifact_id: str) -> ArtifactMetadata | None:
         """Query metadata by artifact_id."""
-        with Session(self._engine) as session:
-            result = session.execute(
-                artifacts_table.select().where(
-                    artifacts_table.c.artifact_id == artifact_id
-                )
-            )
-            row = result.mappings().first()
-            return dict(row) if row else None
+        import json
 
-    def query_by_trace(self, trace_id: str) -> list[dict[str, Any]]:
-        """Query all artifacts for a given trace."""
-        with Session(self._engine) as session:
-            result = session.execute(
-                artifacts_table.select().where(artifacts_table.c.trace_id == trace_id)
-            )
-            return [dict(row) for row in result.mappings()]
+        async with AsyncSession(self._engine) as session:
+            result = await session.get(ArtifactRecord, artifact_id)
+            if result is None:
+                return None
+            row_dict = {c.key: getattr(result, c.key) for c in result.__table__.columns}
+            # Convert tags JSON string back to dict
+            row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
+            return row_dict  # type: ignore[return-value]
 
-    def query_by_run(self, run_id: str) -> list[dict[str, Any]]:
+    async def query_by_run(self, run_id: str) -> list[ArtifactMetadata]:
         """Query all artifacts for a given run."""
-        with Session(self._engine) as session:
-            result = session.execute(
-                artifacts_table.select().where(artifacts_table.c.run_id == run_id)
-            )
-            return [dict(row) for row in result.mappings()]
+        import json
+
+        async with AsyncSession(self._engine) as session:
+            stmt = select(ArtifactRecord).where(ArtifactRecord.run_id == run_id)
+            rows = await session.execute(stmt)
+            results = []
+            for r in rows.scalars():
+                row_dict = {c.key: getattr(r, c.key) for c in r.__table__.columns}
+                row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
+                results.append(row_dict)  # type: ignore[arg-type]
+            return results

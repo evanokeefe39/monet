@@ -1,11 +1,11 @@
-"""monet — a multi-agent orchestration SDK."""
+"""monet — multi-agent orchestration SDK."""
 
+from ._catalogue import get_catalogue
 from ._context import get_run_context, get_run_logger
 from ._decorator import agent
-from ._events import handle_agent_event
-from ._stubs import emit_progress, emit_signal, set_catalogue_client, write_artifact
-from ._types import AgentResult, AgentRunContext, ArtifactPointer, Signal, SignalType
+from ._stubs import emit_progress, emit_signal
 from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
+from .types import AgentResult, AgentRunContext, ArtifactPointer, Signal, SignalType
 
 __all__ = [
     "AgentResult",
@@ -19,9 +19,7 @@ __all__ = [
     "agent",
     "emit_progress",
     "emit_signal",
+    "get_catalogue",
     "get_run_context",
     "get_run_logger",
-    "handle_agent_event",
-    "set_catalogue_client",
-    "write_artifact",
 ]

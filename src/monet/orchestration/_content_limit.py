@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 DEFAULT_CONTENT_LIMIT = 4000
 
 
-def enforce_content_limit(
+async def enforce_content_limit(
     entry: dict[str, Any],
     limit: int = DEFAULT_CONTENT_LIMIT,
     catalogue: CatalogueClient | None = None,
@@ -37,18 +37,16 @@ def enforce_content_limit(
         return entry
 
     if catalogue is not None:
-        from monet.catalogue._metadata import ArtifactMetadata
-
-        metadata = ArtifactMetadata(
+        pointer = await catalogue.write(
+            content=output.encode(),
             content_type="text/plain",
-            created_by=entry.get("agent_id", "unknown"),
             summary=output[:200],
             confidence=entry.get("confidence", 0.0),
+            completeness="complete",
         )
-        pointer = catalogue.write(output.encode(), metadata)
         entry = dict(entry)
         entry["output"] = output[:limit]
-        entry["artifact_url"] = pointer.url
+        entry["artifact_url"] = pointer["url"]
         entry["summary"] = output[:200]
     else:
         # No catalogue available — just truncate
