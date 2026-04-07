@@ -12,11 +12,10 @@ import pytest
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
-from monet._decorator import agent
-from monet._registry import default_registry
-from monet._types import AgentResult, AgentRunContext, SignalType
+from monet import agent
+from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.exceptions import NeedsHumanReview
-from monet.orchestration._state import has_signal
+from monet.types import AgentResult, AgentRunContext, SignalType
 
 # --- Lean graph state ---
 
@@ -81,7 +80,7 @@ async def _call_agent(agent_id: str, state: GraphState) -> dict[str, Any]:
     )
     result: AgentResult = await handler(ctx)
 
-    needs_review = has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
+    needs_review = result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)
 
     entry: dict[str, Any] = {
         "agent_id": agent_id,

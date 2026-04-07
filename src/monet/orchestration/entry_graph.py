@@ -1,8 +1,8 @@
 """Entry graph — triage and routing.
 
-Classifies the incoming user message and sets the triage decision in state.
-The top-level run.py sequencer reads the triage result and routes to the
-planning graph for complex requests.
+Calls the planner agent (command="fast") to classify the incoming task.
+Returns an uncompiled StateGraph; LangGraph Server compiles and attaches
+its own checkpointer per langgraph.json.
 """
 
 from __future__ import annotations
@@ -12,17 +12,16 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from monet.orchestration import invoke_agent
-
-from ..state import EntryState
+from ._invoke import invoke_agent
+from ._state import EntryState
 
 
 async def triage_node(state: EntryState) -> dict[str, Any]:
-    """Call sm-planner/fast to classify message complexity."""
+    """Call planner/fast to classify task complexity."""
     result = await invoke_agent(
-        "sm-planner",
+        "planner",
         command="fast",
-        task=state["user_message"],
+        task=state["task"],
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),
     )
@@ -37,12 +36,8 @@ async def triage_node(state: EntryState) -> dict[str, Any]:
     return {"triage": triage}
 
 
-def build_entry_graph() -> StateGraph:
-    """Build the entry/triage graph.
-
-    Returns a compiled StateGraph. The caller invokes it and reads
-    state["triage"]["complexity"] to decide the next graph.
-    """
+def build_entry_graph() -> StateGraph[EntryState]:
+    """Build the triage graph. Returns uncompiled StateGraph."""
     graph = StateGraph(EntryState)
     graph.add_node("triage", triage_node)
     graph.set_entry_point("triage")

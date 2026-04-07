@@ -2,21 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import TypeAdapter, ValidationError
-
-from monet._types import (
+from monet.types import (
     AgentResult,
     AgentRunContext,
-    ArtifactEntry,
     ArtifactPointer,
-    ConstraintEntry,
-    ContextEntry,
-    InstructionEntry,
     Signal,
     SignalType,
-    SkillReferenceEntry,
-    WorkBriefEntry,
 )
 
 # --- Signal and SignalType ---
@@ -48,60 +39,58 @@ def test_signal_with_metadata() -> None:
     assert s["metadata"] == {"error_type": "no_results"}
 
 
-# --- ArtifactPointer ---
+# --- ArtifactPointer (TypedDict) ---
 
 
 def test_artifact_pointer() -> None:
-    p = ArtifactPointer(artifact_id="abc-123", url="http://catalogue/abc-123")
-    assert p.artifact_id == "abc-123"
-    assert p.url == "http://catalogue/abc-123"
+    p: ArtifactPointer = {
+        "artifact_id": "abc-123",
+        "url": "http://catalogue/abc-123",
+    }
+    assert p["artifact_id"] == "abc-123"
+    assert p["url"] == "http://catalogue/abc-123"
 
 
-def test_artifact_pointer_frozen() -> None:
-    p = ArtifactPointer(artifact_id="x", url="y")
-    with pytest.raises(AttributeError):
-        p.artifact_id = "z"  # type: ignore[misc]
+def test_artifact_pointer_is_dict() -> None:
+    p: ArtifactPointer = {"artifact_id": "x", "url": "y"}
+    assert isinstance(p, dict)
 
 
-# --- AgentRunContext ---
+# --- AgentRunContext (TypedDict) ---
 
 
-def test_context_defaults() -> None:
-    ctx = AgentRunContext()
-    assert ctx.task == ""
-    assert ctx.context == []
-    assert ctx.command == "fast"
-    assert ctx.effort is None
-    assert ctx.skills == []
+def test_context_is_dict() -> None:
+    ctx: AgentRunContext = {
+        "task": "test",
+        "context": [],
+        "command": "fast",
+        "trace_id": "",
+        "run_id": "",
+        "agent_id": "",
+        "skills": [],
+    }
+    assert isinstance(ctx, dict)
+    assert ctx["task"] == "test"
+    assert ctx["command"] == "fast"
+    assert ctx["skills"] == []
 
 
-def test_context_with_effort() -> None:
-    ctx = AgentRunContext(effort="low")
-    assert ctx.effort == "low"
-
-
-# --- AgentResult ---
+# --- AgentResult (frozen dataclass) ---
 
 
 def test_result_success() -> None:
     r = AgentResult(success=True, output="done", trace_id="t1", run_id="r1")
     assert r.success is True
     assert r.output == "done"
-    assert r.confidence == 0.0
     assert r.artifacts == []
     assert r.signals == []
 
 
-def test_result_with_confidence() -> None:
-    r = AgentResult(success=True, output="done", confidence=0.85)
-    assert r.confidence == 0.85
-
-
 def test_result_with_artifacts() -> None:
-    ptr = ArtifactPointer(artifact_id="a1", url="http://x")
+    ptr: ArtifactPointer = {"artifact_id": "a1", "url": "http://x"}
     r = AgentResult(success=True, output="done", artifacts=[ptr])
     assert len(r.artifacts) == 1
-    assert r.artifacts[0].artifact_id == "a1"
+    assert r.artifacts[0]["artifact_id"] == "a1"
 
 
 def test_result_with_signals() -> None:
@@ -115,54 +104,24 @@ def test_result_with_signals() -> None:
     assert r.signals[1]["type"] == "low_confidence"
 
 
-# --- ContextEntry discriminated union ---
+# --- AgentResult.has_signal / get_signal ---
 
 
-_context_adapter: TypeAdapter[ContextEntry] = TypeAdapter(ContextEntry)
+def test_has_signal() -> None:
+    signals: list[Signal] = [
+        {"type": SignalType.NEEDS_HUMAN_REVIEW, "reason": "Low", "metadata": None},
+    ]
+    r = AgentResult(success=False, output="", signals=signals)
+    assert r.has_signal(SignalType.NEEDS_HUMAN_REVIEW) is True
+    assert r.has_signal(SignalType.LOW_CONFIDENCE) is False
 
 
-def test_context_entry_artifact() -> None:
-    entry = _context_adapter.validate_python(
-        {"type": "artifact", "summary": "A research paper", "url": "http://x"}
-    )
-    assert isinstance(entry, ArtifactEntry)
-    assert entry.summary == "A research paper"
-
-
-def test_context_entry_work_brief() -> None:
-    entry = _context_adapter.validate_python(
-        {"type": "work_brief", "content": "Write an essay"}
-    )
-    assert isinstance(entry, WorkBriefEntry)
-    assert entry.content == "Write an essay"
-
-
-def test_context_entry_constraint() -> None:
-    entry = _context_adapter.validate_python(
-        {"type": "constraint", "summary": "Max 500 words"}
-    )
-    assert isinstance(entry, ConstraintEntry)
-
-
-def test_context_entry_instruction() -> None:
-    entry = _context_adapter.validate_python(
-        {"type": "instruction", "content": "Use formal tone"}
-    )
-    assert isinstance(entry, InstructionEntry)
-
-
-def test_context_entry_skill_reference() -> None:
-    entry = _context_adapter.validate_python(
-        {"type": "skill_reference", "summary": "academic-writing-v2"}
-    )
-    assert isinstance(entry, SkillReferenceEntry)
-
-
-def test_context_entry_invalid_type() -> None:
-    with pytest.raises(ValidationError):
-        _context_adapter.validate_python({"type": "invalid_type"})
-
-
-def test_context_entry_missing_type() -> None:
-    with pytest.raises(ValidationError):
-        _context_adapter.validate_python({"summary": "no type"})
+def test_get_signal() -> None:
+    signals: list[Signal] = [
+        {"type": SignalType.ESCALATION_REQUIRED, "reason": "Admin", "metadata": None},
+    ]
+    r = AgentResult(success=False, output="", signals=signals)
+    sig = r.get_signal(SignalType.ESCALATION_REQUIRED)
+    assert sig is not None
+    assert sig["reason"] == "Admin"
+    assert r.get_signal(SignalType.LOW_CONFIDENCE) is None

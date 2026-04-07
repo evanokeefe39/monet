@@ -11,12 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 from langgraph.types import interrupt
 
-from monet._tracing import end_span, start_agent_span
-from monet._types import AgentResult, AgentRunContext, SignalType
+from monet._tracing import get_tracer
+from monet.types import AgentResult, SignalType
 
 from ._content_limit import enforce_content_limit
 from ._invoke import invoke_agent
-from ._state import get_signal, has_signal
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -51,51 +50,53 @@ def create_node(
     """
 
     async def node(state: GraphState) -> dict[str, Any]:
-        span = start_agent_span(
-            agent_id=agent_id,
-            command=command,
-            run_id=state.get("run_id", ""),
-            trace_id=state.get("trace_id", ""),
-        )
-
-        try:
-            ctx = AgentRunContext(
-                task=state.get("task", ""),
+        tracer = get_tracer("monet.orchestration")
+        with tracer.start_as_current_span(
+            f"agent.{agent_id}.{command}",
+            attributes={
+                "agent.id": agent_id,
+                "agent.command": command,
+                "monet.run_id": state.get("run_id", ""),
+            },
+        ) as span:
+            result: AgentResult = await invoke_agent(
+                agent_id,
                 command=command,
+                task=state.get("task", ""),
                 trace_id=state.get("trace_id", ""),
                 run_id=state.get("run_id", ""),
-                agent_id=agent_id,
             )
-
-            result: AgentResult = await invoke_agent(agent_id, command, ctx)
 
             # Translate signals to serializable dicts for lean state
             signals_data = [dict(s) for s in result.signals]
 
+            output_val = result.output
+            if isinstance(output_val, dict):
+                output_str = output_val.get("url", "")
+            elif output_val is None:
+                output_str = ""
+            else:
+                output_str = str(output_val)
+
             entry: dict[str, Any] = {
                 "agent_id": agent_id,
                 "command": command,
-                "output": result.output
-                if isinstance(result.output, str)
-                else result.output.url,
+                "output": output_str,
                 "success": result.success,
-                "confidence": result.confidence,
                 "signals": signals_data,
                 "trace_id": result.trace_id,
                 "run_id": result.run_id,
             }
 
             # Enforce content limit
-            entry = enforce_content_limit(entry, limit=content_limit)
+            entry = await enforce_content_limit(entry, limit=content_limit)
 
-            end_span(span, success=result.success)
+            span.set_attribute("agent.success", result.success)
 
             # HITL: interrupt if agent signals needs_human_review
-            needs_review = has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
+            needs_review = result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)
             if interrupt_on_review and needs_review:
-                review_signal = get_signal(
-                    result.signals, SignalType.NEEDS_HUMAN_REVIEW
-                )
+                review_signal = result.get_signal(SignalType.NEEDS_HUMAN_REVIEW)
                 review_reason = (
                     review_signal.get("reason", "Agent requested human review")
                     if review_signal
@@ -113,10 +114,6 @@ def create_node(
                 "results": [entry],
                 "needs_review": needs_review,
             }
-
-        except Exception as exc:
-            end_span(span, success=False, error_message=str(exc))
-            raise
 
     node.__name__ = f"{agent_id}_{command}"
     node.__qualname__ = f"{agent_id}_{command}"

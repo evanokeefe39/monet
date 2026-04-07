@@ -6,10 +6,26 @@ import asyncio
 
 import pytest
 
-from monet._decorator import agent
-from monet._registry import default_registry
-from monet._types import AgentRunContext
-from monet.exceptions import EscalationRequired, NeedsHumanReview, SemanticError
+from monet import EscalationRequired, NeedsHumanReview, SemanticError, agent
+from monet._registry import (
+    default_registry,  # internal: needed for registry_scope test fixture
+)
+from monet.types import AgentRunContext
+
+
+def _ctx(**overrides: object) -> AgentRunContext:
+    """Build an AgentRunContext dict with defaults."""
+    base: AgentRunContext = {
+        "task": "",
+        "context": [],
+        "command": "fast",
+        "trace_id": "",
+        "run_id": "",
+        "agent_id": "",
+        "skills": [],
+    }
+    base.update(overrides)  # type: ignore[typeddict-item]
+    return base
 
 
 @pytest.fixture(autouse=True)
@@ -27,9 +43,7 @@ async def test_minimal_agent() -> None:
     async def my_agent(task: str) -> str:
         return f"Done: {task}"
 
-    ctx = AgentRunContext(
-        task="hello", trace_id="t1", run_id="r1", agent_id="test-minimal"
-    )
+    ctx = _ctx(task="hello", trace_id="t1", run_id="r1", agent_id="test-minimal")
     result = await my_agent(ctx)
     assert result.success is True
     assert result.output == "Done: hello"
@@ -42,7 +56,7 @@ async def test_sync_function() -> None:
     def sync_agent(task: str) -> str:
         return f"Sync: {task}"
 
-    ctx = AgentRunContext(task="test", agent_id="test-sync")
+    ctx = _ctx(task="test", agent_id="test-sync")
     result = await sync_agent(ctx)
     assert result.success is True
     assert result.output == "Sync: test"
@@ -56,24 +70,9 @@ async def test_injects_only_declared_params() -> None:
     async def partial_agent(task: str, command: str) -> str:
         return f"{command}: {task}"
 
-    ctx = AgentRunContext(
-        task="analyze",
-        command="deep",
-        effort="high",
-        agent_id="test-partial",
-    )
+    ctx = _ctx(task="analyze", command="deep", agent_id="test-partial")
     result = await partial_agent(ctx)
     assert result.output == "deep: analyze"
-
-
-async def test_injects_effort() -> None:
-    @agent(agent_id="test-effort")
-    async def effort_agent(task: str, effort: str) -> str:
-        return f"effort={effort}"
-
-    ctx = AgentRunContext(task="x", effort="low", agent_id="test-effort")
-    result = await effort_agent(ctx)
-    assert result.output == "effort=low"
 
 
 async def test_injects_all_fields() -> None:
@@ -82,7 +81,6 @@ async def test_injects_all_fields() -> None:
         task: str,
         context: list,  # type: ignore[type-arg]
         command: str,
-        effort: str,
         trace_id: str,
         run_id: str,
         agent_id: str,
@@ -90,10 +88,9 @@ async def test_injects_all_fields() -> None:
     ) -> str:
         return f"{agent_id}/{command}"
 
-    ctx = AgentRunContext(
+    ctx = _ctx(
         task="t",
         command="deep",
-        effort="high",
         trace_id="tr",
         run_id="rn",
         agent_id="test-all",
@@ -127,7 +124,7 @@ async def test_needs_human_review_signal() -> None:
     async def review_agent(task: str) -> str:
         raise NeedsHumanReview(reason="Low confidence")
 
-    ctx = AgentRunContext(task="x", agent_id="test-review")
+    ctx = _ctx(task="x", agent_id="test-review")
     result = await review_agent(ctx)
     assert result.success is False
     assert len(result.signals) == 1
@@ -140,7 +137,7 @@ async def test_escalation_signal() -> None:
     async def escalation_agent(task: str) -> str:
         raise EscalationRequired(reason="Needs admin")
 
-    ctx = AgentRunContext(task="x", agent_id="test-escalate")
+    ctx = _ctx(task="x", agent_id="test-escalate")
     result = await escalation_agent(ctx)
     assert result.success is False
     assert len(result.signals) == 1
@@ -153,7 +150,7 @@ async def test_semantic_error_signal() -> None:
     async def semantic_agent(task: str) -> str:
         raise SemanticError(type="no_results", message="Empty search")
 
-    ctx = AgentRunContext(task="x", agent_id="test-semantic")
+    ctx = _ctx(task="x", agent_id="test-semantic")
     result = await semantic_agent(ctx)
     assert result.success is False
     assert len(result.signals) == 1
@@ -167,7 +164,7 @@ async def test_unexpected_error_wrapped() -> None:
     async def crash_agent(task: str) -> str:
         raise ValueError("boom")
 
-    ctx = AgentRunContext(task="x", agent_id="test-crash")
+    ctx = _ctx(task="x", agent_id="test-crash")
     result = await crash_agent(ctx)
     assert result.success is False
     assert len(result.signals) == 1
@@ -209,15 +206,9 @@ async def test_concurrent_context_isolation() -> None:
         return f"{task}|{trace_id}"
 
     results = await asyncio.gather(
-        concurrent_agent(
-            AgentRunContext(task="A", trace_id="t-a", agent_id="test-concurrent")
-        ),
-        concurrent_agent(
-            AgentRunContext(task="B", trace_id="t-b", agent_id="test-concurrent")
-        ),
-        concurrent_agent(
-            AgentRunContext(task="C", trace_id="t-c", agent_id="test-concurrent")
-        ),
+        concurrent_agent(_ctx(task="A", trace_id="t-a", agent_id="test-concurrent")),
+        concurrent_agent(_ctx(task="B", trace_id="t-b", agent_id="test-concurrent")),
+        concurrent_agent(_ctx(task="C", trace_id="t-c", agent_id="test-concurrent")),
     )
 
     assert results[0].output == "A|t-a"

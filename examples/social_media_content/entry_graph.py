@@ -12,25 +12,20 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from monet._registry import default_registry
-from monet._types import AgentRunContext
+from monet.orchestration import invoke_agent
 
 from .state import EntryState
 
 
 async def triage_node(state: EntryState) -> dict[str, Any]:
     """Call sm-planner/fast to classify message complexity."""
-    handler = default_registry.lookup("sm-planner", "fast")
-    assert handler is not None, "sm-planner/fast not registered"
-
-    ctx = AgentRunContext(
-        task=state["user_message"],
+    result = await invoke_agent(
+        "sm-planner",
         command="fast",
+        task=state["user_message"],
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),
-        agent_id="sm-planner",
     )
-    result = await handler(ctx)
     triage = json.loads(result.output) if isinstance(result.output, str) else {}
     return {"triage": triage}
 

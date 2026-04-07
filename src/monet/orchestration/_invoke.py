@@ -1,22 +1,22 @@
 """Transport-agnostic agent invocation.
 
-Dispatches to local function call or HTTP POST based on descriptor type.
-Validated by spike_transport — identical results from both paths.
+Dispatches to local function call or HTTP POST. Standard envelope fields
+are explicit parameters; agent-specific parameters pass as **kwargs.
 """
 
 from __future__ import annotations
 
 import os
+import secrets
+import uuid
 from typing import Any
 
-import httpx
+from opentelemetry import propagate, trace
 
 from monet._registry import default_registry
-from monet._types import (
-    AgentResult,
-    AgentRunContext,
-    Signal,
-)
+from monet.types import AgentResult, AgentRunContext, Signal
+
+_RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
 
 # Transport mode from environment
 TRANSPORT_LOCAL = "local"
@@ -40,64 +40,100 @@ def get_agent_endpoint(agent_id: str, command: str) -> str | None:
     return None
 
 
+def _generate_trace_id() -> str:
+    return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
+
+
 async def invoke_agent(
     agent_id: str,
-    command: str,
-    ctx: AgentRunContext,
+    command: str = "fast",
+    task: str = "",
+    context: list[dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+    run_id: str | None = None,
+    skills: list[str] | None = None,
+    **kwargs: Any,
 ) -> AgentResult:
-    """Invoke an agent via local call or HTTP, based on transport config.
+    """Invoke an agent by ID and command.
 
-    Local mode (default): looks up handler in registry, calls directly.
-    HTTP mode: POSTs to agent endpoint derived from environment.
-
-    Falls back to local if HTTP endpoint is not configured for this agent.
+    Standard envelope fields are explicit parameters. Agent-specific
+    parameters pass as **kwargs but must not shadow reserved fields.
+    Routing is always driven by AgentResult.signals, never by kwargs values.
     """
-    mode = get_transport_mode()
+    conflicts = _RESERVED_FIELDS & set(kwargs)
+    if conflicts:
+        msg = (
+            f"invoke_agent() kwargs conflict with reserved fields: {conflicts}. "
+            "Pass these as explicit parameters."
+        )
+        raise ValueError(msg)
 
-    if mode == TRANSPORT_HTTP:
-        endpoint = get_agent_endpoint(agent_id, command)
-        if endpoint is not None:
-            return await _invoke_http(endpoint, ctx)
+    resolved_run_id = run_id or str(uuid.uuid4())
+    resolved_trace_id = trace_id or _generate_trace_id()
 
-    # Local invocation (default, or HTTP fallback)
-    return await _invoke_local(agent_id, command, ctx)
-
-
-async def _invoke_local(
-    agent_id: str, command: str, ctx: AgentRunContext
-) -> AgentResult:
-    """Call a decorated Python function directly."""
-    handler = default_registry.lookup(agent_id, command)
-    if handler is None:
-        msg = f"No handler for agent_id='{agent_id}', command='{command}'"
-        raise LookupError(msg)
-    result: AgentResult = await handler(ctx)
-    return result
-
-
-async def _invoke_http(
-    endpoint: str,
-    ctx: AgentRunContext,
-) -> AgentResult:
-    """Call an agent over HTTP POST."""
-    payload: dict[str, Any] = {
-        "task": ctx.task,
-        "command": ctx.command,
-        "effort": ctx.effort,
-        "trace_id": ctx.trace_id,
-        "run_id": ctx.run_id,
+    ctx: AgentRunContext = {
+        "task": task,
+        "context": context or [],
+        "command": command,
+        "trace_id": resolved_trace_id,
+        "run_id": resolved_run_id,
+        "agent_id": agent_id,
+        "skills": skills or [],
     }
+
+    tracer = trace.get_tracer("monet.orchestration")
+    with tracer.start_as_current_span(
+        f"agent.{agent_id}.{command}",
+        attributes={
+            "agent.id": agent_id,
+            "agent.command": command,
+            "monet.run_id": resolved_run_id,
+        },
+    ) as span:
+        if get_transport_mode() == TRANSPORT_HTTP:
+            endpoint = get_agent_endpoint(agent_id, command)
+            if endpoint is not None:
+                result = await _invoke_http(endpoint, ctx)
+                span.set_attribute("agent.success", result.success)
+                return result
+
+        # Local invocation
+        wrapper = default_registry.lookup(agent_id, command)
+        if wrapper is None:
+            msg = f"No handler for agent_id='{agent_id}', command='{command}'"
+            raise LookupError(msg)
+        result = await wrapper(ctx)
+        span.set_attribute("agent.success", result.success)
+        span.set_attribute("agent.signal_count", len(result.signals))
+        return result
+
+
+async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
+    """Call an agent over HTTP POST.
+
+    Uses opentelemetry.propagate.inject() for correct OTel context propagation.
+    """
+    import httpx
+
+    payload: dict[str, Any] = {
+        "task": ctx["task"],
+        "command": ctx["command"],
+        "trace_id": ctx["trace_id"],
+        "run_id": ctx["run_id"],
+    }
+    headers: dict[str, str] = {}
+    propagate.inject(headers)
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             endpoint,
             json=payload,
-            headers={"traceparent": ctx.trace_id},
+            headers=headers,
             timeout=30.0,
         )
         response.raise_for_status()
         data = response.json()
 
-    # Reconstruct signals as list[Signal] from response
     raw_signals = data.get("signals", [])
     signals: list[Signal] = [
         Signal(

@@ -8,24 +8,37 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from monet._registry import default_registry
-from monet._stubs import set_catalogue_client
-from monet._types import AgentRunContext, SignalType
-from monet.catalogue._memory import InMemoryCatalogueClient
-from monet.orchestration._state import has_signal
+from monet._registry import default_registry  # internal: registry_scope fixture
+from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.orchestration import invoke_agent
+from monet.types import AgentRunContext, SignalType
+
+
+def _ctx(**overrides: Any) -> AgentRunContext:
+    base: AgentRunContext = {
+        "task": "",
+        "context": [],
+        "command": "fast",
+        "trace_id": "",
+        "run_id": "",
+        "agent_id": "",
+        "skills": [],
+    }
+    base.update(overrides)  # type: ignore[typeddict-item]
+    return base
 
 
 @pytest.fixture(autouse=True)
 def _clean_registry_and_catalogue(monkeypatch: pytest.MonkeyPatch):
     """Isolate agent registrations and catalogue per test."""
-    set_catalogue_client(InMemoryCatalogueClient())
+    configure_catalogue(InMemoryCatalogueClient())
     # Set fake API keys so os.environ["..."] doesn't raise KeyError
-    # when the mocked constructor is called. Real keys override in
-    # integration tests.
+    # when the mocked constructor is called.
     for key in ("GEMINI_API_KEY", "GROQ_API_KEY", "TAVILY_API_KEY"):
         monkeypatch.setenv(key, os.environ.get(key, "fake-test-key"))
     with default_registry.registry_scope():
@@ -35,6 +48,7 @@ def _clean_registry_and_catalogue(monkeypatch: pytest.MonkeyPatch):
 
         importlib.reload(agents)
         yield
+    configure_catalogue(None)
 
 
 def _mock_ai_message(content: str) -> MagicMock:
@@ -77,10 +91,7 @@ async def test_planner_triage_mocked(mock_cls: MagicMock) -> None:
     )
     mock_cls.return_value = _mock_gemini(triage_response)
 
-    handler = default_registry.lookup("sm-planner", "fast")
-    assert handler is not None
-    ctx = AgentRunContext(task="Write about AI", agent_id="sm-planner")
-    result = await handler(ctx)
+    result = await invoke_agent("sm-planner", command="fast", task="Write about AI")
 
     assert result.success is True
     parsed = json.loads(result.output)
@@ -102,10 +113,7 @@ async def test_planner_plan_mocked(mock_cls: MagicMock) -> None:
     }
     mock_cls.return_value = _mock_gemini(json.dumps(brief))
 
-    handler = default_registry.lookup("sm-planner", "plan")
-    assert handler is not None
-    ctx = AgentRunContext(task="Write about AI", agent_id="sm-planner")
-    result = await handler(ctx)
+    result = await invoke_agent("sm-planner", command="plan", task="Write about AI")
 
     assert result.success is True
     parsed = json.loads(result.output)
@@ -123,13 +131,10 @@ async def test_planner_sensitive_topic(mock_cls: MagicMock) -> None:
     }
     mock_cls.return_value = _mock_gemini(json.dumps(brief))
 
-    handler = default_registry.lookup("sm-planner", "plan")
-    assert handler is not None
-    ctx = AgentRunContext(task="Health supplements", agent_id="sm-planner")
-    result = await handler(ctx)
+    result = await invoke_agent("sm-planner", command="plan", task="Health supplements")
 
     assert result.success is False
-    assert has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
+    assert result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)
 
 
 @patch("examples.social_media_llm.agents.writer.ChatGoogleGenerativeAI")
@@ -137,13 +142,9 @@ async def test_writer_mocked(mock_cls: MagicMock) -> None:
     """Writer generates content and writes artifact."""
     mock_cls.return_value = _mock_gemini("AI is transforming marketing. #AI")
 
-    handler = default_registry.lookup("sm-writer", "deep")
-    assert handler is not None
-    ctx = AgentRunContext(
-        task="Write Twitter post about AI",
-        agent_id="sm-writer",
+    result = await invoke_agent(
+        "sm-writer", command="deep", task="Write Twitter post about AI"
     )
-    result = await handler(ctx)
 
     assert result.success is True
     assert "AI" in result.output
@@ -155,10 +156,7 @@ async def test_qa_pass_mocked(mock_cls: MagicMock) -> None:
     verdict = {"verdict": "pass", "confidence": 0.9, "notes": "Good quality"}
     mock_cls.return_value = _mock_groq(json.dumps(verdict))
 
-    handler = default_registry.lookup("sm-qa", "fast")
-    assert handler is not None
-    ctx = AgentRunContext(task="Review content", agent_id="sm-qa")
-    result = await handler(ctx)
+    result = await invoke_agent("sm-qa", command="fast", task="Review content")
 
     assert result.success is True
     parsed = json.loads(result.output)
@@ -172,13 +170,10 @@ async def test_qa_low_confidence_semantic_error(mock_cls: MagicMock) -> None:
     verdict = {"verdict": "fail", "confidence": 0.3, "notes": "Very poor"}
     mock_cls.return_value = _mock_groq(json.dumps(verdict))
 
-    handler = default_registry.lookup("sm-qa", "fast")
-    assert handler is not None
-    ctx = AgentRunContext(task="Review content", agent_id="sm-qa")
-    result = await handler(ctx)
+    result = await invoke_agent("sm-qa", command="fast", task="Review content")
 
     assert result.success is False
-    assert has_signal(result.signals, SignalType.SEMANTIC_ERROR)
+    assert result.has_signal(SignalType.SEMANTIC_ERROR)
 
 
 @patch("examples.social_media_llm.agents.qa.ChatGroq")
@@ -187,28 +182,23 @@ async def test_qa_marginal_emits_signal(mock_cls: MagicMock) -> None:
     verdict = {"verdict": "pass", "confidence": 0.6, "notes": "Marginal"}
     mock_cls.return_value = _mock_groq(json.dumps(verdict))
 
-    handler = default_registry.lookup("sm-qa", "fast")
-    assert handler is not None
-    ctx = AgentRunContext(task="Review content", agent_id="sm-qa")
-    result = await handler(ctx)
+    result = await invoke_agent("sm-qa", command="fast", task="Review content")
 
     # Non-fatal: success=True but carries a signal
     assert result.success is True
-    assert has_signal(result.signals, SignalType.NEEDS_HUMAN_REVIEW)
+    assert result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)
     parsed = json.loads(result.output)
     assert parsed["verdict"] == "pass"
 
 
 async def test_publisher_cli_success() -> None:
     """Publisher CLI subprocess runs and returns result."""
-    handler = default_registry.lookup("sm-publisher", "publish")
-    assert handler is not None
-    ctx = AgentRunContext(
+    result = await invoke_agent(
+        "sm-publisher",
+        command="publish",
         task="Publish Twitter post",
-        agent_id="sm-publisher",
         run_id="test-pub",
     )
-    result = await handler(ctx)
 
     assert result.success is True
     parsed = json.loads(result.output)
@@ -229,13 +219,11 @@ _has_tavily = bool(os.environ.get("TAVILY_API_KEY"))
 @pytest.mark.skipif(not _has_gemini, reason="GEMINI_API_KEY not set")
 async def test_planner_real_llm() -> None:
     """Real Gemini call for triage classification."""
-    handler = default_registry.lookup("sm-planner", "fast")
-    assert handler is not None
-    ctx = AgentRunContext(
+    result = await invoke_agent(
+        "sm-planner",
+        command="fast",
         task="Create social media content about AI trends in 2026",
-        agent_id="sm-planner",
     )
-    result = await handler(ctx)
     assert result.success is True
     parsed = json.loads(result.output)
     assert parsed["complexity"] in ("simple", "bounded", "complex")
@@ -248,14 +236,12 @@ async def test_planner_real_llm() -> None:
 )
 async def test_researcher_real_tavily() -> None:
     """Real Tavily search + Gemini synthesis."""
-    handler = default_registry.lookup("sm-researcher", "deep")
-    assert handler is not None
-    ctx = AgentRunContext(
+    result = await invoke_agent(
+        "sm-researcher",
+        command="deep",
         task="AI trends in social media marketing 2026",
-        agent_id="sm-researcher",
         trace_id="test-trace",
     )
-    result = await handler(ctx)
     assert result.success is True
     assert len(result.output) > 100
 
@@ -264,13 +250,11 @@ async def test_researcher_real_tavily() -> None:
 @pytest.mark.skipif(not _has_groq, reason="GROQ_API_KEY not set")
 async def test_qa_real_llm() -> None:
     """Real Groq call for QA evaluation."""
-    handler = default_registry.lookup("sm-qa", "fast")
-    assert handler is not None
-    ctx = AgentRunContext(
+    result = await invoke_agent(
+        "sm-qa",
+        command="fast",
         task="Review this Twitter post about AI marketing trends",
-        agent_id="sm-qa",
     )
-    result = await handler(ctx)
     assert result.success is True
     parsed = json.loads(result.output)
     assert parsed["verdict"] in ("pass", "fail")

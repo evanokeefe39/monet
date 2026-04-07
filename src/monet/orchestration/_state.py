@@ -6,12 +6,9 @@ Only summaries, pointers, confidence, and signals.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-from monet._types import Signal, SignalType
+from monet.types import Signal, SignalType  # noqa: F401
 
 
 def _append_reducer(
@@ -22,37 +19,11 @@ def _append_reducer(
     return existing + new
 
 
-# --- Signal helpers for routing functions ---
-
-
-def has_signal(
-    signals: Sequence[Signal | dict[str, Any]], signal_type: SignalType
-) -> bool:
-    """Check if a signal list contains a signal of the given type."""
-    target = signal_type.value if isinstance(signal_type, SignalType) else signal_type
-    return any(
-        (s.get("type") if isinstance(s, dict) else s["type"]) == target for s in signals
-    )
-
-
-def get_signal(
-    signals: Sequence[Signal | dict[str, Any]], signal_type: SignalType
-) -> Signal | dict[str, Any] | None:
-    """Get the first signal of the given type, or None."""
-    target = signal_type.value if isinstance(signal_type, SignalType) else signal_type
-    for s in signals:
-        s_type = s.get("type") if isinstance(s, dict) else s["type"]
-        if s_type == target:
-            return s
-    return None
-
-
 class AgentStateEntry(TypedDict, total=False):
     """A single agent result entry in graph state."""
 
     agent_id: str
     command: str
-    effort: str
     output: str
     artifact_url: str
     summary: str
@@ -72,3 +43,69 @@ class GraphState(TypedDict, total=False):
     run_id: str
     results: Annotated[list[dict[str, Any]], _append_reducer]
     needs_review: bool
+
+
+# --- Three-graph supervisor topology state schemas ---
+
+
+class EntryState(TypedDict, total=False):
+    """State for the entry/triage graph."""
+
+    task: str
+    triage: dict[str, Any] | None
+    trace_id: str
+    run_id: str
+
+
+class PlanningState(TypedDict, total=False):
+    """State for the planning graph with HITL approval loop."""
+
+    task: str
+    work_brief: dict[str, Any] | None
+    planning_context: Annotated[list[dict[str, Any]], _append_reducer]
+    human_feedback: str | None
+    plan_approved: bool | None
+    revision_count: int
+    trace_id: str
+    run_id: str
+
+
+class ExecutionState(TypedDict, total=False):
+    """State for the wave-based execution graph."""
+
+    work_brief: dict[str, Any]
+    current_phase_index: int
+    current_wave_index: int
+    wave_results: Annotated[list[dict[str, Any]], _append_reducer]
+    wave_reflections: list[dict[str, Any]]
+    completed_phases: list[int]
+    signals: dict[str, Any] | None
+    abort_reason: str | None
+    revision_count: int
+    trace_id: str
+    run_id: str
+
+
+class WaveItem(TypedDict):
+    """A single work item dispatched via Send to agent_node."""
+
+    agent_id: str
+    command: str
+    task: str
+    phase_index: int
+    wave_index: int
+    item_index: int
+    trace_id: str
+    run_id: str
+
+
+class WaveResult(TypedDict):
+    """Result from a single agent invocation within a wave."""
+
+    phase_index: int
+    wave_index: int
+    item_index: int
+    agent_id: str
+    command: str
+    output: str
+    signals: list[dict[str, Any]]

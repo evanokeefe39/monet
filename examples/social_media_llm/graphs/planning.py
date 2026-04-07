@@ -17,8 +17,8 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
-from monet._registry import default_registry
-from monet._types import AgentRunContext, ArtifactEntry, InstructionEntry
+from monet import get_catalogue
+from monet.orchestration import invoke_agent
 
 from ..state import PlanningState
 
@@ -31,67 +31,60 @@ async def planner_node(state: PlanningState) -> dict[str, Any]:
     If human_feedback is present, passes it as a context entry so the
     planner picks a revision variant.
     """
-    handler = default_registry.lookup("sm-planner", "plan")
-    assert handler is not None, "sm-planner/plan not registered"
-
-    context_entries: list[ArtifactEntry | InstructionEntry] = []
+    context_entries: list[dict[str, Any]] = []
 
     # Add accumulated research as artifact context entries
     for entry in state.get("planning_context") or []:
         context_entries.append(
-            ArtifactEntry(
-                summary=entry.get("content", ""),
-                content=entry.get("content", ""),
-            )
+            {
+                "type": "artifact",
+                "summary": entry.get("content", ""),
+                "content": entry.get("content", ""),
+            }
         )
 
     # Add human feedback as an instruction context entry
     feedback = state.get("human_feedback")
     if feedback:
         context_entries.append(
-            InstructionEntry(summary="Human feedback", content=feedback)
+            {
+                "type": "instruction",
+                "summary": "Human feedback",
+                "content": feedback,
+            }
         )
 
-    ctx = AgentRunContext(
-        task=state["user_message"],
+    result = await invoke_agent(
+        "sm-planner",
         command="plan",
+        task=state["user_message"],
+        context=context_entries,
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),
-        agent_id="sm-planner",
-        context=context_entries,
     )
-    result = await handler(ctx)
 
     # Handle both inline string output and ArtifactPointer (auto-offloaded)
     if isinstance(result.output, str) and result.output.strip():
         brief = json.loads(result.output)
-    else:
+    elif isinstance(result.output, dict) and "artifact_id" in result.output:
         # Output was auto-offloaded to catalogue — read it back
-        from monet._stubs import get_catalogue_client
-
-        client = get_catalogue_client()
-        if client and hasattr(result.output, "artifact_id"):
-            content_bytes, _meta = client.read(result.output.artifact_id)
-            brief = json.loads(content_bytes.decode())
-        else:
-            brief = {}
+        content_bytes, _meta = await get_catalogue().read(result.output["artifact_id"])
+        brief = json.loads(content_bytes.decode())
+    else:
+        brief = {}
 
     return {"work_brief": brief}
 
 
 async def research_node(state: PlanningState) -> dict[str, Any]:
     """Call sm-researcher/fast and append to planning_context."""
-    handler = default_registry.lookup("sm-researcher", "fast")
-    assert handler is not None, "sm-researcher/fast not registered"
-
-    ctx = AgentRunContext(
-        task=state["user_message"],
+    result = await invoke_agent(
+        "sm-researcher",
         command="fast",
+        task=state["user_message"],
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),
-        agent_id="sm-researcher",
     )
-    result = await handler(ctx)
     entry = {
         "type": "research",
         "content": result.output if isinstance(result.output, str) else "",

@@ -13,7 +13,7 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from monet._registry import default_registry
+from monet._registry import default_registry  # internal: registry_scope fixture
 
 # Import agents to trigger registration
 from . import agents as _agents  # noqa: F401

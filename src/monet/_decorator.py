@@ -17,18 +17,19 @@ import functools
 import inspect
 from typing import TYPE_CHECKING, Any, overload
 
+from ._catalogue import _artifact_collector, get_catalogue
 from ._context import _agent_context
 from ._registry import default_registry
-from ._stubs import _signal_collector, get_catalogue_client
-from ._tracing import end_span, start_agent_span
-from ._types import (
+from ._stubs import _signal_collector
+from ._tracing import get_tracer
+from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
+from .types import (
     AgentResult,
     AgentRunContext,
     ArtifactPointer,
     Signal,
     SignalType,
 )
-from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
 
 # Default content limit for automatic offload (bytes)
 DEFAULT_CONTENT_LIMIT = 4000
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 
 
 # Fields available for injection from AgentRunContext
-_CONTEXT_FIELDS: frozenset[str] = frozenset(AgentRunContext.__dataclass_fields__.keys())
+_CONTEXT_FIELDS: frozenset[str] = frozenset(AgentRunContext.__annotations__.keys())
 
 
 def _validate_signature(fn: Callable[..., Any], agent_id: str) -> None:
@@ -63,11 +64,11 @@ def _inject_params(fn: Callable[..., Any], ctx: AgentRunContext) -> dict[str, An
     sig = inspect.signature(fn)
     kwargs: dict[str, Any] = {}
     for param_name in sig.parameters:
-        kwargs[param_name] = getattr(ctx, param_name)
+        kwargs[param_name] = ctx[param_name]
     return kwargs
 
 
-def _wrap_result(
+async def _wrap_result(
     return_value: Any,
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
@@ -85,29 +86,30 @@ def _wrap_result(
 
     # Automatic content offload
     if len(output_str) > content_limit:
-        client = get_catalogue_client()
-        if client is not None:
-            from .catalogue._metadata import ArtifactMetadata
+        from ._catalogue import _catalogue_backend
 
-            metadata = ArtifactMetadata(
-                content_type="text/plain",
-                summary=output_str[:200],
-                created_by=ctx.agent_id or "unknown",
-                trace_id=ctx.trace_id,
-                run_id=ctx.run_id,
-                invocation_command=ctx.command,
-            )
-            pointer = client.write(output_str.encode(), metadata)
-            artifacts = [*artifacts, pointer]
-            output = pointer
+        if _catalogue_backend is not None:
+            try:
+                # CatalogueHandle.write() appends to _artifact_collector
+                # which is the same list as `artifacts` (set by the decorator)
+                pointer = await get_catalogue().write(
+                    content=output_str.encode(),
+                    content_type="text/plain",
+                    summary=output_str[:200],
+                    confidence=0.0,
+                    completeness="complete",
+                )
+                output = pointer
+            except NotImplementedError:
+                pass
 
     return AgentResult(
         success=True,
         output=output,
         artifacts=list(artifacts),
         signals=list(signals),
-        trace_id=ctx.trace_id,
-        run_id=ctx.run_id,
+        trace_id=ctx.get("trace_id", ""),
+        run_id=ctx.get("run_id", ""),
     )
 
 
@@ -160,8 +162,8 @@ def _handle_exception(
         output="",
         artifacts=list(artifacts),
         signals=list(signals),
-        trace_id=ctx.trace_id,
-        run_id=ctx.run_id,
+        trace_id=ctx.get("trace_id", ""),
+        run_id=ctx.get("run_id", ""),
     )
 
 
@@ -211,29 +213,39 @@ def agent(
         async def wrapper(ctx: AgentRunContext) -> AgentResult:
             artifacts: list[ArtifactPointer] = []
             signal_list: list[Signal] = []
-            span = start_agent_span(
-                agent_id=agent_id,
-                command=command,
-                effort=ctx.effort,
-                run_id=ctx.run_id,
-                trace_id=ctx.trace_id,
-            )
+            tracer = get_tracer("monet.agent")
             ctx_token = _agent_context.set(ctx)
             sig_token = _signal_collector.set(signal_list)
+            art_token = _artifact_collector.set(artifacts)
             try:
-                kwargs = _inject_params(fn, ctx)
-                if asyncio.iscoroutinefunction(fn):
-                    result = await fn(**kwargs)
-                else:
-                    result = fn(**kwargs)
-                agent_result = _wrap_result(result, ctx, artifacts, signal_list)
-                end_span(span, success=True)
-                return agent_result
-            except Exception as exc:
-                agent_result = _handle_exception(exc, ctx, artifacts, signal_list)
-                end_span(span, success=False, error_message=str(exc))
-                return agent_result
+                with tracer.start_as_current_span(
+                    f"agent.{agent_id}.{command}",
+                    attributes={
+                        "agent.id": agent_id,
+                        "agent.command": command,
+                        "monet.run_id": ctx.get("run_id", ""),
+                    },
+                ) as span:
+                    try:
+                        kwargs = _inject_params(fn, ctx)
+                        if asyncio.iscoroutinefunction(fn):
+                            result = await fn(**kwargs)
+                        else:
+                            result = fn(**kwargs)
+                        agent_result = await _wrap_result(
+                            result, ctx, artifacts, signal_list
+                        )
+                        span.set_attribute("agent.success", agent_result.success)
+                        return agent_result
+                    except Exception as exc:
+                        agent_result = _handle_exception(
+                            exc, ctx, artifacts, signal_list
+                        )
+                        span.set_attribute("agent.success", False)
+                        span.record_exception(exc)
+                        return agent_result
             finally:
+                _artifact_collector.reset(art_token)
                 _signal_collector.reset(sig_token)
                 _agent_context.reset(ctx_token)
 

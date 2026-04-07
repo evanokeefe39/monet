@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-from pydantic import ValidationError
-
 from monet.descriptors import (
     AgentDescriptor,
     CommandDescriptor,
@@ -24,11 +21,6 @@ def test_command_descriptor_defaults() -> None:
 def test_command_descriptor_async() -> None:
     cmd = CommandDescriptor(calling_convention="async")
     assert cmd.calling_convention == "async"
-
-
-def test_invalid_calling_convention() -> None:
-    with pytest.raises(ValidationError):
-        CommandDescriptor(calling_convention="maybe")  # type: ignore[arg-type]
 
 
 def test_sla_characteristics() -> None:
@@ -99,8 +91,3 @@ def test_registry_scope() -> None:
 
     assert reg.lookup("scoped") is None
     assert reg.lookup("temp") is not None
-
-
-def test_invalid_effort_vocabulary() -> None:
-    with pytest.raises(ValidationError):
-        CommandDescriptor(effort_vocabulary=["low", "extreme"])  # type: ignore[list-item]

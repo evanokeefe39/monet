@@ -29,23 +29,34 @@ from langgraph.types import Command
 
 load_dotenv()  # loads from .env in repo root
 
-from monet._stubs import get_catalogue_client, set_catalogue_client  # noqa: E402
-from monet.catalogue import CatalogueService, FilesystemStorage  # noqa: E402
-from monet.catalogue._index import SQLiteIndex  # noqa: E402
+from monet import get_catalogue  # noqa: E402
+from monet.catalogue import (  # noqa: E402
+    CatalogueService,
+    FilesystemStorage,
+    SQLiteIndex,
+    configure_catalogue,
+)
 
 _catalogue_root = Path(os.environ.get("CATALOGUE_ROOT", ".catalogue"))
-_catalogue_db = os.environ.get("CATALOGUE_DB_URL", f"sqlite:///{_catalogue_root / 'index.db'}")
+_catalogue_db = os.environ.get(
+    "CATALOGUE_DB_URL", f"sqlite+aiosqlite:///{_catalogue_root / 'index.db'}"
+)
 _catalogue_root.mkdir(parents=True, exist_ok=True)
-set_catalogue_client(CatalogueService(
-    storage=FilesystemStorage(root=_catalogue_root / "artifacts"),
-    index=SQLiteIndex(db_url=_catalogue_db),
-))
+configure_catalogue(
+    CatalogueService(
+        storage=FilesystemStorage(root=_catalogue_root / "artifacts"),
+        index=SQLiteIndex(db_url=_catalogue_db),
+    )
+)
 
 # Import agents to trigger registration (AFTER env loading)
 from . import agents as _agents  # noqa: F401, E402
-from .graphs import build_entry_graph, build_execution_graph, build_planning_graph  # noqa: E402
+from .graphs import (  # noqa: E402
+    build_entry_graph,
+    build_execution_graph,
+    build_planning_graph,
+)
 from .state import EntryState, ExecutionState, PlanningState  # noqa: TC001, E402
-
 
 _ARTIFACT_REPR_RE = re.compile(r"artifact_id='([^']+)'")
 _UUID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
@@ -234,19 +245,19 @@ async def main() -> None:
     if complexity == "bounded":
         # Bounded: run a single writer agent directly and show the result
         _print_header("Bounded: Single Agent Execution")
-        from monet._registry import default_registry
-        from monet._types import AgentRunContext
+        from monet.orchestration import invoke_agent
 
-        handler = default_registry.lookup("sm-writer", "deep")
-        if handler:
-            ctx = AgentRunContext(
-                task=f"Write a social media post about: {topic}",
-                agent_id="sm-writer",
+        try:
+            result = await invoke_agent(
+                "sm-writer",
                 command="deep",
+                task=f"Write a social media post about: {topic}",
                 trace_id=f"trace-{run_id}",
                 run_id=run_id,
             )
-            result = await handler(ctx)
+        except LookupError:
+            result = None
+        if result is not None:
             output = (
                 result.output
                 if isinstance(result.output, str)
@@ -393,7 +404,7 @@ async def main() -> None:
         print(f"  Aborted: {final_exec['abort_reason']}")
 
     print("\n  Wave results:")
-    catalogue = get_catalogue_client()
+    catalogue = get_catalogue()
     for wr in wave_results:
         output = str(wr.get("output", ""))
         pi = wr.get("phase_index")
@@ -404,15 +415,15 @@ async def main() -> None:
         print(f"\n    [{pi}.{wi}.{ii}] {aid}/{cmd}:")
 
         # Resolve catalogue artifacts to show full content.
-        # ArtifactPointer stringifies as:
-        #   ArtifactPointer(artifact_id='UUID', url='file://...')
         artifact_id = _extract_artifact_id(output)
-        if artifact_id and catalogue:
+        if artifact_id:
             try:
-                content, meta = catalogue.read(artifact_id)
-                print(f"    [artifact {artifact_id[:8]}... "
-                      f"type={meta.content_type} "
-                      f"size={meta.content_length}b]")
+                content, meta = await catalogue.read(artifact_id)
+                print(
+                    f"    [artifact {artifact_id[:8]}... "
+                    f"type={meta['content_type']} "
+                    f"size={meta['content_length']}b]"
+                )
                 text = content.decode("utf-8", errors="replace")
                 for line in text.splitlines():
                     print(f"      {line}")
@@ -428,7 +439,6 @@ async def main() -> None:
             f"Wave {ref.get('wave_index')}: "
             f"{ref.get('verdict')} -- {ref.get('notes', '')}"
         )
-
 
 
 def cli_main() -> None:

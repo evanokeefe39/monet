@@ -24,10 +24,9 @@ from monet import (
     agent,
     emit_progress,
     emit_signal,
+    get_catalogue,
     get_run_context,
     get_run_logger,
-    handle_agent_event,
-    write_artifact,
 )
 from monet.exceptions import EscalationRequired, NeedsHumanReview, SemanticError
 
@@ -78,7 +77,7 @@ async def planner_plan(task: str, context: list[Any] | None = None) -> str:
 
     # Write pretty-printed brief to catalogue for reference
     brief_pretty = json.dumps(brief, indent=2)
-    await write_artifact(
+    await get_catalogue().write(
         content=brief_pretty.encode(),
         content_type="application/json",
         summary=str(brief.get("goal", task[:100])),
@@ -110,10 +109,10 @@ async def researcher_deep(task: str) -> str:
     ctx = get_run_context()
     emit_progress({"status": "starting", "agent": "researcher/deep"})
 
-    result = await run_researcher(task, trace_id=ctx.trace_id)
+    result = await run_researcher(task, trace_id=ctx["trace_id"])
 
     # Write full research to catalogue
-    await write_artifact(
+    await get_catalogue().write(
         content=result.encode(),
         content_type="text/markdown",
         summary=result[:200],
@@ -138,7 +137,7 @@ async def writer_deep(task: str) -> str:
     content = await run_writer(task)
 
     # Write content to catalogue
-    await write_artifact(
+    await get_catalogue().write(
         content=content.encode(),
         content_type="text/plain",
         summary=content[:200],
@@ -204,19 +203,33 @@ async def publisher_publish(task: str) -> str:
     log = get_run_logger()
     ctx = get_run_context()
     emit_progress({"status": "publishing", "agent": "publisher/publish"})
-    log.info("Publisher invoked for run_id=%s", ctx.run_id)
+    log.info("Publisher invoked for run_id=%s", ctx["run_id"])
 
     try:
         events = await run_publisher(task)
     except RuntimeError as exc:
         raise EscalationRequired(reason=f"Publisher CLI failed: {exc}") from exc
 
-    # Route events through handle_agent_event
-    result_output = None
+    # Route events to SDK functions inline
+    result_output: str | None = None
     for event in events:
-        output = await handle_agent_event(event)
-        if output is not None:
-            result_output = output
+        etype = event.get("type")
+        if etype == "progress":
+            emit_progress({k: v for k, v in event.items() if k != "type"})
+        elif etype == "artifact":
+            content = event.get("content", "")
+            content_bytes = content.encode() if isinstance(content, str) else content
+            await get_catalogue().write(
+                content=content_bytes,
+                content_type=str(event.get("content_type", "text/plain")),
+                summary=str(event.get("summary", "")),
+                confidence=float(event.get("confidence", 0.8)),
+                completeness=str(event.get("completeness", "complete")),
+            )
+        elif etype == "result":
+            output = event.get("output")
+            if isinstance(output, str):
+                result_output = output
 
     emit_progress({"status": "complete", "agent": "publisher/publish"})
     log.info("Publisher complete")
