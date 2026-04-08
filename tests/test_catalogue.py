@@ -180,3 +180,66 @@ async def test_service_write_read(tmp_path: Path) -> None:
     content, meta = await service.read(ptr["artifact_id"])
     assert content == b"catalogue content"
     assert meta["content_length"] == len(b"catalogue content")
+
+
+# --- Regression: no blocking syscalls on the catalogue hot path ---
+
+
+def test_filesystem_storage_no_blocking_syscalls_in_write() -> None:
+    """Regression guard for the BlockingError incident (c735f8f → 9638ecd).
+
+    ``FilesystemStorage.write`` runs on the ASGI event loop under
+    ``langgraph dev``. ``blockbuster`` intercepts sync filesystem
+    syscalls there and raises ``BlockingError``. A previous "fix" for
+    Windows file URIs called ``Path.resolve()`` in the write path,
+    which invokes ``os.path.realpath`` → ``os.getcwd`` — both blocking.
+    Every reference-agent invocation silently collapsed to an empty
+    AgentResult until the root cause was found a session later.
+
+    tasks/lessons.md names the absence of this test as the schema gap
+    that made the detection slow. Close it via AST inspection: parse
+    the storage module and assert no ``Path.resolve()`` /
+    ``os.getcwd`` / ``os.path.realpath`` call appears anywhere in the
+    module's top-level functions or methods. Cheap, deterministic,
+    catches the regression shape regardless of how it's spelled.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    src = _Path("src/monet/catalogue/_storage.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    offenders: list[str] = []
+
+    def _attr_chain(node: ast.AST) -> list[str]:
+        parts: list[str] = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return list(reversed(parts))
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            chain = _attr_chain(func)
+            # Path(...).resolve() calls — the attr is "resolve".
+            if chain and chain[-1] == "resolve":
+                receiver = ".".join(chain[:-1]) or "<expr>"
+                offenders.append(
+                    f"line {node.lineno}: .resolve() on {receiver}"
+                )
+            # os.getcwd()
+            if chain == ["os", "getcwd"]:
+                offenders.append(f"line {node.lineno}: os.getcwd()")
+            # os.path.realpath(...)
+            if chain == ["os", "path", "realpath"]:
+                offenders.append(f"line {node.lineno}: os.path.realpath()")
+
+    assert not offenders, (
+        "FilesystemStorage must not call blocking path syscalls on the "
+        "ASGI event loop. Offenders:\n  " + "\n  ".join(offenders)
+    )
