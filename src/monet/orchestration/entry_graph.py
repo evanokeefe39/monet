@@ -12,20 +12,33 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from ._invoke import invoke_agent
+from monet._tracing import (
+    detach_trace_context,
+    extract_and_attach_trace_context,
+)
+
+from ._invoke import extract_carrier_from_config, invoke_agent
 from ._state import EntryState
 from ._validate import _assert_registered
 
 
-async def triage_node(state: EntryState) -> dict[str, Any]:
+async def triage_node(
+    state: EntryState, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Call planner/fast to classify task complexity."""
-    result = await invoke_agent(
-        "planner",
-        command="fast",
-        task=state["task"],
-        trace_id=state.get("trace_id", ""),
-        run_id=state.get("run_id", ""),
-    )
+    carrier = extract_carrier_from_config(config)
+    token = extract_and_attach_trace_context(carrier) if carrier else None
+    try:
+        result = await invoke_agent(
+            "planner",
+            command="fast",
+            task=state["task"],
+            trace_id=state.get("trace_id", ""),
+            run_id=state.get("run_id", ""),
+        )
+    finally:
+        if token is not None:
+            detach_trace_context(token)
     try:
         triage = json.loads(result.output) if isinstance(result.output, str) else {}
     except json.JSONDecodeError:

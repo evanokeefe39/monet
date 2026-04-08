@@ -94,10 +94,33 @@ async def _run(server_url: str, topic: str, run_id: str) -> None:
             "Start it with: `uv run langgraph dev`"
         )
 
+    # Open a single "monet.run" root span on the CLI side and capture
+    # its W3C traceparent into a carrier dict. The span is closed
+    # immediately — the carrier is what flows downstream. Every server-
+    # side graph (entry / planning / execution) receives this carrier
+    # in run metadata and re-attaches it before invoking any agent, so
+    # all agent spans across all three graphs land under one Langfuse
+    # trace keyed by this run_id.
+    from monet._tracing import (
+        configure_tracing,
+        get_tracer,
+        inject_trace_context,
+    )
+
+    configure_tracing()
+    _tracer = get_tracer("monet.cli")
+    with _tracer.start_as_current_span(
+        "monet.run",
+        attributes={"monet.run_id": run_id, "monet.topic": topic[:200]},
+    ):
+        trace_carrier = inject_trace_context()
+
     # ── Phase 1 ───────────────────────────────────────────────────────
     print_header("Phase 1: Triage")
     triage_thread = await create_thread(client)
-    triage = await run_triage(client, triage_thread, topic, run_id)
+    triage = await run_triage(
+        client, triage_thread, topic, run_id, trace_carrier=trace_carrier
+    )
     print_triage(triage)
     if triage.get("complexity") == "simple":
         click.echo("\n  Simple request — no content generation needed.")
@@ -118,6 +141,7 @@ async def _run(server_url: str, topic: str, run_id: str) -> None:
         topic,
         run_id,
         decision_prompt=_planning_cb,
+        trace_carrier=trace_carrier,
     )
     if not planning_state.get("plan_approved"):
         click.echo("\n  Plan not approved. Exiting.")
@@ -133,6 +157,7 @@ async def _run(server_url: str, topic: str, run_id: str) -> None:
         work_brief,
         run_id,
         gate_prompt=_execution_decision_callback,
+        trace_carrier=trace_carrier,
     )
 
     # ── Final summary ────────────────────────────────────────────────
