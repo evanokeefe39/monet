@@ -1,27 +1,36 @@
-# social_media_llm — reference client for the monet SDK
+# social_media_llm — LangGraph Server client for the monet SDK
 
-A minimal interactive terminal client demonstrating how to drive the
-monet SDK's built-in reference agents and graphs from a custom CLI.
-The educational value of this example is the **client code** in
-`cli.py` — how to stream progress events from LangGraph, how to
-prompt a human at HITL interrupts, and how to resume after approval
-or rejection.
+A minimal interactive terminal client that drives the monet SDK's
+built-in reference agents and graphs via a **LangGraph Server**. This
+is the production shape: graphs are compiled on the server at startup
+(so build-time `_assert_registered(...)` runs once, loudly), and the
+CLI is a thin `langgraph-sdk` client that creates threads, streams
+runs, and resumes interrupts.
 
 All agents and graphs used here live in the SDK:
 
 - `monet.agents` — planner, researcher, writer, qa, publisher
 - `monet.orchestration` — `build_entry_graph`, `build_planning_graph`,
-  `build_execution_graph`, and the `EntryState`/`PlanningState`/
+  `build_execution_graph`, and the `EntryState` / `PlanningState` /
   `ExecutionState` TypedDicts
 
-The CLI imports them directly. There is no custom agent or graph code
-in this example.
+The example itself contains only client code:
+
+| File | Role |
+|---|---|
+| `cli.py`            | Click entry point |
+| `app.py`            | dotenv, catalogue config, env/server checks |
+| `client.py`         | langgraph-sdk client wiring + streaming helper |
+| `workflow.py`       | three phase functions + HITL resume loops |
+| `display.py`        | print helpers + artifact-aware wave renderer |
+| `prompts.py`        | HITL input helpers |
+| `server_graphs.py`  | server-side shim: imports `monet.agents`, configures the catalogue, re-exports the three builders |
+| `langgraph.json`    | registers the three graphs for `langgraph dev` |
 
 ## Install
 
-This example has its own `pyproject.toml` and creates its own `.venv`
-inside the example directory, so it never touches the root dev
-environment.
+The example is a standalone uv project with its own `.venv`. From the
+repo root:
 
 ```bash
 cd examples/social_media_llm
@@ -30,50 +39,99 @@ uv sync
 
 That pulls in monet (as an editable path dependency on the parent repo)
 plus the full reference stack — Gemini, Groq, langchain-community,
-tavily-python, exa-py, python-dotenv — everything needed to run the
-workflow end to end. Run subsequent commands with `uv run ...` from the
-same directory.
-
-If you want a different provider, add it to this example's environment:
-
-```bash
-uv add langchain-anthropic   # or langchain-openai, etc.
-```
+tavily-python, exa-py, python-dotenv — and the `langgraph-cli[inmem]`
++ `langgraph-sdk` + `click` packages that drive the two-process flow.
 
 ## Environment
 
 Copy the template and fill in your keys — `python-dotenv` loads `.env`
-on startup.
+on startup in both the CLI and server processes.
 
 ```bash
 cp .env.example .env
 ```
 
+Required keys:
+
 ```bash
-GEMINI_API_KEY=...       # default for planner/researcher/writer/publisher
-GROQ_API_KEY=...         # default for qa
-EXA_API_KEY=...          # optional — preferred web search for researcher/deep
-TAVILY_API_KEY=...       # optional — alternative web search
-MONET_CATALOGUE_DIR=.catalogue
+GEMINI_API_KEY=...    # planner / researcher / writer / publisher
+GROQ_API_KEY=...      # qa
+TAVILY_API_KEY=...    # optional: Tavily ReAct path for researcher/deep
+EXA_API_KEY=...       # optional: Exa semantic search path (preferred)
 ```
 
 Model selection is controlled via `MONET_PLANNER_MODEL`,
 `MONET_RESEARCHER_MODEL`, `MONET_WRITER_MODEL`, `MONET_QA_MODEL`, and
 `MONET_PUBLISHER_MODEL` — any `init_chat_model()` string works.
 
-## Run
+`MONET_CATALOGUE_DIR` is **optional**. When unset, both the CLI and the
+server default to `<example_dir>/.catalogue` (anchored to the location
+of `app.py` / `server_graphs.py`), so both processes resolve to the
+same on-disk directory regardless of which working directory they were
+started from. If you set it explicitly, use an **absolute** path — a
+relative value will resolve against each process's cwd and the two
+sides will desync.
+
+## Run — two processes
+
+### Terminal A — start the LangGraph dev server
 
 ```bash
-python -m examples.social_media_llm "AI in marketing"
+cd examples/social_media_llm
+uv run langgraph dev
 ```
+
+This reads `langgraph.json`, loads `server_graphs.py` (which imports
+`monet.agents` to populate the agent registry, wires a filesystem
+catalogue, and re-exports the three builders), and exposes an HTTP
+API on <http://localhost:2024>. Leave it running.
+
+### Terminal B — run the CLI
+
+```bash
+# from the repo root, using the example's .venv
+cd examples/social_media_llm
+uv run python -m examples.social_media_llm "AI in marketing"
+```
+
+Options:
+
+- `--server-url` (env `MONET_LANGGRAPH_URL`) — default
+  `http://localhost:2024`
+- `--run-id` — override the generated 8-char run id
 
 The CLI walks the three-graph supervisor topology:
 
-1. **entry** — triage classifies the request (simple, bounded, complex)
+1. **entry** — triage classifies the request (simple / bounded / complex)
 2. **planning** — builds a work brief and interrupts for human approval,
-   looping on feedback up to 3 revisions
+   looping on feedback up to 5 revisions
 3. **execution** — wave-based parallel agent execution with QA
    reflection and HITL gates on quality failures
+
+If the server is not reachable the CLI exits non-zero with a friendly
+error.
+
+## What to look for
+
+- **Streaming progress.** `client.stream_run` wraps
+  `client.runs.stream(..., stream_mode=["updates","custom"])`. The
+  `custom` channel carries `emit_progress({...})` events from inside
+  the agents; the `updates` channel carries per-node state diffs.
+- **HITL resume.** Planning and execution interrupts both use
+  `client.runs.stream(..., command={"resume": payload})`. After each
+  stream drains, the CLI fetches thread state via
+  `client.threads.get_state()` and inspects `state["next"]` to decide
+  whether to prompt again.
+- **Wave parallelism.** The execution graph fans out each wave via
+  LangGraph's `Send` API. Watch the progress stream for interleaved
+  agent events.
+- **Catalogue artifacts, resolved at the CLI.** Every agent writes its
+  output to `<example_dir>/.catalogue/artifacts/` via
+  `get_catalogue().write(...)`. The graph state only carries the
+  `ArtifactPointer` — the CLI's `display.print_wave_results()` calls
+  `catalogue.read(artifact_id)` directly to pull the bytes back for
+  rendering. **No regex parsing of `wave_result.output`** — that was
+  a pre-v3 hack and is gone.
 
 ## Researcher paths
 
@@ -85,37 +143,13 @@ The CLI walks the three-graph supervisor topology:
 | `TAVILY_API_KEY` set + `langchain_community` importable | Tavily ReAct agent |
 | neither | LLM-only synthesis with a warning |
 
-Manual smoke run for each path:
-
-```bash
-export EXA_API_KEY=...   && python -m examples.social_media_llm "AI in marketing"
-unset EXA_API_KEY && export TAVILY_API_KEY=... && python -m examples.social_media_llm "AI in marketing"
-unset EXA_API_KEY && unset TAVILY_API_KEY && python -m examples.social_media_llm "AI in marketing"
-```
-
-The LLM-only path stores artifacts with confidence 0.6; the search-
-backed paths use 0.85.
-
-## What to look for
-
-- **Streaming progress:** `cli.py` subscribes to
-  `astream(stream_mode=["updates","custom"])`. The `custom` channel
-  carries `emit_progress({...})` events from inside the agents.
-- **HITL resume:** both planning approval and execution wave interrupts
-  use `Command(resume=...)` with typed payloads. Planning expects
-  `{"approved": bool, "feedback": str | None}`; execution expects
-  `{"action": "continue"|"abort", "feedback": str | None}`.
-- **Wave parallelism:** the execution graph fans out each wave via
-  LangGraph's `Send` API. Watch the progress stream for interleaved
-  agent events.
-- **Catalogue artifacts:** every agent writes its output to
-  `$MONET_CATALOGUE_DIR/artifacts/` via `get_catalogue().write(...)`.
-  The CLI only keeps pointers in graph state.
+The LLM-only path stores artifacts with confidence 0.6; the
+search-backed paths use 0.85.
 
 ## Observability
 
-If you run a Langfuse collector (see `docker-compose.dev.yml`), every
-graph invocation emits OpenTelemetry traces with agent names, wave
-indices, and signal metadata. The reference agents use the
-`emit_progress()` and `emit_signal()` SDK helpers so all activity is
-visible from the streaming channel and the trace hierarchy.
+If you run a Langfuse collector (see `docker-compose.dev.yml` at the
+repo root), every graph invocation emits OpenTelemetry traces with
+agent names, wave indices, and signal metadata. The reference agents
+use the `emit_progress()` and `emit_signal()` SDK helpers so all
+activity is visible from the streaming channel and the trace hierarchy.

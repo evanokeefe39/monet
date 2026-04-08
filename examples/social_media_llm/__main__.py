@@ -1,5 +1,5 @@
-"""Allow running as: PYTHONPATH=. uv run python -m examples.social_media_llm"""
+"""Allow running as ``python -m examples.social_media_llm``."""
 
-from .cli import cli_main
+from .cli import main
 
-cli_main()
+main()
