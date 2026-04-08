@@ -21,6 +21,8 @@ from opentelemetry.sdk.trace import TracerProvider
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from langchain_core.runnables import RunnableConfig
+
 _provider: TracerProvider | None = None
 _exporter_attached: bool = False
 
@@ -178,6 +180,26 @@ def detach_trace_context(token: object) -> None:
     """Pop a previously-attached trace context. Must be called in a
     ``finally`` block paired with :func:`extract_and_attach_trace_context`."""
     _ot_context.detach(token)  # type: ignore[arg-type]
+
+
+def extract_carrier_from_config(
+    config: RunnableConfig | None,
+) -> dict[str, str]:
+    """Pull the CLI-side trace carrier out of langgraph run metadata.
+
+    The CLI injects a W3C traceparent carrier into each langgraph
+    run's metadata under :data:`TRACE_CARRIER_METADATA_KEY`. Graph
+    entry nodes read it via their ``config`` argument and feed it to
+    :func:`attached_trace` so downstream agent spans become part of
+    the CLI-side root trace instead of each starting a new root.
+    Returns ``{}`` when no carrier is present so callers can pass the
+    result to ``attached_trace`` unconditionally.
+    """
+    if not config:
+        return {}
+    metadata = config.get("metadata") or {}
+    carrier = metadata.get(TRACE_CARRIER_METADATA_KEY)
+    return dict(carrier) if isinstance(carrier, dict) else {}
 
 
 @asynccontextmanager
