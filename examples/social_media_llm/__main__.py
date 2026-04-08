@@ -1,5 +1,5 @@
 """Allow running as ``python -m examples.social_media_llm``."""
 
-from .cli import main
+from examples.social_media_llm import main
 
 main()
