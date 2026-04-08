@@ -1,0 +1,11 @@
+[project]
+name = "social-media-llm-example"
+version = "0.0.0"
+description = "Reference monet workflow — runs the bundled monet.agents end to end."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }

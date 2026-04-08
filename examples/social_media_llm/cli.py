@@ -1,15 +1,20 @@
-"""Interactive terminal client for the LLM-backed content workflow.
+"""Reference client for the monet SDK reference stack.
 
-Run with: uv run python examples/social_media_llm/run_cli.py
+Run with: python -m examples.social_media_llm "your topic here"
 
-Demonstrates real LLM agents (Gemini Flash, Groq, Tavily) with:
-  - Three-graph supervisor topology (entry -> planning -> execution)
-  - HITL approve/reject/feedback at planning and execution gates
-  - Streaming progress via emit_progress()
-  - Wave-based parallel execution
-  - All SDK helpers: emit_progress, write_artifact, emit_signal,
-    get_run_context, get_run_logger, NeedsHumanReview, EscalationRequired,
-    SemanticError, handle_agent_event
+Demonstrates how to drive the monet SDK's built-in agents and graphs
+from a custom terminal client:
+
+  - imports the reference agents via `import monet.agents`
+  - wires the three graphs (entry -> planning -> execution) from
+    `monet.orchestration`
+  - consumes `emit_progress()` events via astream(stream_mode=[...custom])
+  - handles HITL interrupts for planning approval and execution QA gates
+    via Command(resume={...})
+
+The manual graph wiring is intentional — it is what makes the streaming
+progress visible. `monet.orchestration.run()` is a non-streaming
+sequencer and is unsuitable for an interactive terminal client.
 """
 
 from __future__ import annotations
@@ -49,14 +54,16 @@ configure_catalogue(
     )
 )
 
-# Import agents to trigger registration (AFTER env loading)
-from . import agents as _agents  # noqa: F401, E402
-from .graphs import (  # noqa: E402
+# Import reference agents to trigger @agent registration (AFTER env loading)
+import monet.agents  # noqa: F401, E402 — registers reference agents
+from monet.orchestration import (  # noqa: E402
+    EntryState,
+    ExecutionState,
+    PlanningState,
     build_entry_graph,
     build_execution_graph,
     build_planning_graph,
 )
-from .state import EntryState, ExecutionState, PlanningState  # noqa: TC001, E402
 
 _ARTIFACT_REPR_RE = re.compile(r"artifact_id='([^']+)'")
 _UUID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
@@ -223,7 +230,7 @@ async def main() -> None:
 
     entry_graph = build_entry_graph().compile(checkpointer=checkpointer)
     entry_state: EntryState = {
-        "user_message": topic,
+        "task": topic,
         "trace_id": f"trace-{run_id}",
         "run_id": run_id,
     }
@@ -249,7 +256,7 @@ async def main() -> None:
 
         try:
             result = await invoke_agent(
-                "sm-writer",
+                "writer",
                 command="deep",
                 task=f"Write a social media post about: {topic}",
                 trace_id=f"trace-{run_id}",
@@ -284,7 +291,7 @@ async def main() -> None:
 
     planning_graph = build_planning_graph().compile(checkpointer=checkpointer)
     planning_state: PlanningState = {
-        "user_message": topic,
+        "task": topic,
         "trace_id": f"trace-{run_id}",
         "run_id": run_id,
         "revision_count": 0,

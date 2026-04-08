@@ -18,6 +18,7 @@ from monet import get_catalogue
 
 from ._invoke import invoke_agent
 from ._state import PlanningState
+from ._validate import _assert_registered
 
 MAX_REVISIONS = 3
 
@@ -48,16 +49,18 @@ async def planner_node(state: PlanningState) -> dict[str, Any]:
         run_id=state.get("run_id", ""),
     )
 
-    if isinstance(result.output, str) and result.output.strip():
+    brief: dict[str, Any] = {}
+    if isinstance(result.output, dict):
+        brief = result.output
+    elif isinstance(result.output, str) and result.output.strip():
         try:
             brief = json.loads(result.output)
         except json.JSONDecodeError:
             brief = {}
-    elif isinstance(result.output, dict) and "artifact_id" in result.output:
-        content_bytes, _meta = await get_catalogue().read(result.output["artifact_id"])
+    elif result.artifacts:
+        pointer = result.artifacts[0]
+        content_bytes, _meta = await get_catalogue().read(pointer["artifact_id"])
         brief = json.loads(content_bytes.decode())
-    else:
-        brief = {}
 
     return {"work_brief": brief}
 
@@ -102,6 +105,7 @@ def route_from_approval(state: PlanningState) -> str:
 
 def build_planning_graph() -> StateGraph[PlanningState]:
     """Build the planning graph with HITL approval. Returns uncompiled StateGraph."""
+    _assert_registered("planner", "plan")
     graph = StateGraph(PlanningState)
     graph.add_node("planner", planner_node)
     graph.add_node("human_approval", human_approval_node)

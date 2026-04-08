@@ -1,0 +1,16 @@
+Provide a concise, factual answer on the topic. Return markdown with key
+points and caveats.
+
+Topic: {{ task }}
+{% if context %}
+
+Use the following context from upstream agents as background — do not just
+repeat it, build on it:
+{% for entry in context %}
+  ---
+  source: {{ entry.agent_id | default("unknown") }} ({{ entry.type | default("note") }})
+  summary: {{ entry.summary | default("") }}
+
+  {{ entry.content | default("") }}
+{% endfor %}
+{% endif %}

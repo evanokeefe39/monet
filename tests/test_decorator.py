@@ -112,8 +112,25 @@ def test_invalid_param_raises_at_decoration_time() -> None:
 
 
 def test_agent_id_required() -> None:
-    with pytest.raises(TypeError, match="agent_id is required"):
-        agent(lambda: None)
+    # Empty agent_id via verbose form raises ValueError at decoration.
+    with pytest.raises(ValueError, match="agent_id is required"):
+
+        @agent(agent_id="")
+        async def bad(task: str) -> str:
+            return "x"
+
+
+def test_dual_call_signature() -> None:
+    """agent("name") returns a partial that registers commands."""
+    researcher = agent("dual-test")
+
+    @researcher(command="fast")
+    async def fast_handler(task: str) -> str:
+        return f"fast:{task}"
+
+    from monet._registry import default_registry
+
+    assert default_registry.lookup("dual-test", "fast") is not None
 
 
 # --- Typed exception -> signals ---

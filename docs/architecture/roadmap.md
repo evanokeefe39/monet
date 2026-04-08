@@ -5,12 +5,16 @@
 The following modules are implemented and tested:
 
 ### Core SDK (9 modules)
-- [x] `@agent` decorator with parameter injection, auto-registration, content offload
-- [x] `AgentResult`, `AgentRunContext`, `AgentSignals` types
-- [x] Context entry types (discriminated union: artifact, work_brief, constraint, instruction, skill_reference)
+- [x] `@agent` decorator with dual call signature (`agent("id")` partial form), parameter injection, auto-registration, content offload
+- [x] `AgentResult` (output: `str | dict | None`), `AgentRunContext`, `Signal` (TypedDict) types
+- [x] `SignalType` vocabulary + `BLOCKING`/`RECOVERABLE`/`INFORMATIONAL`/`AUDIT`/`ROUTING` group frozensets
+- [x] `AgentStream` with `.cli()`/`.sse()`/`.http()` named constructors, `.on()` handler builder, default handler wiring
+- [x] `webhook_handler`, `log_handler` handler factories
 - [x] `get_run_context()`, `get_run_logger()` context access
-- [x] `write_artifact()`, `set_catalogue_client()`, `emit_progress()` utilities
+- [x] Ambient trio: `emit_progress()`, `emit_signal()`, `write_artifact()`
+- [x] `configure_catalogue()` for backend wiring
 - [x] `NeedsHumanReview`, `EscalationRequired`, `SemanticError` typed exceptions
+- [x] Build-time registry validation (`_assert_registered`) in graph builders; `SemanticError("agent_not_found")` from `fan_out_wave` for unknown planner-specified agents
 - [x] `AgentDescriptor`, `CommandDescriptor`, `SLACharacteristics`, `RetryConfig` descriptors
 - [x] `DescriptorRegistry` with thread-safe registration and test isolation
 - [x] OpenTelemetry tracing (spans, W3C traceparent, gen_ai.* conventions)

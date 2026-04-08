@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .types import Signal
+    from .types import ArtifactPointer, Signal
 
 
 # ── Signal collector — set by decorator before each invocation ────────────────
@@ -49,3 +49,29 @@ def emit_signal(signal: Signal) -> None:
     collector = _signal_collector.get()
     if collector is not None:
         collector.append(signal)
+
+
+async def write_artifact(
+    content: bytes,
+    content_type: str,
+    summary: str,
+    confidence: float = 0.0,
+    completeness: str = "complete",
+    sensitivity_label: str = "internal",
+) -> ArtifactPointer:
+    """Write content to the catalogue and register the pointer.
+
+    Convenience alias for ``await get_catalogue().write(...)``. Completes
+    the ambient trio (emit_progress, emit_signal, write_artifact). The
+    pointer is appended to ``AgentResult.artifacts`` automatically.
+    """
+    from ._catalogue import get_catalogue
+
+    return await get_catalogue().write(
+        content=content,
+        content_type=content_type,
+        summary=summary,
+        confidence=confidence,
+        completeness=completeness,
+        sensitivity_label=sensitivity_label,
+    )

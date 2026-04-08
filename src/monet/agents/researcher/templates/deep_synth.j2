@@ -1,0 +1,16 @@
+Synthesise these research findings into a structured markdown report with
+sources. Cite URLs inline.
+
+Original task: {{ task }}
+
+Findings from web search:
+{{ findings }}
+{% if context %}
+
+Additional context from upstream agents:
+{% for entry in context %}
+  ---
+  source: {{ entry.agent_id | default("unknown") }} ({{ entry.type | default("note") }})
+  {{ entry.content | default("") }}
+{% endfor %}
+{% endif %}

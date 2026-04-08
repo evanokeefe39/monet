@@ -1,0 +1,13 @@
+Provide a concise, factual synthesis of what is known about the topic.
+Return markdown with key findings and gaps.
+
+Topic: {{ task }}
+{% if context %}
+
+Context from upstream agents:
+{% for entry in context %}
+  ---
+  source: {{ entry.agent_id | default("unknown") }} ({{ entry.type | default("note") }})
+  {{ entry.content | default("") }}
+{% endfor %}
+{% endif %}
