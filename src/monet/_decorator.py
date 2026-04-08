@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import inspect
 from typing import TYPE_CHECKING, Any, overload
 
-from ._catalogue import _artifact_collector, get_catalogue
+from ._catalogue import _artifact_collector, _artifact_hashes, get_catalogue
 from ._context import _agent_context
 from ._registry import default_registry
 from ._stubs import _signal_collector
@@ -73,6 +74,7 @@ async def _wrap_result(
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
     signals: list[Signal],
+    written_hashes: set[str],
     content_limit: int = DEFAULT_CONTENT_LIMIT,
 ) -> AgentResult:
     """Assemble a successful AgentResult from a function's return value.
@@ -93,7 +95,14 @@ async def _wrap_result(
         if len(output_str) > content_limit:
             from ._catalogue import _catalogue_backend
 
-            if _catalogue_backend is not None:
+            encoded = output_str.encode()
+            already_written = hashlib.sha256(encoded).hexdigest() in written_hashes
+            if already_written:
+                # Agent already persisted exact bytes explicitly — suppress
+                # the auto-offload, but still inline-summarise so consumers
+                # see a compact output field matching the explicit artifact.
+                output = output_str[:200]
+            elif _catalogue_backend is not None:
                 try:
                     # write() appends to _artifact_collector (same list as `artifacts`)
                     await get_catalogue().write(
@@ -220,10 +229,12 @@ def agent(
         async def wrapper(ctx: AgentRunContext) -> AgentResult:
             artifacts: list[ArtifactPointer] = []
             signal_list: list[Signal] = []
+            written_hashes: set[str] = set()
             tracer = get_tracer("monet.agent")
             ctx_token = _agent_context.set(ctx)
             sig_token = _signal_collector.set(signal_list)
             art_token = _artifact_collector.set(artifacts)
+            hash_token = _artifact_hashes.set(written_hashes)
             try:
                 with tracer.start_as_current_span(
                     f"agent.{agent_id}.{command}",
@@ -240,7 +251,7 @@ def agent(
                         else:
                             result = fn(**kwargs)
                         agent_result = await _wrap_result(
-                            result, ctx, artifacts, signal_list
+                            result, ctx, artifacts, signal_list, written_hashes
                         )
                         span.set_attribute("agent.success", agent_result.success)
                         return agent_result
@@ -252,6 +263,7 @@ def agent(
                         span.record_exception(exc)
                         return agent_result
             finally:
+                _artifact_hashes.reset(hash_token)
                 _artifact_collector.reset(art_token)
                 _signal_collector.reset(sig_token)
                 _agent_context.reset(ctx_token)

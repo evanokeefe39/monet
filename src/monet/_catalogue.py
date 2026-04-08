@@ -5,6 +5,7 @@ Public surface: monet.get_catalogue() and monet.catalogue.configure_catalogue().
 
 from __future__ import annotations
 
+import hashlib
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,14 @@ def _set_catalogue_backend(client: CatalogueClient | None) -> None:
 
 _artifact_collector: ContextVar[list[Any] | None] = ContextVar(
     "_artifact_collector", default=None
+)
+
+# Parallel sidecar — sha256 hex of each explicit catalogue write from within
+# an @agent call, used by _wrap_result to suppress the auto-offload when the
+# agent already persisted the exact bytes it is returning. Kept separate from
+# _artifact_collector so the public artifacts list stays list[ArtifactPointer].
+_artifact_hashes: ContextVar[set[str] | None] = ContextVar(
+    "_artifact_hashes", default=None
 )
 
 
@@ -91,6 +100,9 @@ class CatalogueHandle:
         collector = _artifact_collector.get()
         if collector is not None:
             collector.append(pointer)
+        hashes = _artifact_hashes.get()
+        if hashes is not None:
+            hashes.add(hashlib.sha256(content).hexdigest())
         return pointer
 
     async def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]:
