@@ -10,6 +10,7 @@ fields on ``WaveResult``.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -129,14 +130,21 @@ async def print_wave_results(
                 except (KeyError, ValueError, FileNotFoundError) as e:
                     print(f"    (could not read artifact {artifact_id[:8]}...: {e})")
                     continue
-                print(
-                    f"    [artifact {artifact_id[:8]}... "
-                    f"type={meta['content_type']} "
-                    f"size={meta['content_length']}b]"
+                url = pointer.get("url") or ""
+                label = (
+                    f"open artifact {artifact_id[:8]}"
+                    f" ({meta['content_type']}, {meta['content_length']}b)"
                 )
-                text = content.decode("utf-8", errors="replace")
-                for line in text.splitlines():
-                    _safe_print(f"      {line}")
+                if url and _supports_osc8():
+                    link = _osc8(url, label)
+                elif url:
+                    link = f"{label} — {url}"
+                else:
+                    link = label
+                _safe_print(f"      {link}")
+                preview = _preview(content)
+                if preview:
+                    _safe_print(f"      > {preview}")
             continue
 
         output = wr.get("output")
@@ -177,6 +185,37 @@ def print_summary(
 
 
 # ── Internals ─────────────────────────────────────────────────────────
+
+
+def _osc8(url: str, text: str) -> str:
+    """Emit an OSC 8 hyperlink escape sequence. Windows Terminal, iTerm2,
+    GNOME Terminal, and most modern emulators render this as a clickable
+    link; unsupported terminals show ``text`` with a few stray escape
+    characters, which is why ``_supports_osc8`` gates its use."""
+    return f"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\"
+
+
+def _supports_osc8() -> bool:
+    """Heuristic: only emit OSC 8 when stdout is a real TTY and TERM is
+    not the sentinel ``dumb``. Piping to a file falls back to plain URLs."""
+    if not sys.stdout.isatty():
+        return False
+    return os.environ.get("TERM") != "dumb"
+
+
+def _preview(content: bytes, max_chars: int = 200) -> str:
+    """First non-empty line of ``content``, trimmed to ``max_chars``.
+
+    Markdown bodies from the reference writer agent lead with a title
+    line; showing that plus a character ellipsis gives enough signal to
+    decide whether to click through to the full artifact."""
+    text = content.decode("utf-8", errors="replace").strip()
+    if not text:
+        return ""
+    first = text.split("\n", 1)[0].strip()
+    if len(first) > max_chars:
+        return first[: max_chars - 1] + "…"
+    return first
 
 
 def _safe_print(line: str) -> None:
