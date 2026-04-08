@@ -50,18 +50,26 @@ async def _drain_stream(
     *,
     input: dict[str, Any] | None = None,
     command: dict[str, Any] | None = None,
+    trace_carrier: dict[str, str] | None = None,
 ) -> None:
     """Stream a run to completion, rendering events as they arrive.
 
     Either ``input`` or ``command`` must be supplied. Side effect only —
     callers fetch the resulting thread state separately.
+
+    ``trace_carrier`` is a W3C traceparent carrier dict produced by the
+    CLI-side root span. It is passed as run metadata so the server-side
+    graphs can re-attach it and make every agent span a descendant of
+    the single CLI-side root trace.
     """
+    metadata = {"monet_trace_carrier": trace_carrier} if trace_carrier else None
     async for mode, data in stream_run(
         client,
         thread_id,
         graph_id,
         input=input,
         command=command,
+        metadata=metadata,
     ):
         if mode == "error":
             raise RuntimeError(f"server error during {label}: {data}")
@@ -86,6 +94,8 @@ async def run_triage(
     thread_id: str,
     topic: str,
     run_id: str,
+    *,
+    trace_carrier: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the entry graph and return the triage payload.
 
@@ -101,6 +111,7 @@ async def run_triage(
             "trace_id": f"trace-{run_id}",
             "run_id": run_id,
         },
+        trace_carrier=trace_carrier,
     )
     values, _ = await _get_state_values(client, thread_id)
     triage = values.get("triage") or {}
@@ -120,6 +131,7 @@ async def run_planning(
     run_id: str,
     *,
     decision_prompt: Callable[[dict[str, Any]], dict[str, Any]],
+    trace_carrier: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the planning graph with the HITL approval loop.
 
@@ -142,6 +154,7 @@ async def run_planning(
             "run_id": run_id,
             "revision_count": 0,
         },
+        trace_carrier=trace_carrier,
     )
 
     for _round in range(_MAX_PLANNING_ROUNDS):
@@ -160,6 +173,7 @@ async def run_planning(
             "planning",
             label="planning",
             command={"resume": decision},
+            trace_carrier=trace_carrier,
         )
 
         # Hard reject — exit immediately, no replanning round.
@@ -180,6 +194,7 @@ async def run_execution(
     run_id: str,
     *,
     gate_prompt: Callable[[dict[str, Any]], dict[str, Any]],
+    trace_carrier: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run the execution graph with the HITL gate loop.
 
@@ -205,6 +220,7 @@ async def run_execution(
             "completed_phases": [],
             "revision_count": 0,
         },
+        trace_carrier=trace_carrier,
     )
 
     while True:
@@ -222,6 +238,7 @@ async def run_execution(
             "execution",
             label="execution",
             command={"resume": decision},
+            trace_carrier=trace_carrier,
         )
 
         if decision.get("action") == "abort":

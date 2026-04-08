@@ -15,15 +15,21 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from monet import get_catalogue
+from monet._tracing import (
+    detach_trace_context,
+    extract_and_attach_trace_context,
+)
 
-from ._invoke import invoke_agent
+from ._invoke import extract_carrier_from_config, invoke_agent
 from ._state import PlanningState
 from ._validate import _assert_registered
 
 MAX_REVISIONS = 3
 
 
-async def planner_node(state: PlanningState) -> dict[str, Any]:
+async def planner_node(
+    state: PlanningState, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Call planner/plan to produce a work brief."""
     context_entries: list[dict[str, Any]] = []
     for entry in state.get("planning_context") or []:
@@ -40,14 +46,20 @@ async def planner_node(state: PlanningState) -> dict[str, Any]:
             {"type": "instruction", "summary": "Human feedback", "content": feedback}
         )
 
-    result = await invoke_agent(
-        "planner",
-        command="plan",
-        task=state["task"],
-        context=context_entries,
-        trace_id=state.get("trace_id", ""),
-        run_id=state.get("run_id", ""),
-    )
+    carrier = extract_carrier_from_config(config)
+    token = extract_and_attach_trace_context(carrier) if carrier else None
+    try:
+        result = await invoke_agent(
+            "planner",
+            command="plan",
+            task=state["task"],
+            context=context_entries,
+            trace_id=state.get("trace_id", ""),
+            run_id=state.get("run_id", ""),
+        )
+    finally:
+        if token is not None:
+            detach_trace_context(token)
 
     brief: dict[str, Any] = {}
     if isinstance(result.output, dict):

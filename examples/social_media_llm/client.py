@@ -48,6 +48,7 @@ async def stream_run(
     *,
     input: dict[str, Any] | None = None,
     command: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """Stream a run on ``graph_id`` and yield ``(mode, data)`` tuples.
 
@@ -67,6 +68,8 @@ async def stream_run(
         kwargs["command"] = command
     else:
         kwargs["input"] = input or {}
+    if metadata:
+        kwargs["metadata"] = metadata
 
     async for chunk in client.runs.stream(thread_id, graph_id, **kwargs):
         event = getattr(chunk, "event", None) or ""

@@ -72,6 +72,7 @@ class _FakeRuns:
         input: dict[str, Any] | None = None,
         command: dict[str, Any] | None = None,
         stream_mode: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> AsyncIterator[_StreamPart]:
         cursor = self._cursors.get(thread_id, 0)
         script = self._scripts[thread_id]

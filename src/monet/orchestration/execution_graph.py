@@ -29,34 +29,42 @@ from monet._tracing import (
 from monet.exceptions import SemanticError
 from monet.signals import BLOCKING, in_group
 
-from ._invoke import invoke_agent
+from ._invoke import extract_carrier_from_config, invoke_agent
 from ._state import ExecutionState, WaveItem, WaveResult
 from ._validate import _assert_registered
 
 MAX_WAVE_RETRIES = 3
 
 
-async def load_plan(state: ExecutionState) -> dict[str, Any]:
-    # Open a short-lived root span for the run. We immediately end it —
-    # the only thing agent_node needs is the trace_id + span_id baked
-    # into the carrier, so every downstream agent span becomes a child
-    # of this root in the same trace. Keeping the root open across node
-    # boundaries would require a cross-task span handle, which langgraph
-    # dev's task isolation makes awkward. A zero-duration root is a
-    # common Langfuse-compatible idiom and still groups spans correctly.
-    tracer = get_tracer("monet.execution")
-    work_brief = state.get("work_brief") or {}
-    phases = work_brief.get("phases") or []
-    with tracer.start_as_current_span(
-        "monet.execution",
-        attributes={
-            "monet.run_id": state.get("run_id", ""),
-            "monet.trace_id": state.get("trace_id", ""),
-            "monet.phase_count": len(phases),
-            "monet.goal": (work_brief.get("goal") or "")[:200],
-        },
-    ):
-        carrier = inject_trace_context()
+async def load_plan(
+    state: ExecutionState, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    # If the CLI injected a root carrier via run metadata, attach it
+    # first so the "monet.execution" span we open below becomes a child
+    # of that root instead of starting a fresh trace. This is what
+    # unifies the triage + planning + execution graphs under one
+    # Langfuse trace keyed by the CLI's monet.run span.
+    upstream_carrier = extract_carrier_from_config(config)
+    upstream_token = (
+        extract_and_attach_trace_context(upstream_carrier) if upstream_carrier else None
+    )
+    try:
+        tracer = get_tracer("monet.execution")
+        work_brief = state.get("work_brief") or {}
+        phases = work_brief.get("phases") or []
+        with tracer.start_as_current_span(
+            "monet.execution",
+            attributes={
+                "monet.run_id": state.get("run_id", ""),
+                "monet.trace_id": state.get("trace_id", ""),
+                "monet.phase_count": len(phases),
+                "monet.goal": (work_brief.get("goal") or "")[:200],
+            },
+        ):
+            carrier = inject_trace_context()
+    finally:
+        if upstream_token is not None:
+            detach_trace_context(upstream_token)
     return {
         "current_phase_index": 0,
         "current_wave_index": 0,

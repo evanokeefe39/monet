@@ -44,6 +44,24 @@ def _generate_trace_id() -> str:
     return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
 
 
+def extract_carrier_from_config(config: dict[str, Any] | None) -> dict[str, str]:
+    """Pull the CLI-side trace carrier out of langgraph run metadata.
+
+    The CLI injects a W3C traceparent carrier into each langgraph run's
+    metadata under the ``monet_trace_carrier`` key. Graph entry nodes
+    read it via their ``config`` argument and re-attach the trace
+    context so downstream agent spans become part of the CLI-side root
+    trace instead of each starting a new root. Returns ``{}`` when no
+    carrier is present so callers can gate the attach step with a
+    truthiness check.
+    """
+    if not config:
+        return {}
+    metadata = config.get("metadata") or {}
+    carrier = metadata.get("monet_trace_carrier")
+    return dict(carrier) if isinstance(carrier, dict) else {}
+
+
 async def invoke_agent(
     agent_id: str,
     command: str = "fast",
