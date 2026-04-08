@@ -26,13 +26,14 @@ from monet._registry import default_registry
 from monet._tracing import (
     EXECUTION_ROOT_SPAN_NAME,
     attached_trace,
+    extract_carrier_from_config,
     get_tracer,
     inject_trace_context,
 )
 from monet.exceptions import SemanticError
 from monet.signals import BLOCKING, in_group
 
-from ._invoke import extract_carrier_from_config, invoke_agent
+from ._invoke import invoke_agent
 from ._state import ExecutionState, WaveItem, WaveResult
 from ._validate import _assert_registered
 

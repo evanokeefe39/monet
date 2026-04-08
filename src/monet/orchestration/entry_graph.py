@@ -15,9 +15,9 @@ from langchain_core.runnables import (
 )
 from langgraph.graph import END, StateGraph
 
-from monet._tracing import attached_trace
+from monet._tracing import attached_trace, extract_carrier_from_config
 
-from ._invoke import extract_carrier_from_config, invoke_agent
+from ._invoke import invoke_agent
 from ._state import EntryState
 from ._validate import _assert_registered
 
