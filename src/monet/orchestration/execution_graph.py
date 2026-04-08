@@ -20,6 +20,12 @@ from langgraph.types import Send, interrupt
 
 from monet import emit_progress, get_catalogue
 from monet._registry import default_registry
+from monet._tracing import (
+    detach_trace_context,
+    extract_and_attach_trace_context,
+    get_tracer,
+    inject_trace_context,
+)
 from monet.exceptions import SemanticError
 from monet.signals import BLOCKING, in_group
 
@@ -31,6 +37,26 @@ MAX_WAVE_RETRIES = 3
 
 
 async def load_plan(state: ExecutionState) -> dict[str, Any]:
+    # Open a short-lived root span for the run. We immediately end it —
+    # the only thing agent_node needs is the trace_id + span_id baked
+    # into the carrier, so every downstream agent span becomes a child
+    # of this root in the same trace. Keeping the root open across node
+    # boundaries would require a cross-task span handle, which langgraph
+    # dev's task isolation makes awkward. A zero-duration root is a
+    # common Langfuse-compatible idiom and still groups spans correctly.
+    tracer = get_tracer("monet.execution")
+    work_brief = state.get("work_brief") or {}
+    phases = work_brief.get("phases") or []
+    with tracer.start_as_current_span(
+        "monet.execution",
+        attributes={
+            "monet.run_id": state.get("run_id", ""),
+            "monet.trace_id": state.get("trace_id", ""),
+            "monet.phase_count": len(phases),
+            "monet.goal": (work_brief.get("goal") or "")[:200],
+        },
+    ):
+        carrier = inject_trace_context()
     return {
         "current_phase_index": 0,
         "current_wave_index": 0,
@@ -41,6 +67,7 @@ async def load_plan(state: ExecutionState) -> dict[str, Any]:
         "signals": None,
         "abort_reason": None,
         "pending_context": [],
+        "trace_carrier": carrier,
     }
 
 
@@ -110,14 +137,23 @@ async def prepare_wave(state: ExecutionState) -> dict[str, Any]:
 
 async def agent_node(item: WaveItem) -> dict[str, Any]:
     """Execute one wave item; receives WaveItem via Send (not state)."""
-    result = await invoke_agent(
-        item["agent_id"],
-        command=item["command"],
-        task=item["task"],
-        context=item.get("context") or [],
-        trace_id=item.get("trace_id", ""),
-        run_id=item.get("run_id", ""),
-    )
+    # Re-attach the execution-graph root trace context so the @agent
+    # wrapper's span becomes a child of the execution root rather than
+    # its own trace root. Must be paired with detach in a finally.
+    carrier = item.get("trace_carrier") or {}
+    token = extract_and_attach_trace_context(carrier) if carrier else None
+    try:
+        result = await invoke_agent(
+            item["agent_id"],
+            command=item["command"],
+            task=item["task"],
+            context=item.get("context") or [],
+            trace_id=item.get("trace_id", ""),
+            run_id=item.get("run_id", ""),
+        )
+    finally:
+        if token is not None:
+            detach_trace_context(token)
     signals_data = [dict(s) for s in result.signals]
     artifacts_data = [dict(a) for a in result.artifacts]
 
@@ -305,6 +341,7 @@ def dispatch_wave(state: ExecutionState) -> list[Send]:
                 ),
             )
     pending_context = list(state.get("pending_context") or [])
+    trace_carrier = dict(state.get("trace_carrier") or {})
     return [
         Send(
             "agent_node",
@@ -318,6 +355,7 @@ def dispatch_wave(state: ExecutionState) -> list[Send]:
                 trace_id=state.get("trace_id", ""),
                 run_id=state.get("run_id", ""),
                 context=pending_context,
+                trace_carrier=trace_carrier,
             ),
         )
         for idx, item in enumerate(wave["items"])

@@ -110,6 +110,34 @@ def test_shortcut_does_not_override_explicit_otel_vars(
     assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == "x-custom=value"
 
 
+def test_trace_context_propagates_across_extract_attach() -> None:
+    """Spans opened after re-attaching an injected carrier share the
+    same trace_id as the parent span. This is the mechanism that makes
+    every agent span in one monet run part of a single Langfuse trace."""
+    from monet._tracing import (
+        detach_trace_context,
+        extract_and_attach_trace_context,
+        inject_trace_context,
+    )
+
+    parent_tracer = get_tracer("monet.test.parent")
+    child_tracer = get_tracer("monet.test.child")
+
+    with parent_tracer.start_as_current_span("root") as parent:
+        parent_trace_id = parent.get_span_context().trace_id
+        carrier = inject_trace_context()
+    # Parent span is now ended. Simulate a downstream node re-attaching
+    # the carrier before opening its own span.
+    assert carrier  # carrier is non-empty (contains traceparent)
+    token = extract_and_attach_trace_context(carrier)
+    try:
+        with child_tracer.start_as_current_span("child") as child:
+            child_trace_id = child.get_span_context().trace_id
+    finally:
+        detach_trace_context(token)
+    assert child_trace_id == parent_trace_id
+
+
 def test_tracer_creates_span() -> None:
     """Tracer can create spans via context manager."""
     tracer = get_tracer("monet.agent")

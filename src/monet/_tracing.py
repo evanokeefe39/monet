@@ -11,7 +11,8 @@ import base64
 import os
 import warnings
 
-from opentelemetry import trace
+from opentelemetry import context as _ot_context
+from opentelemetry import propagate, trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -119,3 +120,32 @@ def get_tracer(name: str = "monet") -> trace.Tracer:
     if _provider is None:
         configure_tracing()
     return trace.get_tracer(name)
+
+
+def inject_trace_context() -> dict[str, str]:
+    """Capture the current OTel trace context as a W3C carrier dict.
+
+    Returned dict is safe to stash in LangGraph state (JSON-serialisable)
+    and pass between nodes. A downstream node calls
+    :func:`extract_and_attach_trace_context` to re-establish the context
+    before opening child spans — that makes all child spans part of the
+    same trace even though the original parent span is no longer live
+    in the current asyncio task.
+    """
+    carrier: dict[str, str] = {}
+    propagate.inject(carrier)
+    return carrier
+
+
+def extract_and_attach_trace_context(carrier: dict[str, str]) -> object:
+    """Inverse of :func:`inject_trace_context`. Returns an opaque token
+    that must be passed to :func:`detach_trace_context` in a finally
+    block once the child work completes."""
+    ctx = propagate.extract(carrier)
+    return _ot_context.attach(ctx)
+
+
+def detach_trace_context(token: object) -> None:
+    """Pop a previously-attached trace context. Must be called in a
+    ``finally`` block paired with :func:`extract_and_attach_trace_context`."""
+    _ot_context.detach(token)  # type: ignore[arg-type]
