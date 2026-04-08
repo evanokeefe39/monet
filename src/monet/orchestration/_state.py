@@ -85,6 +85,10 @@ class ExecutionState(TypedDict, total=False):
     trace_id: str
     run_id: str
     pending_context: list[dict[str, Any]]
+    # W3C trace context carrier (traceparent/tracestate) stashed by
+    # load_plan so agent_node can re-attach it and make every agent
+    # span a child of the root execution span instead of its own root.
+    trace_carrier: dict[str, str]
 
 
 class WaveItem(TypedDict, total=False):
@@ -93,6 +97,10 @@ class WaveItem(TypedDict, total=False):
     ``context`` carries resolved upstream outputs so each agent can see what
     prior waves produced. The orchestrator builds it in ``dispatch_wave``;
     individual agents receive it via the standard ``context`` parameter.
+
+    ``trace_carrier`` carries the W3C trace context from the execution
+    graph's root span so agent_node can re-attach it and make every
+    agent span part of a single Langfuse trace.
     """
 
     agent_id: str
@@ -104,6 +112,7 @@ class WaveItem(TypedDict, total=False):
     trace_id: str
     run_id: str
     context: list[dict[str, Any]]
+    trace_carrier: dict[str, str]
 
 
 class WaveResult(TypedDict):
