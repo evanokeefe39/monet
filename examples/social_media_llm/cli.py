@@ -41,6 +41,13 @@ from prompts import (
 )
 from workflow import run_execution, run_planning, run_triage
 
+from monet._tracing import (
+    RUN_ROOT_SPAN_NAME,
+    configure_tracing,
+    get_tracer,
+    inject_trace_context,
+)
+
 
 def _planning_decision_callback(_brief: dict[str, Any]) -> dict[str, Any]:
     # The brief was already printed before the prompt was called, so the
@@ -94,23 +101,17 @@ async def _run(server_url: str, topic: str, run_id: str) -> None:
             "Start it with: `uv run langgraph dev`"
         )
 
-    # Open a single "monet.run" root span on the CLI side and capture
-    # its W3C traceparent into a carrier dict. The span is closed
-    # immediately — the carrier is what flows downstream. Every server-
-    # side graph (entry / planning / execution) receives this carrier
-    # in run metadata and re-attaches it before invoking any agent, so
-    # all agent spans across all three graphs land under one Langfuse
+    # Open a single root span on the CLI side and capture its W3C
+    # traceparent into a carrier dict. The span is closed immediately
+    # — the carrier is what flows downstream. Every server-side graph
+    # (entry / planning / execution) receives this carrier in run
+    # metadata and re-attaches it before invoking any agent, so all
+    # agent spans across all three graphs land under one Langfuse
     # trace keyed by this run_id.
-    from monet._tracing import (
-        configure_tracing,
-        get_tracer,
-        inject_trace_context,
-    )
-
     configure_tracing()
     _tracer = get_tracer("monet.cli")
     with _tracer.start_as_current_span(
-        "monet.run",
+        RUN_ROOT_SPAN_NAME,
         attributes={"monet.run_id": run_id, "monet.topic": topic[:200]},
     ):
         trace_carrier = inject_trace_context()

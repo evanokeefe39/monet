@@ -32,8 +32,17 @@ from .types import (
     SignalType,
 )
 
-# Default content limit for automatic offload (bytes)
+# Default content limit for automatic offload (bytes).
+#
+# Return values whose string form exceeds this length are written to
+# the catalogue as an artifact and replaced inline with a short summary.
 DEFAULT_CONTENT_LIMIT = 4000
+
+#: error_type metadata value emitted by the poka-yoke guard when an
+#: agent returns empty output and writes no artifacts. Constant so
+#: downstream routing rules can match on it without stringly-typed
+#: comparisons.
+EMPTY_AGENT_RESULT_ERROR_TYPE = "empty_agent_result"
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -142,7 +151,7 @@ async def _wrap_result(
                         "If the agent is intentionally signal-only, decorate "
                         "it with @agent(..., allow_empty=True)."
                     ),
-                    metadata={"error_type": "empty_agent_result"},
+                    metadata={"error_type": EMPTY_AGENT_RESULT_ERROR_TYPE},
                 )
             )
             return AgentResult(

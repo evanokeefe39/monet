@@ -17,10 +17,11 @@ from ._state import (
     WaveResult,
 )
 from .entry_graph import build_entry_graph
-from .execution_graph import build_execution_graph
+from .execution_graph import AGENT_FAILED_EVENT_STATUS, build_execution_graph
 from .planning_graph import build_planning_graph
 
 __all__ = [
+    "AGENT_FAILED_EVENT_STATUS",
     "EntryState",
     "ExecutionState",
     "PlanningState",

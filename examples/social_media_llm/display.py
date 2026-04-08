@@ -14,6 +14,8 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
+from monet.orchestration import AGENT_FAILED_EVENT_STATUS
+
 if TYPE_CHECKING:
     from monet._catalogue import CatalogueHandle
 
@@ -87,7 +89,7 @@ def print_streaming_event(label: str, mode: str, data: Any) -> None:
         # Andon cord: agent_node emits this on failure so the operator
         # sees the upstream failure inline with the run log rather than
         # having to correlate an empty wave_result to a QA "no content".
-        if status == "agent failed":
+        if status == AGENT_FAILED_EVENT_STATUS:
             reasons = data.get("reasons") or ""
             types = data.get("signal_types") or []
             header = f"!! {agent_name}/{data.get('command', '')} FAILED"

@@ -24,6 +24,7 @@ from langgraph.types import Send, interrupt
 from monet import emit_progress, get_catalogue
 from monet._registry import default_registry
 from monet._tracing import (
+    EXECUTION_ROOT_SPAN_NAME,
     attached_trace,
     get_tracer,
     inject_trace_context,
@@ -36,6 +37,12 @@ from ._state import ExecutionState, WaveItem, WaveResult
 from ._validate import _assert_registered
 
 MAX_WAVE_RETRIES = 3
+
+#: ``emit_progress`` status value emitted by ``agent_node`` when a
+#: wave item's agent returns ``success=False``. Consumers (display
+#: renderers, log shippers) can match on this constant instead of the
+#: raw string.
+AGENT_FAILED_EVENT_STATUS = "agent failed"
 
 
 def _latest_attempts(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -69,11 +76,11 @@ async def load_plan(state: ExecutionState, config: RunnableConfig) -> dict[str, 
     # Langfuse trace keyed by the CLI's monet.run span.
     upstream_carrier = extract_carrier_from_config(config)
     async with attached_trace(upstream_carrier):
-        tracer = get_tracer("monet.execution")
+        tracer = get_tracer(EXECUTION_ROOT_SPAN_NAME)
         work_brief = state.get("work_brief") or {}
         phases = work_brief.get("phases") or []
         with tracer.start_as_current_span(
-            "monet.execution",
+            EXECUTION_ROOT_SPAN_NAME,
             attributes={
                 "monet.run_id": state.get("run_id", ""),
                 "monet.trace_id": state.get("trace_id", ""),
@@ -234,7 +241,7 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
         )
         emit_progress(
             {
-                "status": "agent failed",
+                "status": AGENT_FAILED_EVENT_STATUS,
                 "agent": item["agent_id"],
                 "command": item["command"],
                 "reasons": failure_reasons,
