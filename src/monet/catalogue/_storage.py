@@ -58,9 +58,16 @@ class FilesystemStorage:
         async with aiofiles.open(artifact_dir / "meta.json", "w") as f:
             await f.write(json.dumps(metadata, indent=2))
 
+        # ``self.root`` is guaranteed absolute by the caller (server_graphs.py
+        # resolves it at import time), so the joined path is already absolute
+        # and can be formatted by ``Path.as_uri()`` directly. Do NOT call
+        # ``.resolve()`` here — on Windows it invokes ``os.path.realpath`` ->
+        # ``os.getcwd`` which is a blocking syscall. Under ``langgraph dev``
+        # that is intercepted by blockbuster and raised as a BlockingError,
+        # killing every agent invocation with an empty AgentResult.
         return ArtifactPointer(
             artifact_id=artifact_id,
-            url=(artifact_dir / "content").resolve().as_uri(),
+            url=(artifact_dir / "content").as_uri(),
         )
 
     async def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]:
