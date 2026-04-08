@@ -146,7 +146,23 @@ async def test_workflow_against_mocked_server(
         must read the bytes via ``monet.get_catalogue()``, NOT via any
         regex on ``output``.
     """
-    from examples.social_media_llm import app, cli, client, prompts
+    # Put the example dir on sys.path so the flat ``app`` / ``cli`` /
+    # ``prompts`` modules are importable the same way ``cli.py`` imports
+    # them. Patching ``cli``'s bound references directly then avoids
+    # fighting the two-namespace problem (``examples.social_media_llm``
+    # package form vs the flat top-level form ``cli.py`` uses).
+    import sys
+
+    example_dir = (
+        Path(__file__).resolve().parent.parent
+        / "examples"
+        / "social_media_llm"
+    )
+    sys.path.insert(0, str(example_dir))
+
+    import app
+    import cli
+    import prompts
 
     app.configure_app()
 
@@ -258,16 +274,27 @@ async def test_workflow_against_mocked_server(
     }
 
     fake_client = _FakeClient(scripts)
-    monkeypatch.setattr(client, "get_client", lambda url=None: fake_client)
+    # Patch the bound ``make_client`` / ``check_server`` references on
+    # the ``cli`` module. ``cli.py`` did ``from client import
+    # make_client``, which imported the function into its own namespace;
+    # that's the reference ``_run`` actually calls.
+    monkeypatch.setattr(cli, "make_client", lambda _url: fake_client)
 
-    # Always approve on the planning HITL prompt.
-    monkeypatch.setattr(prompts, "prompt_planning_decision", lambda: {"approved": True})
-    # Execution has no interrupts in this script.
+    async def _always_reachable(_client: object) -> bool:
+        return True
+
+    monkeypatch.setattr(cli, "check_server", _always_reachable)
+
+    # Always approve on the planning HITL prompt. Patch the bound
+    # reference on ``cli`` for the same reason as ``make_client`` above.
+    monkeypatch.setattr(cli, "prompt_planning_decision", lambda: {"approved": True})
     monkeypatch.setattr(
-        prompts,
+        cli,
         "prompt_execution_decision",
         lambda: {"action": "continue"},
     )
+    # Silence unused-import warning on ``prompts``.
+    _ = prompts
 
     # Drive _run directly so we don't go through the asyncio.run wrapper.
     await cli._run("http://fake", "test topic", "abc12345")

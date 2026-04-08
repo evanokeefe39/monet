@@ -161,22 +161,56 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
     """Call qa/fast to evaluate the current wave's results.
 
     Resolves each wave_result into a context entry (fetching catalogue
-    artifacts where needed) so QA can actually see the produced content
-    instead of evaluating an opaque JSON blob.
+    artifacts where needed) and builds a concrete evaluation task from
+    the original wave items' ``task`` strings in the work brief. A
+    literal task like "Evaluate wave 0.0 results" makes QA grade the
+    artifacts against that meaningless sentence; passing the original
+    item tasks tells QA what "pass" actually means.
     """
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
     current_results = [
         r
         for r in state.get("wave_results", [])
-        if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
+        if r.get("phase_index") == current_phase
+        and r.get("wave_index") == current_wave
     ]
     qa_context = [await _resolve_wave_result(wr) for wr in current_results]
+
+    # Pull the original item tasks from the work brief so QA knows what
+    # each artifact was supposed to accomplish.
+    phases = state["work_brief"].get("phases") or []
+    goal = state["work_brief"].get("goal", "")
+    item_tasks: list[str] = []
+    try:
+        phase = phases[current_phase]
+        wave = (phase.get("waves") or [])[current_wave]
+        for item in wave.get("items") or []:
+            agent_id = item.get("agent_id", "?")
+            command = item.get("command", "?")
+            task_text = item.get("task", "")
+            item_tasks.append(f"  - {agent_id}/{command}: {task_text}")
+    except (IndexError, KeyError):
+        item_tasks = []
+
+    task_lines: list[str] = []
+    if goal:
+        task_lines.append(f"Overall goal: {goal}")
+    task_lines.append(
+        f"Evaluate whether the artifacts below satisfy the {len(item_tasks)} "
+        f"task(s) assigned to this wave (phase {current_phase}, "
+        f"wave {current_wave}):"
+    )
+    if item_tasks:
+        task_lines.extend(item_tasks)
+    else:
+        task_lines.append("  (no item metadata available)")
+    qa_task = "\n".join(task_lines)
 
     result = await invoke_agent(
         "qa",
         command="fast",
-        task=f"Evaluate wave {current_phase}.{current_wave} results",
+        task=qa_task,
         context=qa_context,
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),

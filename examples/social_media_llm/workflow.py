@@ -26,8 +26,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .client import stream_run
-from .display import print_streaming_event
+from client import stream_run
+from display import print_streaming_event
 
 if TYPE_CHECKING:
     from collections.abc import Callable

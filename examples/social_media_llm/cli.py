@@ -14,14 +14,19 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import sys
 import uuid
+from pathlib import Path
 from typing import Any
 
-import click
+# Allow running as ``python cli.py`` from inside the example dir by
+# adding this dir to sys.path before the sibling imports.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from .app import check_environment, check_server, configure_app
-from .client import create_thread, make_client
-from .display import (
+import click
+from app import check_environment, check_server, configure_app
+from client import create_thread, make_client
+from display import (
     print_brief,
     print_env_status,
     print_header,
@@ -30,8 +35,11 @@ from .display import (
     print_triage,
     print_wave_results,
 )
-from .prompts import prompt_execution_decision, prompt_planning_decision
-from .workflow import run_execution, run_planning, run_triage
+from prompts import (
+    prompt_execution_decision,
+    prompt_planning_decision,
+)
+from workflow import run_execution, run_planning, run_triage
 
 
 def _planning_decision_callback(_brief: dict[str, Any]) -> dict[str, Any]:
