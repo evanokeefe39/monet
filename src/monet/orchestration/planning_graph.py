@@ -18,10 +18,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from monet import get_catalogue
-from monet._tracing import (
-    detach_trace_context,
-    extract_and_attach_trace_context,
-)
+from monet._tracing import attached_trace
 
 from ._invoke import extract_carrier_from_config, invoke_agent
 from ._state import PlanningState
@@ -47,9 +44,7 @@ async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str
             {"type": "instruction", "summary": "Human feedback", "content": feedback}
         )
 
-    carrier = extract_carrier_from_config(config)
-    token = extract_and_attach_trace_context(carrier) if carrier else None
-    try:
+    async with attached_trace(extract_carrier_from_config(config)):
         result = await invoke_agent(
             "planner",
             command="plan",
@@ -58,9 +53,6 @@ async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str
             trace_id=state.get("trace_id", ""),
             run_id=state.get("run_id", ""),
         )
-    finally:
-        if token is not None:
-            detach_trace_context(token)
 
     brief: dict[str, Any] = {}
     if isinstance(result.output, dict):
