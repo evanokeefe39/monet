@@ -309,6 +309,97 @@ async def test_side_artifact_still_offloads(_catalogue: None) -> None:
     assert result.output == returned[:200]
 
 
+async def test_empty_string_no_artifacts_is_defect(_catalogue: None) -> None:
+    """Poka-yoke: empty string return + zero artifacts is a defect signal,
+    not a silent success. This is the regression guard for the BlockingError
+    case where reference agents produced empty AgentResults for three
+    revisions before the execution graph gave up."""
+
+    @agent(agent_id="test-empty-string")
+    async def empty_agent(task: str) -> str:
+        return ""
+
+    result = await empty_agent(_ctx(task="t", agent_id="test-empty-string"))
+    assert result.success is False
+    assert len(result.artifacts) == 0
+    assert any(
+        s["type"] == "semantic_error"
+        and (s["metadata"] or {}).get("error_type") == "empty_agent_result"
+        for s in result.signals
+    )
+
+
+async def test_none_return_no_artifacts_is_defect(_catalogue: None) -> None:
+    """None return with no artifacts is the same defect class as empty
+    string — agent produced nothing at all."""
+
+    @agent(agent_id="test-none-return")
+    async def none_agent(task: str) -> None:
+        return None
+
+    result = await none_agent(_ctx(task="t", agent_id="test-none-return"))
+    assert result.success is False
+    assert any(
+        (s["metadata"] or {}).get("error_type") == "empty_agent_result"
+        for s in result.signals
+    )
+
+
+async def test_allow_empty_opt_out(_catalogue: None) -> None:
+    """Agents that legitimately return nothing (e.g. signal-only ack
+    handlers) can opt out of the empty-result guard."""
+
+    @agent(agent_id="test-allow-empty", allow_empty=True)
+    async def ack_agent(task: str) -> None:
+        return None
+
+    result = await ack_agent(_ctx(task="t", agent_id="test-allow-empty"))
+    assert result.success is True
+    assert result.output is None
+    assert not any(
+        (s["metadata"] or {}).get("error_type") == "empty_agent_result"
+        for s in result.signals
+    )
+
+
+async def test_dict_return_exempt_from_empty_guard(_catalogue: None) -> None:
+    """Dict returns are structured output and exempt from the guard even
+    when small."""
+
+    @agent(agent_id="test-dict-return")
+    async def dict_agent(task: str) -> dict:  # type: ignore[type-arg]
+        return {"verdict": "pass"}
+
+    result = await dict_agent(_ctx(task="t", agent_id="test-dict-return"))
+    assert result.success is True
+    assert result.output == {"verdict": "pass"}
+
+
+async def test_empty_string_with_artifact_is_success(_catalogue: None) -> None:
+    """A short/empty return string is fine as long as an artifact was
+    written — the agent produced something, the inline output just
+    wasn't the primary vehicle."""
+
+    @agent(agent_id="test-empty-string-with-artifact")
+    async def stringy_agent(task: str) -> str:
+        from monet import get_catalogue
+
+        await get_catalogue().write(
+            content=b"real content",
+            content_type="text/plain",
+            summary="s",
+            confidence=0.9,
+            completeness="complete",
+        )
+        return ""
+
+    result = await stringy_agent(
+        _ctx(task="t", agent_id="test-empty-string-with-artifact")
+    )
+    assert result.success is True
+    assert len(result.artifacts) == 1
+
+
 async def test_short_return_with_explicit_write(_catalogue: None) -> None:
     """Short return + explicit write — 1 artifact, output unchanged."""
 
