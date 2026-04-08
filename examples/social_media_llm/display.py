@@ -84,6 +84,19 @@ def print_streaming_event(label: str, mode: str, data: Any) -> None:
             return
         status = data.get("status", "")
         agent_name = data.get("agent", "")
+        # Andon cord: agent_node emits this on failure so the operator
+        # sees the upstream failure inline with the run log rather than
+        # having to correlate an empty wave_result to a QA "no content".
+        if status == "agent failed":
+            reasons = data.get("reasons") or ""
+            types = data.get("signal_types") or []
+            header = f"!! {agent_name}/{data.get('command', '')} FAILED"
+            if types:
+                header += f" [{', '.join(t for t in types if t)}]"
+            print(header)
+            if reasons:
+                print(f"   reason: {reasons}")
+            return
         if agent_name:
             print(f"    -> {agent_name}: {status}")
         elif status:
@@ -118,6 +131,23 @@ async def print_wave_results(
         aid = wr.get("agent_id")
         cmd = wr.get("command")
         print(f"\n    [{pi}.{wi}.{ii}] {aid}/{cmd}:")
+
+        # Andon cord: failures take over the block. Any signal whose
+        # type looks like an error is surfaced loudly; the artifact /
+        # output rendering is skipped because empty content on a
+        # failed agent is noise, not data.
+        signals = wr.get("signals") or []
+        failure_signals = [
+            s for s in signals if _is_failure_signal(s.get("type") or "")
+        ]
+        if failure_signals:
+            for s in failure_signals:
+                reason_line = (s.get("reason") or "").splitlines()[0][:300]
+                _safe_print(f"    !! {s.get('type')}: {reason_line}")
+                meta = s.get("metadata") or {}
+                if meta.get("error_type"):
+                    _safe_print(f"       error_type={meta['error_type']}")
+            continue
 
         artifacts = wr.get("artifacts") or []
         if artifacts:
@@ -173,18 +203,45 @@ def print_summary(
     completed = final_state.get("completed_phases", []) or []
     wave_results = final_state.get("wave_results", []) or []
     reflections = final_state.get("wave_reflections", []) or []
+    failed = sum(
+        1
+        for wr in wave_results
+        if any(
+            _is_failure_signal(s.get("type") or "") for s in (wr.get("signals") or [])
+        )
+    )
     print(f"  Run ID: {run_id}")
     print(
         f"  Phases completed: {len(completed)}/"
         f"{len(work_brief.get('phases', []) or [])}"
     )
     print(f"  Total agent invocations: {len(wave_results)}")
+    if failed:
+        print(f"  Failed invocations: {failed}")
     print(f"  QA reflections: {len(reflections)}")
     if final_state.get("abort_reason"):
         print(f"  Aborted: {final_state['abort_reason']}")
 
 
 # ── Internals ─────────────────────────────────────────────────────────
+
+
+_FAILURE_SIGNAL_TYPES: frozenset[str] = frozenset(
+    {
+        "semantic_error",
+        "needs_human_review",
+        "escalation_required",
+    }
+)
+
+
+def _is_failure_signal(signal_type: str) -> bool:
+    """True for signal types that represent an upstream failure worth
+    surfacing prominently to the operator. Kept narrow on purpose: a
+    routing or audit signal is not an error."""
+    if signal_type in _FAILURE_SIGNAL_TYPES:
+        return True
+    return signal_type.endswith("_error")
 
 
 def _osc8(url: str, text: str) -> str:
