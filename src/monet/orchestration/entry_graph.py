@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from langchain_core.runnables import (
+    RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
+)
 from langgraph.graph import END, StateGraph
 
 from monet._tracing import (
@@ -22,9 +25,7 @@ from ._state import EntryState
 from ._validate import _assert_registered
 
 
-async def triage_node(
-    state: EntryState, config: dict[str, Any] | None = None
-) -> dict[str, Any]:
+async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, Any]:
     """Call planner/fast to classify task complexity."""
     carrier = extract_carrier_from_config(config)
     token = extract_and_attach_trace_context(carrier) if carrier else None

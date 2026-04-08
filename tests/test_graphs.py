@@ -149,6 +149,77 @@ async def test_execution_graph_runs_all_waves() -> None:
     assert result["wave_reflections"][0]["verdict"] == "pass"
 
 
+async def test_execution_graph_retry_after_blocking_signal() -> None:
+    """Regression guard for the infinite interrupt loop.
+
+    When a wave attempt emits a blocking signal (e.g. NeedsHumanReview),
+    the graph interrupts at human_interrupt. A human-initiated retry
+    should rerun the wave from scratch, append fresh wave_results, and
+    — critically — collect_wave must only evaluate the *latest* attempt
+    per item_index. Without that filter, the stale blocking signal
+    from the first attempt persists in the append-only wave_results
+    list and re-triggers human_interrupt forever.
+    """
+    import json as _json
+
+    from monet import agent as agent_decorator
+    from monet.exceptions import NeedsHumanReview
+
+    brief = _json.loads(_BRIEF)
+
+    # Override writer/deep with a counter-driven agent: raise on the
+    # first call (→ NEEDS_HUMAN_REVIEW signal → blocking), succeed on
+    # the retry.
+    call_count = {"n": 0}
+
+    @agent_decorator(agent_id="writer", command="deep")
+    async def flaky_writer(task: str) -> str:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise NeedsHumanReview(reason="confidence too low on first pass")
+        return "Successful content on retry"
+
+    with patch("monet.agents.qa._get_model", return_value=_mock(_QA)):
+        graph = build_execution_graph().compile(checkpointer=MemorySaver())
+        config: RunnableConfig = {"configurable": {"thread_id": "exec-retry"}}
+        # First pass: wave hits NEEDS_HUMAN_REVIEW → interrupt.
+        await graph.ainvoke(
+            {
+                "work_brief": brief,
+                "trace_id": "t",
+                "run_id": "r",
+                "current_phase_index": 0,
+                "current_wave_index": 0,
+                "wave_results": [],
+                "wave_reflections": [],
+                "completed_phases": [],
+                "revision_count": 0,
+            },
+            config=config,
+        )
+        state = await graph.aget_state(config)
+        assert "human_interrupt" in state.next, (
+            "Expected graph to pause at human_interrupt after blocking signal"
+        )
+
+        # Retry: resume without abort_reason so route_after_interrupt
+        # sends the graph back to prepare_wave for a fresh attempt.
+        result = await graph.ainvoke(Command(resume={"action": "retry"}), config=config)
+
+    # The graph must complete past the stale blocking attempt.
+    # Without the _latest_attempts filter, collect_wave would re-detect
+    # the stale NEEDS_HUMAN_REVIEW from attempt 1 and loop forever.
+    assert call_count["n"] == 2, "Writer should have run exactly twice"
+    assert result.get("abort_reason") is None
+    # Both wave_result entries are still in the append-only list, but
+    # the graph advanced past them.
+    assert len(result["wave_results"]) == 2
+    # The latest wave_reflection should see the successful retry only.
+    assert any(
+        ref.get("verdict") == "pass" for ref in result.get("wave_reflections", [])
+    )
+
+
 async def test_run_end_to_end() -> None:
     with (
         patch("monet.agents.planner._get_model") as planner_mock,

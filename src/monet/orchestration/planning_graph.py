@@ -11,6 +11,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from langchain_core.runnables import (
+    RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
+)
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
@@ -27,9 +30,7 @@ from ._validate import _assert_registered
 MAX_REVISIONS = 3
 
 
-async def planner_node(
-    state: PlanningState, config: dict[str, Any] | None = None
-) -> dict[str, Any]:
+async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str, Any]:
     """Call planner/plan to produce a work brief."""
     context_entries: list[dict[str, Any]] = []
     for entry in state.get("planning_context") or []:

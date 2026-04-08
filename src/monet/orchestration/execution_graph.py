@@ -15,6 +15,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from langchain_core.runnables import (
+    RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
+)
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
@@ -36,9 +39,30 @@ from ._validate import _assert_registered
 MAX_WAVE_RETRIES = 3
 
 
-async def load_plan(
-    state: ExecutionState, config: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def _latest_attempts(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate wave_results by ``item_index``, keeping the last.
+
+    ``ExecutionState.wave_results`` uses an append-only reducer, so a
+    wave retried after a blocking signal accumulates both the stale
+    failed attempt and the fresh attempt. Any code that inspects the
+    current wave's results must look at the most recent attempt per
+    item only, otherwise old blocking signals re-trigger the human
+    interrupt forever (and QA evaluates stale context alongside fresh
+    content). Caller is expected to have already filtered by
+    ``(phase_index, wave_index)``.
+    """
+    latest: dict[int, dict[str, Any]] = {}
+    for r in results:
+        idx = r.get("item_index")
+        if not isinstance(idx, int):
+            # Shouldn't happen in practice; preserve the entry under a
+            # synthetic key so we don't silently drop results.
+            idx = -id(r)
+        latest[idx] = r
+    return list(latest.values())
+
+
+async def load_plan(state: ExecutionState, config: RunnableConfig) -> dict[str, Any]:
     # If the CLI injected a root carrier via run metadata, attach it
     # first so the "monet.execution" span we open below becomes a child
     # of that root instead of starting a fresh trace. This is what
@@ -202,11 +226,14 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
     """Filter results for current wave; flag blocking signals."""
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
-    current_results = [
-        r
-        for r in state.get("wave_results", [])
-        if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
-    ]
+    current_results = _latest_attempts(
+        [
+            r
+            for r in state.get("wave_results", [])
+            if r.get("phase_index") == current_phase
+            and r.get("wave_index") == current_wave
+        ]
+    )
 
     has_blocking = any(
         in_group(s.get("type", ""), BLOCKING)
@@ -233,11 +260,14 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
     """
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
-    current_results = [
-        r
-        for r in state.get("wave_results", [])
-        if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
-    ]
+    current_results = _latest_attempts(
+        [
+            r
+            for r in state.get("wave_results", [])
+            if r.get("phase_index") == current_phase
+            and r.get("wave_index") == current_wave
+        ]
+    )
     qa_context = [await _resolve_wave_result(wr) for wr in current_results]
 
     # Pull the original item tasks from the work brief so QA knows what
