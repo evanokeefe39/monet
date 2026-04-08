@@ -11,6 +11,9 @@ import secrets
 import uuid
 from typing import Any
 
+from langchain_core.runnables import (
+    RunnableConfig,  # noqa: TC002 — referenced in public API signature
+)
 from opentelemetry import propagate, trace
 
 from monet._registry import default_registry
@@ -44,7 +47,9 @@ def _generate_trace_id() -> str:
     return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
 
 
-def extract_carrier_from_config(config: dict[str, Any] | None) -> dict[str, str]:
+def extract_carrier_from_config(
+    config: RunnableConfig | None,
+) -> dict[str, str]:
     """Pull the CLI-side trace carrier out of langgraph run metadata.
 
     The CLI injects a W3C traceparent carrier into each langgraph run's
