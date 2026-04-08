@@ -60,7 +60,7 @@ class FilesystemStorage:
 
         return ArtifactPointer(
             artifact_id=artifact_id,
-            url=f"file://{artifact_dir / 'content'}",
+            url=(artifact_dir / "content").resolve().as_uri(),
         )
 
     async def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]:
