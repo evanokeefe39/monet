@@ -75,6 +75,7 @@ async def _wrap_result(
     artifacts: list[ArtifactPointer],
     signals: list[Signal],
     written_hashes: set[str],
+    allow_empty: bool = False,
     content_limit: int = DEFAULT_CONTENT_LIMIT,
 ) -> AgentResult:
     """Assemble a successful AgentResult from a function's return value.
@@ -83,6 +84,15 @@ async def _wrap_result(
     ``content_limit`` and a catalogue backend is configured, the full
     content is offloaded to the catalogue (the pointer lands in
     ``artifacts``) and ``output`` becomes a short inline summary.
+
+    Poka-yoke guard: when ``allow_empty`` is ``False`` (the default),
+    a string/None return that leaves ``output`` effectively empty AND
+    produces no artifacts is treated as a defect — the result is
+    downgraded to ``success=False`` with a ``SEMANTIC_ERROR`` signal
+    of type ``empty_agent_result``. Dict returns are exempt because
+    structured outputs are legitimately small. Agents that legitimately
+    return nothing (e.g. signal-only ack handlers) must opt out with
+    ``@agent(..., allow_empty=True)``.
     """
     output: str | dict[str, Any] | None
     if return_value is None:
@@ -115,6 +125,34 @@ async def _wrap_result(
                     output = output_str[:200]
                 except NotImplementedError:
                     pass
+
+    # Poka-yoke: surface empty string/None results with no artifacts as a
+    # defect so the execution graph / review interface can't silently
+    # treat them as success. Dicts are exempt (structured outputs may
+    # legitimately be tiny) and ``allow_empty`` opts out entirely.
+    if not allow_empty and not isinstance(output, dict) and not artifacts:
+        is_empty = output is None or (isinstance(output, str) and not output.strip())
+        if is_empty:
+            signals.append(
+                Signal(
+                    type=SignalType.SEMANTIC_ERROR,
+                    reason=(
+                        "Agent returned empty output and wrote no artifacts. "
+                        "This usually means an upstream call failed silently. "
+                        "If the agent is intentionally signal-only, decorate "
+                        "it with @agent(..., allow_empty=True)."
+                    ),
+                    metadata={"error_type": "empty_agent_result"},
+                )
+            )
+            return AgentResult(
+                success=False,
+                output="",
+                artifacts=list(artifacts),
+                signals=list(signals),
+                trace_id=ctx.get("trace_id", ""),
+                run_id=ctx.get("run_id", ""),
+            )
 
     return AgentResult(
         success=True,
@@ -191,6 +229,7 @@ def agent(
     *,
     agent_id: str,
     command: str = "fast",
+    allow_empty: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
 
@@ -200,6 +239,7 @@ def agent(
     *,
     agent_id: str = "",
     command: str = "fast",
+    allow_empty: bool = False,
 ) -> Any:
     """Decorator that wraps a callable as an agent handler.
 
@@ -213,6 +253,11 @@ def agent(
 
     Both produce identical registry entries. Registration happens at
     decoration time (import time).
+
+    ``allow_empty`` (default ``False``) disables the empty-result
+    poka-yoke in ``_wrap_result``. Only set to ``True`` for agents that
+    legitimately return no output and write no artifacts, such as
+    signal-only ack handlers.
     """
     # Form 1: agent("researcher") → bound partial
     if isinstance(agent_id_or_fn, str):
@@ -251,7 +296,12 @@ def agent(
                         else:
                             result = fn(**kwargs)
                         agent_result = await _wrap_result(
-                            result, ctx, artifacts, signal_list, written_hashes
+                            result,
+                            ctx,
+                            artifacts,
+                            signal_list,
+                            written_hashes,
+                            allow_empty=allow_empty,
                         )
                         span.set_attribute("agent.success", agent_result.success)
                         return agent_result
