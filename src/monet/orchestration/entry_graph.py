@@ -15,10 +15,7 @@ from langchain_core.runnables import (
 )
 from langgraph.graph import END, StateGraph
 
-from monet._tracing import (
-    detach_trace_context,
-    extract_and_attach_trace_context,
-)
+from monet._tracing import attached_trace
 
 from ._invoke import extract_carrier_from_config, invoke_agent
 from ._state import EntryState
@@ -27,9 +24,7 @@ from ._validate import _assert_registered
 
 async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, Any]:
     """Call planner/fast to classify task complexity."""
-    carrier = extract_carrier_from_config(config)
-    token = extract_and_attach_trace_context(carrier) if carrier else None
-    try:
+    async with attached_trace(extract_carrier_from_config(config)):
         result = await invoke_agent(
             "planner",
             command="fast",
@@ -37,9 +32,6 @@ async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, An
             trace_id=state.get("trace_id", ""),
             run_id=state.get("run_id", ""),
         )
-    finally:
-        if token is not None:
-            detach_trace_context(token)
     try:
         triage = json.loads(result.output) if isinstance(result.output, str) else {}
     except json.JSONDecodeError:

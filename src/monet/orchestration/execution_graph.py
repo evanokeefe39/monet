@@ -24,8 +24,7 @@ from langgraph.types import Send, interrupt
 from monet import emit_progress, get_catalogue
 from monet._registry import default_registry
 from monet._tracing import (
-    detach_trace_context,
-    extract_and_attach_trace_context,
+    attached_trace,
     get_tracer,
     inject_trace_context,
 )
@@ -69,10 +68,7 @@ async def load_plan(state: ExecutionState, config: RunnableConfig) -> dict[str, 
     # unifies the triage + planning + execution graphs under one
     # Langfuse trace keyed by the CLI's monet.run span.
     upstream_carrier = extract_carrier_from_config(config)
-    upstream_token = (
-        extract_and_attach_trace_context(upstream_carrier) if upstream_carrier else None
-    )
-    try:
+    async with attached_trace(upstream_carrier):
         tracer = get_tracer("monet.execution")
         work_brief = state.get("work_brief") or {}
         phases = work_brief.get("phases") or []
@@ -86,9 +82,6 @@ async def load_plan(state: ExecutionState, config: RunnableConfig) -> dict[str, 
             },
         ):
             carrier = inject_trace_context()
-    finally:
-        if upstream_token is not None:
-            detach_trace_context(upstream_token)
     return {
         "current_phase_index": 0,
         "current_wave_index": 0,
@@ -216,10 +209,8 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
     """Execute one wave item; receives WaveItem via Send (not state)."""
     # Re-attach the execution-graph root trace context so the @agent
     # wrapper's span becomes a child of the execution root rather than
-    # its own trace root. Must be paired with detach in a finally.
-    carrier = item.get("trace_carrier") or {}
-    token = extract_and_attach_trace_context(carrier) if carrier else None
-    try:
+    # its own trace root.
+    async with attached_trace(item.get("trace_carrier")):
         result = await invoke_agent(
             item["agent_id"],
             command=item["command"],
@@ -228,9 +219,6 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
             trace_id=item.get("trace_id", ""),
             run_id=item.get("run_id", ""),
         )
-    finally:
-        if token is not None:
-            detach_trace_context(token)
     signals_data = [dict(s) for s in result.signals]
     artifacts_data = [dict(a) for a in result.artifacts]
 

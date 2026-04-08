@@ -10,11 +10,16 @@ import atexit
 import base64
 import os
 import warnings
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from opentelemetry import context as _ot_context
 from opentelemetry import propagate, trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _provider: TracerProvider | None = None
 _exporter_attached: bool = False
@@ -140,7 +145,12 @@ def inject_trace_context() -> dict[str, str]:
 def extract_and_attach_trace_context(carrier: dict[str, str]) -> object:
     """Inverse of :func:`inject_trace_context`. Returns an opaque token
     that must be passed to :func:`detach_trace_context` in a finally
-    block once the child work completes."""
+    block once the child work completes.
+
+    Prefer :func:`attached_trace` (async context manager) over this
+    low-level pair at new call sites — the CM makes the detach
+    unforgettable.
+    """
     ctx = propagate.extract(carrier)
     return _ot_context.attach(ctx)
 
@@ -149,3 +159,33 @@ def detach_trace_context(token: object) -> None:
     """Pop a previously-attached trace context. Must be called in a
     ``finally`` block paired with :func:`extract_and_attach_trace_context`."""
     _ot_context.detach(token)  # type: ignore[arg-type]
+
+
+@asynccontextmanager
+async def attached_trace(
+    carrier: dict[str, str] | None,
+) -> AsyncIterator[None]:
+    """Async CM that attaches a W3C trace carrier for the duration of
+    the block and detaches it on exit — including exceptional exits.
+
+    Usage::
+
+        async with attached_trace(carrier):
+            result = await invoke_agent(...)
+
+    When ``carrier`` is empty or ``None``, the CM is a no-op: no
+    attach, no detach. This keeps call sites free of
+    ``if carrier:`` gates and guarantees the detach cannot be
+    forgotten. Prefer this over the raw
+    :func:`extract_and_attach_trace_context` / :func:`detach_trace_context`
+    pair — four identical try/finally blocks across the orchestration
+    modules collapse to one ``async with`` each.
+    """
+    if not carrier:
+        yield
+        return
+    token = extract_and_attach_trace_context(carrier)
+    try:
+        yield
+    finally:
+        detach_trace_context(token)
