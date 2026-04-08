@@ -341,14 +341,21 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
         task_lines.append("  (no item metadata available)")
     qa_task = "\n".join(task_lines)
 
-    result = await invoke_agent(
-        "qa",
-        command="fast",
-        task=qa_task,
-        context=qa_context,
-        trace_id=state.get("trace_id", ""),
-        run_id=state.get("run_id", ""),
-    )
+    # Re-attach the execution-graph root trace context so the qa span
+    # nests under monet.execution instead of becoming its own root. The
+    # carrier lives on ExecutionState because wave_reflection receives
+    # state (not a WaveItem like agent_node does). Without this, every
+    # wave_reflection qa call showed up as a loose top-level trace in
+    # Langfuse with the same run_id as monet.run.
+    async with attached_trace(state.get("trace_carrier")):
+        result = await invoke_agent(
+            "qa",
+            command="fast",
+            task=qa_task,
+            context=qa_context,
+            trace_id=state.get("trace_id", ""),
+            run_id=state.get("run_id", ""),
+        )
 
     verdict_data: dict[str, Any] = {}
     if isinstance(result.output, str) and result.output.strip():
