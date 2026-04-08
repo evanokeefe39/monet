@@ -2,7 +2,33 @@
 
 from __future__ import annotations
 
-from monet._tracing import configure_tracing, get_tracer
+import base64
+
+import pytest
+
+from monet._tracing import (
+    _apply_honeycomb_shortcut,
+    _apply_langfuse_shortcut,
+    _apply_langsmith_shortcut,
+    configure_tracing,
+    get_tracer,
+)
+
+
+@pytest.fixture
+def clean_otel_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in (
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+        "LANGSMITH_API_KEY",
+        "LANGSMITH_PROJECT",
+        "HONEYCOMB_API_KEY",
+        "HONEYCOMB_DATASET",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_get_tracer() -> None:
@@ -20,6 +46,68 @@ def test_configure_tracing_idempotent() -> None:
     configure_tracing()
     configure_tracing()
     configure_tracing(service_name="custom")
+
+
+def test_langfuse_shortcut_derives_endpoint_and_header(
+    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    _apply_langfuse_shortcut()
+    import os
+
+    assert (
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
+        == "http://localhost:3000/api/public/otel"
+    )
+    expected = base64.b64encode(b"pk-lf-test:sk-lf-test").decode()
+    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == f"Authorization=Basic {expected}"
+
+
+def test_langsmith_shortcut(
+    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "monet")
+    _apply_langsmith_shortcut()
+    import os
+
+    assert (
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
+        == "https://api.smith.langchain.com/otel/v1/traces"
+    )
+    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == (
+        "x-api-key=lsv2_test,Langsmith-Project=monet"
+    )
+
+
+def test_honeycomb_shortcut(
+    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HONEYCOMB_API_KEY", "hc_test")
+    monkeypatch.setenv("HONEYCOMB_DATASET", "monet")
+    _apply_honeycomb_shortcut()
+    import os
+
+    assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://api.honeycomb.io"
+    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == (
+        "x-honeycomb-team=hc_test,x-honeycomb-dataset=monet"
+    )
+
+
+def test_shortcut_does_not_override_explicit_otel_vars(
+    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://explicit.example/otel")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-custom=value")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
+    monkeypatch.setenv("HONEYCOMB_API_KEY", "hc_test")
+    _apply_langsmith_shortcut()
+    _apply_honeycomb_shortcut()
+    import os
+
+    assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://explicit.example/otel"
+    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == "x-custom=value"
 
 
 def test_tracer_creates_span() -> None:
