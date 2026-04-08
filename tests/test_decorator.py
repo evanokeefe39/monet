@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -10,7 +11,10 @@ from monet import EscalationRequired, NeedsHumanReview, SemanticError, agent
 from monet._registry import (
     default_registry,  # internal: needed for registry_scope test fixture
 )
-from monet.types import AgentRunContext
+from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+
+if TYPE_CHECKING:
+    from monet.types import AgentRunContext
 
 
 def _ctx(**overrides: object) -> AgentRunContext:
@@ -234,3 +238,93 @@ async def test_concurrent_context_isolation() -> None:
     assert results[1].trace_id == "t-b"
     assert results[2].output == "C|t-c"
     assert results[2].trace_id == "t-c"
+
+
+# --- Auto-offload and double-write dedupe ---
+
+
+@pytest.fixture
+def _catalogue():  # type: ignore[no-untyped-def]
+    configure_catalogue(InMemoryCatalogueClient())
+    yield
+    configure_catalogue(None)
+
+
+async def test_auto_offload_naive_agent(_catalogue: None) -> None:
+    """Agent returns >limit bytes, writes nothing — auto-offload kicks in."""
+    big = "x" * 5000
+
+    @agent(agent_id="test-offload-naive")
+    async def naive_agent(task: str) -> str:
+        return big
+
+    result = await naive_agent(_ctx(task="t", agent_id="test-offload-naive"))
+    assert len(result.artifacts) == 1
+    assert result.output == big[:200]
+
+
+async def test_double_write_dedupes(_catalogue: None) -> None:
+    """Agent writes bytes AND returns the same bytes — one artifact, not two."""
+    big = "y" * 5000
+
+    @agent(agent_id="test-offload-dedupe")
+    async def dedupe_agent(task: str) -> str:
+        from monet import get_catalogue
+
+        await get_catalogue().write(
+            content=big.encode(),
+            content_type="text/markdown",
+            summary=big[:200],
+            confidence=0.9,
+            completeness="complete",
+        )
+        return big
+
+    result = await dedupe_agent(_ctx(task="t", agent_id="test-offload-dedupe"))
+    assert len(result.artifacts) == 1
+    assert result.output == big[:200]
+
+
+async def test_side_artifact_still_offloads(_catalogue: None) -> None:
+    """Agent writes a *different* big string as a side artifact while
+    returning its own big string — both must land as artifacts."""
+    side = "a" * 5000
+    returned = "b" * 5000
+
+    @agent(agent_id="test-offload-side")
+    async def side_agent(task: str) -> str:
+        from monet import get_catalogue
+
+        await get_catalogue().write(
+            content=side.encode(),
+            content_type="text/markdown",
+            summary="side outline",
+            confidence=0.9,
+            completeness="complete",
+        )
+        return returned
+
+    result = await side_agent(_ctx(task="t", agent_id="test-offload-side"))
+    assert len(result.artifacts) == 2
+    assert result.output == returned[:200]
+
+
+async def test_short_return_with_explicit_write(_catalogue: None) -> None:
+    """Short return + explicit write — 1 artifact, output unchanged."""
+
+    @agent(agent_id="test-offload-short")
+    async def short_agent(task: str) -> str:
+        from monet import get_catalogue
+
+        await get_catalogue().write(
+            content=b"some artifact bytes",
+            content_type="text/plain",
+            summary="s",
+            confidence=0.9,
+            completeness="complete",
+        )
+        return "short reply"
+
+    result = await short_agent(_ctx(task="t", agent_id="test-offload-short"))
+    assert len(result.artifacts) == 1
+    assert result.output == "short reply"
