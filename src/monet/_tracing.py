@@ -25,6 +25,25 @@ _provider: TracerProvider | None = None
 _exporter_attached: bool = False
 
 
+# ── Cross-boundary wire constants ─────────────────────────────────────
+#
+# These strings are contracts between the CLI and the server, and
+# between orchestration and display. Referencing them as constants on
+# both ends means a typo can only break one side and fails loudly at
+# import / type-check time rather than silently at runtime.
+
+#: Key under which the CLI stashes a W3C traceparent carrier in each
+#: langgraph run's metadata. Server-side graph entry nodes read it via
+#: ``config["metadata"][TRACE_CARRIER_METADATA_KEY]``.
+TRACE_CARRIER_METADATA_KEY = "monet_trace_carrier"
+
+#: Span name for the CLI-side root span that groups a whole monet run.
+RUN_ROOT_SPAN_NAME = "monet.run"
+
+#: Span name for the execution graph's in-process root span.
+EXECUTION_ROOT_SPAN_NAME = "monet.execution"
+
+
 def _apply_langsmith_shortcut() -> None:
     """LangSmith shortcut: LANGSMITH_API_KEY (+ optional LANGSMITH_PROJECT)."""
     key = os.environ.get("LANGSMITH_API_KEY")

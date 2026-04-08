@@ -17,6 +17,7 @@ from langchain_core.runnables import (
 from opentelemetry import propagate, trace
 
 from monet._registry import default_registry
+from monet._tracing import TRACE_CARRIER_METADATA_KEY
 from monet.types import AgentResult, AgentRunContext, ArtifactPointer, Signal
 
 # HTTP transport timeout (seconds). Default 300s is generous because
@@ -33,6 +34,7 @@ def _get_http_timeout() -> float:
         return float(raw)
     except ValueError:
         return _DEFAULT_HTTP_TIMEOUT
+
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
 
@@ -78,7 +80,7 @@ def extract_carrier_from_config(
     if not config:
         return {}
     metadata = config.get("metadata") or {}
-    carrier = metadata.get("monet_trace_carrier")
+    carrier = metadata.get(TRACE_CARRIER_METADATA_KEY)
     return dict(carrier) if isinstance(carrier, dict) else {}
 
 
