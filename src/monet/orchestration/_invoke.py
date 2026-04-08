@@ -17,7 +17,22 @@ from langchain_core.runnables import (
 from opentelemetry import propagate, trace
 
 from monet._registry import default_registry
-from monet.types import AgentResult, AgentRunContext, Signal
+from monet.types import AgentResult, AgentRunContext, ArtifactPointer, Signal
+
+# HTTP transport timeout (seconds). Default 300s is generous because
+# agents doing deep research, long-form writing, or multi-turn tool
+# use routinely exceed 30s. Override via MONET_HTTP_TIMEOUT.
+_DEFAULT_HTTP_TIMEOUT = 300.0
+
+
+def _get_http_timeout() -> float:
+    raw = os.environ.get("MONET_HTTP_TIMEOUT")
+    if not raw:
+        return _DEFAULT_HTTP_TIMEOUT
+    try:
+        return float(raw)
+    except ValueError:
+        return _DEFAULT_HTTP_TIMEOUT
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
 
@@ -134,7 +149,11 @@ async def invoke_agent(
 async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
     """Call an agent over HTTP POST.
 
-    Uses opentelemetry.propagate.inject() for correct OTel context propagation.
+    Uses opentelemetry.propagate.inject() for correct OTel context
+    propagation. Timeout defaults to 300s and can be overridden via
+    ``MONET_HTTP_TIMEOUT``. Artifacts in the response are deserialized
+    back to ``ArtifactPointer`` so catalogue-writing agents transported
+    over HTTP retain their pointers on the receiving side.
     """
     import httpx
 
@@ -152,7 +171,7 @@ async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
             endpoint,
             json=payload,
             headers=headers,
-            timeout=30.0,
+            timeout=_get_http_timeout(),
         )
         response.raise_for_status()
         data = response.json()
@@ -167,9 +186,20 @@ async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
         for s in raw_signals
     ]
 
+    raw_artifacts = data.get("artifacts", []) or []
+    artifacts: list[ArtifactPointer] = [
+        ArtifactPointer(
+            artifact_id=a.get("artifact_id", ""),
+            url=a.get("url", ""),
+        )
+        for a in raw_artifacts
+        if isinstance(a, dict) and a.get("artifact_id")
+    ]
+
     return AgentResult(
         success=data["success"],
         output=data["output"],
+        artifacts=artifacts,
         signals=signals,
         trace_id=data.get("trace_id", ""),
         run_id=data.get("run_id", ""),
