@@ -6,20 +6,34 @@ under root/ keyed by artifact_id containing content (bytes) and meta.json.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aiofiles
 
-from monet.catalogue._metadata import ArtifactMetadata
 from monet.types import ArtifactPointer
+
+if TYPE_CHECKING:
+    from monet.catalogue._metadata import ArtifactMetadata
 
 
 class FilesystemStorage:
-    """Filesystem backend: {root}/{id}/content + {root}/{id}/meta.json."""
+    """Filesystem backend: {root}/{id}/content + {root}/{id}/meta.json.
+
+    All blocking filesystem operations (``Path.mkdir``, ``Path.exists``)
+    run via :func:`asyncio.to_thread` so the async interface is honest
+    all the way through. This matters under ASGI servers like LangGraph
+    Server's dev runtime, which refuse to run sync fs calls on the event
+    loop.
+    """
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
+        # Constructor is sync by API contract; callers that need a fully
+        # async startup should ``await asyncio.to_thread(FilesystemStorage, ...)``
+        # or rely on lazy creation in ``write()``.
         self.root.mkdir(parents=True, exist_ok=True)
 
     async def write(
@@ -35,7 +49,9 @@ class FilesystemStorage:
         """
         artifact_id = metadata["artifact_id"]
         artifact_dir = self.root / artifact_id
-        artifact_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(
+            artifact_dir.mkdir, parents=True, exist_ok=True
+        )
 
         async with aiofiles.open(artifact_dir / "content", "wb") as f:
             await f.write(content)
@@ -56,7 +72,7 @@ class FilesystemStorage:
             Returns content bytes and parsed metadata dict.
         """
         artifact_dir = self.root / artifact_id
-        if not artifact_dir.exists():
+        if not await asyncio.to_thread(artifact_dir.exists):
             msg = f"Artifact not found: {artifact_id}"
             raise KeyError(msg)
 
