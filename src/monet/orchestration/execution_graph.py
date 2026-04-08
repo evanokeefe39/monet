@@ -18,7 +18,7 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
-from monet import get_catalogue
+from monet import emit_progress, get_catalogue
 from monet._registry import default_registry
 from monet.exceptions import SemanticError
 from monet.signals import BLOCKING, in_group
@@ -121,6 +121,26 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
     signals_data = [dict(s) for s in result.signals]
     artifacts_data = [dict(a) for a in result.artifacts]
 
+    # Andon cord: if the agent returned a failure, emit a progress event
+    # so the streaming CLI surfaces it in the run log rather than silently
+    # feeding empty context to QA. The wave_result still flows through as
+    # data; this is purely an operator-visibility signal.
+    if not result.success:
+        failure_reasons = "; ".join(
+            (s.get("reason") or "").splitlines()[0][:200]
+            for s in signals_data
+            if s.get("reason")
+        )
+        emit_progress(
+            {
+                "status": "agent failed",
+                "agent": item["agent_id"],
+                "command": item["command"],
+                "reasons": failure_reasons,
+                "signal_types": [s.get("type") for s in signals_data],
+            }
+        )
+
     entry: WaveResult = {
         "phase_index": item["phase_index"],
         "wave_index": item["wave_index"],
@@ -172,8 +192,7 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
     current_results = [
         r
         for r in state.get("wave_results", [])
-        if r.get("phase_index") == current_phase
-        and r.get("wave_index") == current_wave
+        if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
     ]
     qa_context = [await _resolve_wave_result(wr) for wr in current_results]
 
