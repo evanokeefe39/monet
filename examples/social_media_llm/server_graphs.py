@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 
 import monet.agents  # noqa: F401 — registers reference agents
+from monet._tracing import configure_tracing
 from monet.catalogue import (
     CatalogueService,
     FilesystemStorage,
@@ -37,6 +38,18 @@ from monet.orchestration import (
     build_execution_graph,
     build_planning_graph,
 )
+
+# ── OTel tracing (server side) ────────────────────────────────────────
+#
+# Force an eager configure so any misconfiguration (missing exporter
+# dep, broken endpoint) surfaces at ``langgraph dev`` startup instead of
+# silently on first agent invocation. The decorator also calls this
+# lazily per tracer, but running it here gives us a clear startup signal
+# and triggers the LANGFUSE/LANGSMITH/HONEYCOMB env shortcuts before the
+# first span is opened. langgraph-cli loads ``.env`` via
+# ``langgraph.json``'s ``"env": ".env"`` entry, so the shortcut vars are
+# already on the process environment by the time this runs.
+configure_tracing()
 
 # ── Catalogue wiring (server side) ────────────────────────────────────
 #
