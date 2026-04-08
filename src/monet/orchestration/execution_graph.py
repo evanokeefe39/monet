@@ -18,10 +18,14 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
-from monet.types import SignalType
+from monet import get_catalogue
+from monet._registry import default_registry
+from monet.exceptions import SemanticError
+from monet.signals import BLOCKING, in_group
 
 from ._invoke import invoke_agent
 from ._state import ExecutionState, WaveItem, WaveResult
+from ._validate import _assert_registered
 
 MAX_WAVE_RETRIES = 3
 
@@ -36,11 +40,72 @@ async def load_plan(state: ExecutionState) -> dict[str, Any]:
         "revision_count": 0,
         "signals": None,
         "abort_reason": None,
+        "pending_context": [],
+    }
+
+
+async def _resolve_wave_result(wr: dict[str, Any]) -> dict[str, Any]:
+    """Convert a stored WaveResult into a context entry for downstream agents.
+
+    If the inline ``output`` is short or absent and the result has catalogue
+    artifacts, the first artifact is fetched and inlined as ``content``. This
+    is what makes upstream research actually visible to writer/qa/publisher
+    instead of leaving them with a 200-char summary.
+    """
+    output = wr.get("output")
+    if isinstance(output, dict):
+        content = json.dumps(output)
+    elif isinstance(output, str):
+        content = output
+    else:
+        content = ""
+
+    artifacts = wr.get("artifacts") or []
+    if (not content or len(content) < 500) and artifacts:
+        catalogue = get_catalogue()
+        for art in artifacts:
+            art_id = art.get("artifact_id") or art.get("id")
+            if not art_id:
+                continue
+            try:
+                raw, _meta = await catalogue.read(art_id)
+                content = raw.decode("utf-8", errors="replace")
+                break
+            except (KeyError, ValueError, FileNotFoundError):
+                continue
+
+    return {
+        "type": "prior_output",
+        "agent_id": wr.get("agent_id", ""),
+        "command": wr.get("command", ""),
+        "summary": content[:200] if content else "",
+        "content": content,
     }
 
 
 async def prepare_wave(state: ExecutionState) -> dict[str, Any]:
-    return {}
+    """Resolve all prior wave outputs into context entries for the next wave.
+
+    Pulls every wave_result from earlier waves of the current phase, fetches
+    catalogue artifacts where needed, and stores the resulting context list
+    in ``pending_context`` so ``dispatch_wave`` can attach it to each Send.
+    """
+    current_phase = state["current_phase_index"]
+    current_wave = state["current_wave_index"]
+    prior = [
+        wr
+        for wr in state.get("wave_results", [])
+        if wr.get("phase_index") == current_phase
+        and (wr.get("wave_index") or 0) < current_wave
+    ]
+    # Also include results from completed earlier phases.
+    prior_phase_results = [
+        wr
+        for wr in state.get("wave_results", [])
+        if (wr.get("phase_index") or 0) < current_phase
+    ]
+    pending = [await _resolve_wave_result(wr) for wr in prior_phase_results + prior]
+    return {"pending_context": pending}
 
 
 async def agent_node(item: WaveItem) -> dict[str, Any]:
@@ -49,16 +114,12 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
         item["agent_id"],
         command=item["command"],
         task=item["task"],
+        context=item.get("context") or [],
         trace_id=item.get("trace_id", ""),
         run_id=item.get("run_id", ""),
     )
     signals_data = [dict(s) for s in result.signals]
-    if isinstance(result.output, str):
-        output_str = result.output
-    elif isinstance(result.output, dict):
-        output_str = result.output.get("url", "")
-    else:
-        output_str = ""
+    artifacts_data = [dict(a) for a in result.artifacts]
 
     entry: WaveResult = {
         "phase_index": item["phase_index"],
@@ -66,7 +127,8 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
         "item_index": item["item_index"],
         "agent_id": item["agent_id"],
         "command": item["command"],
-        "output": output_str,
+        "output": result.output,
+        "artifacts": artifacts_data,
         "signals": signals_data,
     }
     return {"wave_results": [entry]}
@@ -82,13 +144,10 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
         if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
     ]
 
-    def _has(signals: list[dict[str, Any]], target: SignalType) -> bool:
-        return any(s.get("type") == target.value for s in signals)
-
     has_blocking = any(
-        _has(r.get("signals", []), SignalType.NEEDS_HUMAN_REVIEW)
-        or _has(r.get("signals", []), SignalType.ESCALATION_REQUIRED)
+        in_group(s.get("type", ""), BLOCKING)
         for r in current_results
+        for s in r.get("signals", [])
     )
     return {
         "signals": {
@@ -99,7 +158,12 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
 
 
 async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
-    """Call qa/fast to evaluate the current wave's results."""
+    """Call qa/fast to evaluate the current wave's results.
+
+    Resolves each wave_result into a context entry (fetching catalogue
+    artifacts where needed) so QA can actually see the produced content
+    instead of evaluating an opaque JSON blob.
+    """
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
     current_results = [
@@ -107,18 +171,13 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
         for r in state.get("wave_results", [])
         if r.get("phase_index") == current_phase and r.get("wave_index") == current_wave
     ]
+    qa_context = [await _resolve_wave_result(wr) for wr in current_results]
 
     result = await invoke_agent(
         "qa",
         command="fast",
         task=f"Evaluate wave {current_phase}.{current_wave} results",
-        context=[
-            {
-                "type": "artifact",
-                "summary": f"Wave {current_phase}.{current_wave} results",
-                "content": json.dumps(current_results),
-            }
-        ],
+        context=qa_context,
         trace_id=state.get("trace_id", ""),
         run_id=state.get("run_id", ""),
     )
@@ -183,6 +242,16 @@ async def human_interrupt(state: ExecutionState) -> dict[str, Any]:
 def dispatch_wave(state: ExecutionState) -> list[Send]:
     phase = state["work_brief"]["phases"][state["current_phase_index"]]
     wave = phase["waves"][state["current_wave_index"]]
+    for item in wave["items"]:
+        if not default_registry.exists(item["agent_id"], item["command"]):
+            raise SemanticError(
+                type="agent_not_found",
+                message=(
+                    f"Agent '{item['agent_id']}/{item['command']}' is not "
+                    "registered. The planner specified an agent that does not exist."
+                ),
+            )
+    pending_context = list(state.get("pending_context") or [])
     return [
         Send(
             "agent_node",
@@ -195,6 +264,7 @@ def dispatch_wave(state: ExecutionState) -> list[Send]:
                 item_index=idx,
                 trace_id=state.get("trace_id", ""),
                 run_id=state.get("run_id", ""),
+                context=pending_context,
             ),
         )
         for idx, item in enumerate(wave["items"])
@@ -231,6 +301,7 @@ def route_after_interrupt(state: ExecutionState) -> str:
 
 def build_execution_graph() -> StateGraph[ExecutionState]:
     """Build the execution graph. Returns uncompiled StateGraph."""
+    _assert_registered("qa", "fast")
     graph = StateGraph(ExecutionState)
     graph.add_node("load_plan", load_plan)
     graph.add_node("prepare_wave", prepare_wave)

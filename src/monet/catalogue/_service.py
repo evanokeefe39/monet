@@ -22,10 +22,21 @@ class CatalogueService:
     def __init__(self, storage: FilesystemStorage, index: SQLiteIndex) -> None:
         self._storage = storage
         self._index = index
+        self._initialised = False
 
     async def initialise(self) -> None:
-        """Call at startup to ensure index tables exist."""
+        """Ensure index tables exist. Idempotent. Called automatically on
+        first read/write — explicit invocation at startup is optional but
+        avoids the first-call latency hit.
+        """
+        if self._initialised:
+            return
         await self._index.initialise()
+        self._initialised = True
+
+    async def _ensure_initialised(self) -> None:
+        if not self._initialised:
+            await self.initialise()
 
     async def write(
         self,
@@ -42,6 +53,7 @@ class CatalogueService:
         Auto-pulls run context for agent_id/run_id/trace_id if available.
         Context is optional — write() can be called outside the decorator.
         """
+        await self._ensure_initialised()
         # Get run context if available — not required
         try:
             from monet._context import get_run_context
@@ -74,4 +86,5 @@ class CatalogueService:
 
     async def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]:
         """Read an artifact from storage."""
+        await self._ensure_initialised()
         return await self._storage.read(artifact_id)

@@ -14,6 +14,7 @@ from langgraph.graph import END, StateGraph
 
 from ._invoke import invoke_agent
 from ._state import EntryState
+from ._validate import _assert_registered
 
 
 async def triage_node(state: EntryState) -> dict[str, Any]:
@@ -38,6 +39,7 @@ async def triage_node(state: EntryState) -> dict[str, Any]:
 
 def build_entry_graph() -> StateGraph[EntryState]:
     """Build the triage graph. Returns uncompiled StateGraph."""
+    _assert_registered("planner", "fast")
     graph = StateGraph(EntryState)
     graph.add_node("triage", triage_node)
     graph.set_entry_point("triage")

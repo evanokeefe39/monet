@@ -77,31 +77,35 @@ async def _wrap_result(
 ) -> AgentResult:
     """Assemble a successful AgentResult from a function's return value.
 
-    If the output exceeds content_limit and a catalogue client is
-    configured, automatically offloads to the catalogue and returns
-    a pointer instead.
+    Inline output is ``str | dict | None``. If a string return exceeds
+    ``content_limit`` and a catalogue backend is configured, the full
+    content is offloaded to the catalogue (the pointer lands in
+    ``artifacts``) and ``output`` becomes a short inline summary.
     """
-    output_str = str(return_value)
-    output: str | ArtifactPointer = output_str
+    output: str | dict[str, Any] | None
+    if return_value is None:
+        output = None
+    elif isinstance(return_value, dict):
+        output = return_value
+    else:
+        output_str = str(return_value)
+        output = output_str
+        if len(output_str) > content_limit:
+            from ._catalogue import _catalogue_backend
 
-    # Automatic content offload
-    if len(output_str) > content_limit:
-        from ._catalogue import _catalogue_backend
-
-        if _catalogue_backend is not None:
-            try:
-                # CatalogueHandle.write() appends to _artifact_collector
-                # which is the same list as `artifacts` (set by the decorator)
-                pointer = await get_catalogue().write(
-                    content=output_str.encode(),
-                    content_type="text/plain",
-                    summary=output_str[:200],
-                    confidence=0.0,
-                    completeness="complete",
-                )
-                output = pointer
-            except NotImplementedError:
-                pass
+            if _catalogue_backend is not None:
+                try:
+                    # write() appends to _artifact_collector (same list as `artifacts`)
+                    await get_catalogue().write(
+                        content=output_str.encode(),
+                        content_type="text/plain",
+                        summary=output_str[:200],
+                        confidence=0.0,
+                        completeness="complete",
+                    )
+                    output = output_str[:200]
+                except NotImplementedError:
+                    pass
 
     return AgentResult(
         success=True,
@@ -168,7 +172,9 @@ def _handle_exception(
 
 
 @overload
-def agent(fn: Callable[..., Any]) -> Callable[..., Any]: ...
+def agent(
+    agent_id_or_fn: str, /
+) -> Callable[..., Callable[[Callable[..., Any]], Callable[..., Any]]]: ...
 
 
 @overload
@@ -180,27 +186,28 @@ def agent(
 
 
 def agent(
-    fn: Callable[..., Any] | None = None,
+    agent_id_or_fn: str | None = None,
+    /,
     *,
     agent_id: str = "",
     command: str = "fast",
 ) -> Any:
     """Decorator that wraps a callable as an agent handler.
 
-    Usage:
-        @agent(agent_id="researcher")
-        async def researcher(task: str) -> str: ...
+    Two call signatures:
 
-        @agent(agent_id="writer", command="deep")
-        async def writer_deep(task: str, context: list) -> str: ...
+    1. ``researcher = agent("researcher")`` — returns a decorator factory
+       bound to ``agent_id``. Then ``@researcher(command="deep")`` registers
+       a command handler.
 
-    Preconditions:
-        All function parameters must be valid AgentRunContext field names.
-        agent_id must be provided.
-    Postconditions:
-        The function is registered in the default registry.
-        When called with an AgentRunContext, returns an AgentResult.
+    2. ``@agent(agent_id="researcher", command="deep")`` — verbose form.
+
+    Both produce identical registry entries. Registration happens at
+    decoration time (import time).
     """
+    # Form 1: agent("researcher") → bound partial
+    if isinstance(agent_id_or_fn, str):
+        return functools.partial(agent, agent_id=agent_id_or_fn)
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         if not agent_id:
@@ -257,10 +264,5 @@ def agent(
         wrapper._command = command  # type: ignore[attr-defined]
 
         return wrapper
-
-    if fn is not None:
-        # Called without arguments — not supported, agent_id is required
-        msg = "agent_id is required: use @agent(agent_id='...') not @agent"
-        raise TypeError(msg)
 
     return decorator

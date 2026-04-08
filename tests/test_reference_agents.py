@@ -85,14 +85,69 @@ async def test_planner_plan_sensitive_raises_human_review() -> None:
     assert result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)
 
 
-async def test_researcher_returns_content() -> None:
+async def test_researcher_fast_returns_content() -> None:
+    """researcher/fast is pure LLM-only quick lookup."""
     with patch(
         "monet.agents.researcher._get_model",
         return_value=_mock("# Findings\nKey insight."),
     ):
-        result = await invoke_agent("researcher", command="deep", task="topic")
+        result = await invoke_agent("researcher", command="fast", task="topic")
     assert result.success
     assert isinstance(result.output, str) and "Findings" in result.output
+
+
+async def test_researcher_deep_exa_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EXA_API_KEY + exa_py installed -> Exa search + LLM synthesis."""
+    pytest.importorskip("exa_py")
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("EXA_API_KEY", "test-key")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    fake_result = MagicMock()
+    fake_result.results = [
+        MagicMock(title="T", url="https://ex.com", text="content snippet")
+    ]
+    with patch("exa_py.Exa") as mock_exa_cls:
+        mock_exa_cls.return_value.search_and_contents.return_value = fake_result
+        with patch(
+            "monet.agents.researcher._get_model",
+            return_value=_mock("Synthesised findings from Exa"),
+        ):
+            result = await invoke_agent("researcher", command="deep", task="q")
+    assert result.success
+    assert isinstance(result.output, str) and "Synthesised" in result.output
+
+
+async def test_researcher_deep_tavily_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TAVILY_API_KEY set (no Exa) -> Tavily ReAct agent path."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+    fake_agent = MagicMock()
+    fake_agent.ainvoke = AsyncMock(
+        return_value={"messages": [AIMessage(content="Tavily findings")]}
+    )
+    with patch("monet.agents.researcher._get_react_agent", return_value=fake_agent):
+        result = await invoke_agent("researcher", command="deep", task="q")
+    assert result.success
+    assert isinstance(result.output, str) and "Tavily findings" in result.output
+
+
+async def test_researcher_deep_llm_only_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No search provider keys -> LLM-only synthesis with warning."""
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    with patch(
+        "monet.agents.researcher._get_model",
+        return_value=_mock("LLM-only synthesis output"),
+    ):
+        result = await invoke_agent("researcher", command="deep", task="q")
+    assert result.success
+    assert isinstance(result.output, str) and "LLM-only" in result.output
 
 
 async def test_writer_returns_content() -> None:

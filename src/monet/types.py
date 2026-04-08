@@ -6,22 +6,19 @@ All types used across the SDK, catalogue, and orchestration layers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any, TypedDict
 
+from .signals import SignalType
+
+__all__ = [
+    "AgentResult",
+    "AgentRunContext",
+    "ArtifactPointer",
+    "Signal",
+    "SignalType",
+]
+
 # --- Signals (list-based accumulation model) ---
-
-
-class SignalType(StrEnum):
-    """Standard signal types emitted by agents."""
-
-    NEEDS_HUMAN_REVIEW = "needs_human_review"
-    ESCALATION_REQUIRED = "escalation_required"
-    LOW_CONFIDENCE = "low_confidence"
-    PARTIAL_RESULT = "partial_result"
-    REVISION_SUGGESTED = "revision_suggested"
-    SENSITIVE_CONTENT = "sensitive_content"
-    SEMANTIC_ERROR = "semantic_error"
 
 
 class Signal(TypedDict):
@@ -79,7 +76,7 @@ class AgentResult:
     """
 
     success: bool
-    output: str | ArtifactPointer | None = None
+    output: str | dict[str, Any] | None = None
     artifacts: list[ArtifactPointer] = field(default_factory=list)
     signals: list[Signal] = field(default_factory=list)
     trace_id: str = ""

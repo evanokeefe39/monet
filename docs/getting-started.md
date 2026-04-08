@@ -89,24 +89,26 @@ Unexpected exceptions are caught and wrapped as `SemanticError(type="unexpected_
 For large outputs, write to the catalogue explicitly:
 
 ```python
-from monet import agent, write_artifact, set_catalogue_client
-from monet.catalogue import InMemoryCatalogueClient
+from monet import agent, write_artifact
+from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 
-# Configure the catalogue client at startup
-set_catalogue_client(InMemoryCatalogueClient())
+# Configure the catalogue backend at startup
+configure_catalogue(InMemoryCatalogueClient())
 
-@agent(agent_id="writer", command="deep")
+writer = agent("writer")
+
+@writer(command="deep")
 async def write_report(task: str, context: list) -> str:
     """Produce a long-form report."""
     report = await generate_report(task, context)
 
-    pointer = write_artifact(
+    pointer = await write_artifact(
         content=report.encode(),
         content_type="text/markdown",
         summary="Market analysis report",
         confidence=0.85,
     )
-    return f"Report written: {pointer.artifact_id}"
+    return f"Report written: {pointer['artifact_id']}"
 ```
 
 If a function returns output longer than 4000 characters and a catalogue client is configured, the decorator automatically offloads the content and returns a pointer. You do not need to call `write_artifact()` for simple cases.

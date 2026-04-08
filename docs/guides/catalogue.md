@@ -123,14 +123,14 @@ Auto-generates UUIDs and computes hashes. No external dependencies.
 The SDK function `write_artifact()` wraps the catalogue client:
 
 ```python
-from monet import set_catalogue_client, write_artifact
-from monet.catalogue import InMemoryCatalogueClient
+from monet import write_artifact
+from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 
 # At startup
-set_catalogue_client(InMemoryCatalogueClient())
+configure_catalogue(InMemoryCatalogueClient())
 
 # Inside an agent function
-pointer = write_artifact(
+pointer = await write_artifact(
     content=report.encode(),
     content_type="text/markdown",
     summary="Market analysis report",
@@ -140,4 +140,4 @@ pointer = write_artifact(
 )
 ```
 
-`write_artifact()` reads `trace_id`, `run_id`, `agent_id`, and `command` from the current `AgentRunContext` automatically. It raises `RuntimeError` if no catalogue client is configured.
+`write_artifact()` is async — it forwards to `await get_catalogue().write(...)`. The pointer it returns is also appended to `AgentResult.artifacts` automatically. Stamping (`trace_id`, `run_id`, `agent_id`) is handled by the `CatalogueService`. Raises `NotImplementedError` if no catalogue backend is configured.

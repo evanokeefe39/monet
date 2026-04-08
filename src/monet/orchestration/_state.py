@@ -84,10 +84,16 @@ class ExecutionState(TypedDict, total=False):
     revision_count: int
     trace_id: str
     run_id: str
+    pending_context: list[dict[str, Any]]
 
 
-class WaveItem(TypedDict):
-    """A single work item dispatched via Send to agent_node."""
+class WaveItem(TypedDict, total=False):
+    """A single work item dispatched via Send to agent_node.
+
+    ``context`` carries resolved upstream outputs so each agent can see what
+    prior waves produced. The orchestrator builds it in ``dispatch_wave``;
+    individual agents receive it via the standard ``context`` parameter.
+    """
 
     agent_id: str
     command: str
@@ -97,15 +103,23 @@ class WaveItem(TypedDict):
     item_index: int
     trace_id: str
     run_id: str
+    context: list[dict[str, Any]]
 
 
 class WaveResult(TypedDict):
-    """Result from a single agent invocation within a wave."""
+    """Result from a single agent invocation within a wave.
+
+    ``output`` and ``artifacts`` are distinct fields. ``output`` is the
+    inline result (string or structured dict). ``artifacts`` lists the
+    catalogue pointers written by the agent. The orchestrator reads
+    them as separate concerns — no fallback between them.
+    """
 
     phase_index: int
     wave_index: int
     item_index: int
     agent_id: str
     command: str
-    output: str
+    output: str | dict[str, Any] | None
+    artifacts: list[dict[str, Any]]
     signals: list[dict[str, Any]]

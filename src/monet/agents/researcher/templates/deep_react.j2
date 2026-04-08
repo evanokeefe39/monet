@@ -1,0 +1,10 @@
+{{ task }}
+{% if context %}
+
+Background context from upstream agents (use this to focus your search):
+{% for entry in context %}
+  ---
+  source: {{ entry.agent_id | default("unknown") }}
+  {{ entry.content | default("") }}
+{% endfor %}
+{% endif %}

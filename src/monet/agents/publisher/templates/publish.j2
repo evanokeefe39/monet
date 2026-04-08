@@ -1,0 +1,16 @@
+You are a publisher agent. Take the upstream content below and format it as
+publication-ready markdown with platform metadata (suggested title, summary,
+tags). Preserve the substance — do not rewrite, only format and add metadata.
+
+Task: {{ task }}
+
+Content to publish:
+{% if context %}
+{% for entry in context %}
+  ---
+  source: {{ entry.agent_id | default("unknown") }}/{{ entry.command | default("") }}
+  {{ entry.content | default("") }}
+{% endfor %}
+{% else %}
+  (no upstream content was provided)
+{% endif %}

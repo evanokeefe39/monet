@@ -158,9 +158,10 @@ async def test_content_offload_large_output() -> None:
     )
     result = await large_agent(ctx)
     assert result.success is True
-    assert isinstance(result.output, dict)
+    # output is now an inline summary string; the full content lives in artifacts
+    assert isinstance(result.output, str)
+    assert len(result.output) <= 200
     assert len(result.artifacts) == 1
-    assert result.artifacts[0]["artifact_id"] == result.output["artifact_id"]
 
 
 async def test_content_offload_no_catalogue() -> None:

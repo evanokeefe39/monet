@@ -70,18 +70,11 @@ def create_node(
             # Translate signals to serializable dicts for lean state
             signals_data = [dict(s) for s in result.signals]
 
-            output_val = result.output
-            if isinstance(output_val, dict):
-                output_str = output_val.get("url", "")
-            elif output_val is None:
-                output_str = ""
-            else:
-                output_str = str(output_val)
-
             entry: dict[str, Any] = {
                 "agent_id": agent_id,
                 "command": command,
-                "output": output_str,
+                "output": result.output,
+                "artifacts": [dict(a) for a in result.artifacts],
                 "success": result.success,
                 "signals": signals_data,
                 "trace_id": result.trace_id,

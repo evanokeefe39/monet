@@ -32,6 +32,24 @@ dependencies = [
 agents = [
     "langchain-core>=0.3",
     "langchain>=0.3",
+    "jinja2>=3.1",
+    # Provider packages are user-supplied.
+    # Install your own, e.g.:
+    #   pip install langchain-google-genai  (Gemini)
+    #   pip install langchain-anthropic     (Claude)
+    #   pip install langchain-openai        (GPT)
+    # Search providers are optional at runtime:
+    #   pip install exa-py               (EXA_API_KEY — preferred for researcher/deep)
+    #   pip install langchain-community  (TAVILY_API_KEY — alternative)
+]
+examples = [
+    "monet[agents]",
+    "langchain-google-genai>=2.0",
+    "langchain-groq>=0.2",
+    "langchain-community>=0.3",
+    "tavily-python>=0.5",
+    "exa-py>=1.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.urls]
@@ -56,14 +74,6 @@ dev = [
     "mkdocs-material>=9.7.6",
     "pre-commit>=4.5.1",
     "langgraph-cli>=0.1",
-]
-
-llm-examples = [
-    "langchain-google-genai>=2.0",
-    "langchain-groq>=0.2",
-    "langchain-community>=0.3",
-    "tavily-python>=0.5",
-    "python-dotenv>=1.0",
 ]
 
 [tool.pytest.ini_options]
