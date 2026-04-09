@@ -220,6 +220,60 @@ async def test_execution_graph_retry_after_blocking_signal() -> None:
     )
 
 
+async def test_wave_reflection_retries_on_qa_failure() -> None:
+    """QA infrastructure failure must produce verdict="fail", not silent pass.
+
+    When wave_reflection calls qa/fast and the QA invocation itself
+    fails (e.g. Groq 403), the reflection must record verdict="fail"
+    so the existing revision loop retries the wave. Previously,
+    wave_reflection defaulted to verdict="pass" on any non-output
+    result, silently shipping defects downstream. The fix adds an
+    explicit ``not result.success`` branch before the output-parsing
+    branches.
+    """
+    import json as _json
+
+    brief = _json.loads(_BRIEF)
+
+    # QA model: raise on the first call (simulating a provider 403),
+    # succeed on the second (simulating a transient recovery).
+    qa_model = AsyncMock()
+    qa_403 = Exception("Error code: 403 - {'error': {'message': 'Access denied'}}")
+    qa_ok = AIMessage(content=_QA)
+    qa_model.ainvoke = AsyncMock(side_effect=[qa_403, qa_ok])
+
+    with (
+        patch("monet.agents.writer._get_model", return_value=_mock("Some content")),
+        patch("monet.agents.qa._get_model", return_value=qa_model),
+    ):
+        graph = build_execution_graph().compile(checkpointer=MemorySaver())
+        result = await graph.ainvoke(
+            {
+                "work_brief": brief,
+                "trace_id": "t",
+                "run_id": "r",
+                "current_phase_index": 0,
+                "current_wave_index": 0,
+                "wave_results": [],
+                "wave_reflections": [],
+                "completed_phases": [],
+                "revision_count": 0,
+            },
+            config={"configurable": {"thread_id": "exec-qa-fail"}},  # type: ignore[arg-type]
+        )
+
+    reflections = result.get("wave_reflections", [])
+    # First reflection: QA failed → verdict must be "fail" (not "pass")
+    assert reflections[0]["verdict"] == "fail", (
+        f"Expected 'fail' on QA failure, got '{reflections[0]['verdict']}'"
+    )
+    assert "QA failed" in reflections[0]["notes"]
+    # Second reflection: QA recovered → verdict "pass"
+    assert reflections[1]["verdict"] == "pass"
+    # Run completed (the revision loop retried and succeeded).
+    assert len(result.get("completed_phases", [])) == 1
+
+
 async def test_run_end_to_end() -> None:
     with (
         patch("monet.agents.planner._get_model") as planner_mock,
