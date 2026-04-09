@@ -237,13 +237,17 @@ async def _iter_sse(url: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
 
 
 async def _iter_http_poll(
-    url: str, interval: float, **kwargs: Any
+    url: str, interval: float, *, max_polls: int = 300, **kwargs: Any
 ) -> AsyncIterator[dict[str, Any]]:
-    """Poll ``url`` every ``interval`` seconds; stop on a ``result`` event."""
+    """Poll ``url`` every ``interval`` seconds; stop on a ``result`` event.
+
+    Raises ``TimeoutError`` if ``max_polls`` iterations are exhausted
+    without receiving a ``result`` event.
+    """
     import httpx
 
     async with httpx.AsyncClient() as client:
-        while True:
+        for _ in range(max_polls):
             response = await client.get(url, **kwargs)
             response.raise_for_status()
             event = response.json()
@@ -251,6 +255,9 @@ async def _iter_http_poll(
             if event.get("type") == "result":
                 return
             await asyncio.sleep(interval)
+        raise TimeoutError(
+            f"HTTP poll at {url} did not produce a result event after {max_polls} polls"
+        )
 
 
 __all__ = ["AgentStream"]

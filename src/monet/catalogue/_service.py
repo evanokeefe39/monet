@@ -62,7 +62,7 @@ class CatalogueService:
             run_id = ctx.get("run_id")
             trace_id = ctx.get("trace_id")
             agent_id = ctx.get("agent_id")
-        except Exception:
+        except (LookupError, RuntimeError):
             run_id = trace_id = agent_id = None
 
         artifact_id = str(uuid.uuid4())

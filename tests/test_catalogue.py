@@ -241,3 +241,49 @@ def test_filesystem_storage_no_blocking_syscalls_in_write() -> None:
         "FilesystemStorage must not call blocking path syscalls on the "
         "ASGI event loop. Offenders:\n  " + "\n  ".join(offenders)
     )
+
+
+# --- Corrupt metadata guard ---
+
+
+async def test_filesystem_read_corrupt_meta_json(tmp_path: Path) -> None:
+    """FilesystemStorage.read raises ValueError on malformed meta.json."""
+    import pytest
+
+    art_dir = tmp_path / "corrupt-art"
+    art_dir.mkdir()
+    (art_dir / "content").write_bytes(b"data")
+    (art_dir / "meta.json").write_text("not valid json {{{")
+
+    storage = FilesystemStorage(tmp_path)
+    with pytest.raises(ValueError, match="Corrupt metadata for artifact corrupt-art"):
+        await storage.read("corrupt-art")
+
+
+# --- Catalogue service exception narrowing ---
+
+
+async def test_service_write_propagates_unexpected_exceptions(tmp_path: Path) -> None:
+    """CatalogueService.write does not swallow unexpected exceptions from
+    get_run_context — only LookupError and RuntimeError are caught."""
+    from unittest.mock import patch
+
+    storage = FilesystemStorage(tmp_path)
+    index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
+    await index.initialise()
+    service = CatalogueService(storage, index)
+
+    with patch(
+        "monet._context.get_run_context",
+        side_effect=TypeError("unexpected"),
+    ):
+        import pytest
+
+        with pytest.raises(TypeError, match="unexpected"):
+            await service.write(
+                b"test",
+                content_type="text/plain",
+                summary="test",
+                confidence=0.9,
+                completeness="complete",
+            )

@@ -104,3 +104,31 @@ async def test_cli_error_event_raises_semantic_error(tmp_path: Path) -> None:
 def test_grpc_constructor_reserved() -> None:
     with pytest.raises(NotImplementedError):
         AgentStream.grpc()
+
+
+# --- _iter_http_poll ---
+
+
+async def test_http_poll_timeout_after_max_polls() -> None:
+    """_iter_http_poll raises TimeoutError when max_polls is exhausted."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from monet.streams import _iter_http_poll
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"type": "progress", "data": "working"}
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        events: list[dict] = []
+        with pytest.raises(TimeoutError, match="did not produce a result event"):
+            async for event in _iter_http_poll(
+                "http://example.com/poll", 0.0, max_polls=3
+            ):
+                events.append(event)
+        assert len(events) == 3

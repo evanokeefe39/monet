@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from monet import agent
+from monet._manifest import default_manifest
 from monet._registry import (
     default_registry,  # internal: needed for registry_scope test fixture
 )
@@ -32,7 +33,7 @@ def _ctx(**overrides: object) -> AgentRunContext:
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> None:  # type: ignore[misc]
-    with default_registry.registry_scope():
+    with default_registry.registry_scope(), default_manifest.manifest_scope():
         yield
 
 
@@ -57,7 +58,13 @@ async def test_invoke_agent_local() -> None:
 
 
 async def test_invoke_agent_missing() -> None:
+    """Invoking an unregistered agent times out: no worker can claim it."""
+    import os
+    from unittest.mock import patch
+
     from monet.orchestration import invoke_agent
 
-    with pytest.raises(LookupError, match="No handler"):
+    # Use a very short timeout so the test doesn't hang
+    env = {"MONET_AGENT_TIMEOUT": "0.1"}
+    with patch.dict(os.environ, env), pytest.raises(TimeoutError):
         await invoke_agent("ghost", task="x")

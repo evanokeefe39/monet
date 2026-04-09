@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from monet import agent, emit_progress, get_run_logger
-from monet._registry import default_registry
+from monet._manifest import default_manifest
 from monet.exceptions import NeedsHumanReview
 
 from .._prompts import extract_text, make_env
@@ -50,9 +50,12 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
     log.info("planner/fast triaging: %s", task[:80])
 
     roster = sorted(
-        row
-        for row in default_registry.registered_agents(with_docstrings=True)
-        if row.agent_id not in _PLANNER_EXCLUDE
+        (
+            cap
+            for cap in default_manifest.capabilities()
+            if cap["agent_id"] not in _PLANNER_EXCLUDE
+        ),
+        key=lambda c: (c["agent_id"], c["command"]),
     )
     prompt = _env.get_template("triage.j2").render(
         task=task,
@@ -77,9 +80,12 @@ async def planner_plan(task: str, context: list[dict[str, Any]] | None = None) -
             break
 
     roster = sorted(
-        row
-        for row in default_registry.registered_agents(with_docstrings=True)
-        if row.agent_id not in _PLANNER_EXCLUDE
+        (
+            cap
+            for cap in default_manifest.capabilities()
+            if cap["agent_id"] not in _PLANNER_EXCLUDE
+        ),
+        key=lambda c: (c["agent_id"], c["command"]),
     )
     prompt = _env.get_template("plan.j2").render(
         task=task,

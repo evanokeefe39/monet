@@ -35,9 +35,24 @@ async def _main(message: str) -> None:
     configure_catalogue(catalogue)
 
     import monet.agents  # noqa: F401 — registers reference agents
+    from monet._queue_memory import InMemoryTaskQueue
+    from monet._queue_worker import run_worker
+    from monet._registry import default_registry
+    from monet.orchestration._invoke import configure_queue
 
-    result = await run(message)
-    print(json.dumps({"phase": result.get("phase")}, indent=2))
+    queue = InMemoryTaskQueue()
+    configure_queue(queue)
+    worker_task = asyncio.create_task(run_worker(queue, default_registry))
+
+    import contextlib
+
+    try:
+        result = await run(message)
+        print(json.dumps({"phase": result.get("phase")}, indent=2))
+    finally:
+        worker_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker_task
 
 
 def main() -> None:

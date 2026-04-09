@@ -7,7 +7,7 @@ These schemas are locked by the graph builder implementations — changing
 them is a breaking change to the public API.
 """
 
-from ._invoke import invoke_agent
+from ._invoke import configure_queue, invoke_agent
 from ._run import run
 from ._state import (
     EntryState,
@@ -32,6 +32,7 @@ __all__ = [
     "build_entry_graph",
     "build_execution_graph",
     "build_planning_graph",
+    "configure_queue",
     "invoke_agent",
     "run",
 ]

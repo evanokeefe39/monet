@@ -15,14 +15,27 @@ if TYPE_CHECKING:
 
 def webhook_handler(
     url: str,
+    *,
+    timeout: float = 10.0,
 ) -> Callable[[dict[str, Any]], Awaitable[None]]:
-    """Return an async handler that POSTs each event dict to ``url`` as JSON."""
+    """Return an async handler that POSTs each event dict to ``url`` as JSON.
+
+    Catches transport and HTTP errors so a failing webhook does not crash
+    the stream handler chain. Failures are logged at warning level.
+    """
 
     async def handler(data: dict[str, Any]) -> None:
+        import logging
+
         import httpx
 
-        async with httpx.AsyncClient() as client:
-            await client.post(url, json=data)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                await client.post(url, json=data)
+        except httpx.HTTPError as exc:
+            logging.getLogger("monet.handlers").warning(
+                "webhook POST to %s failed: %s", url, exc
+            )
 
     return handler
 
