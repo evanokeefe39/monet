@@ -26,10 +26,23 @@ class InMemoryTaskQueue:
     within each pool. Workers claim by pool name only (Prefect model).
     """
 
-    def __init__(self) -> None:
+    # Default max pending tasks across all pools. 0 = unlimited.
+    DEFAULT_MAX_PENDING = 0
+
+    def __init__(self, max_pending: int = 0) -> None:
         self._tasks: dict[str, TaskRecord] = {}
         self._pool_queues: dict[str, asyncio.Queue[str]] = defaultdict(asyncio.Queue)
         self._completions: dict[str, asyncio.Event] = {}
+        self._max_pending = max_pending or self.DEFAULT_MAX_PENDING
+
+    @property
+    def pending_count(self) -> int:
+        """Number of tasks in PENDING state across all pools."""
+        return sum(
+            1
+            for t in self._tasks.values()
+            if t["status"] == TaskStatus.PENDING
+        )
 
     async def enqueue(
         self,
@@ -38,7 +51,17 @@ class InMemoryTaskQueue:
         ctx: AgentRunContext,
         pool: str = "local",
     ) -> str:
-        """Submit a task. Routes to the pool's internal queue."""
+        """Submit a task. Routes to the pool's internal queue.
+
+        Raises:
+            RuntimeError: if max_pending is set and exceeded.
+        """
+        if self._max_pending and self.pending_count >= self._max_pending:
+            msg = (
+                f"Queue backpressure: {self.pending_count} pending tasks "
+                f"(max {self._max_pending})"
+            )
+            raise RuntimeError(msg)
         task_id = str(uuid.uuid4())
         record: TaskRecord = {
             "task_id": task_id,
@@ -153,3 +176,24 @@ class InMemoryTaskQueue:
         )
         record["completed_at"] = datetime.now(UTC).isoformat()
         self._completions[task_id].set()
+
+    async def cancel(self, task_id: str) -> None:
+        """Cancel a pending or claimed task.
+
+        Sets status to CANCELLED and signals completion so poll_result
+        unblocks. If already completed/failed/cancelled, this is a no-op.
+        """
+        record = self._tasks.get(task_id)
+        if record is None:
+            return
+        if record["status"] in (
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        ):
+            return
+        record["status"] = TaskStatus.CANCELLED
+        record["completed_at"] = datetime.now(UTC).isoformat()
+        event = self._completions.get(task_id)
+        if event:
+            event.set()

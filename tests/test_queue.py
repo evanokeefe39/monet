@@ -266,6 +266,39 @@ async def test_worker_concurrent_execution() -> None:
             await worker_task
 
 
+async def test_cancel_pending_task() -> None:
+    """Cancelling a pending task signals completion for poll_result."""
+    q = InMemoryTaskQueue()
+    task_id = await q.enqueue("agent", "fast", _make_ctx())
+    await q.cancel(task_id)
+
+    result = await q.poll_result(task_id, timeout=1.0)
+    assert result.success is False
+
+
+async def test_cancel_completed_task_is_noop() -> None:
+    """Cancelling an already-completed task does nothing."""
+    q = InMemoryTaskQueue()
+    task_id = await q.enqueue("agent", "fast", _make_ctx())
+    record = await q.claim("local")
+    assert record is not None
+    await q.complete(
+        task_id, AgentResult(success=True, trace_id="t", run_id="r")
+    )
+    await q.cancel(task_id)
+    result = await q.poll_result(task_id, timeout=1.0)
+    assert result.success is True
+
+
+async def test_backpressure_rejects_enqueue() -> None:
+    """Queue with max_pending rejects when full."""
+    q = InMemoryTaskQueue(max_pending=2)
+    await q.enqueue("a", "fast", _make_ctx())
+    await q.enqueue("b", "fast", _make_ctx())
+    with pytest.raises(RuntimeError, match="backpressure"):
+        await q.enqueue("c", "fast", _make_ctx())
+
+
 async def test_worker_pool_isolation() -> None:
     """Worker only claims tasks from its assigned pool."""
     q = InMemoryTaskQueue()
