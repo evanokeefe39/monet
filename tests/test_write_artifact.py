@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from monet import agent, get_catalogue
 from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
-from monet.types import AgentRunContext
+
+if TYPE_CHECKING:
+    from monet.types import AgentRunContext
 
 
 def _ctx(**overrides: object) -> AgentRunContext:
@@ -140,7 +144,7 @@ async def test_content_offload_small_output() -> None:
     assert result.success is True
     assert isinstance(result.output, str)
     assert result.output == "short result"
-    assert result.artifacts == []
+    assert result.artifacts == ()
 
 
 async def test_content_offload_large_output() -> None:

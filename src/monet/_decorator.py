@@ -157,8 +157,8 @@ async def _wrap_result(
             return AgentResult(
                 success=False,
                 output="",
-                artifacts=list(artifacts),
-                signals=list(signals),
+                artifacts=tuple(artifacts),
+                signals=tuple(signals),
                 trace_id=ctx.get("trace_id", ""),
                 run_id=ctx.get("run_id", ""),
             )
@@ -166,8 +166,8 @@ async def _wrap_result(
     return AgentResult(
         success=True,
         output=output,
-        artifacts=list(artifacts),
-        signals=list(signals),
+        artifacts=tuple(artifacts),
+        signals=tuple(signals),
         trace_id=ctx.get("trace_id", ""),
         run_id=ctx.get("run_id", ""),
     )
@@ -220,8 +220,8 @@ def _handle_exception(
     return AgentResult(
         success=False,
         output="",
-        artifacts=list(artifacts),
-        signals=list(signals),
+        artifacts=tuple(artifacts),
+        signals=tuple(signals),
         trace_id=ctx.get("trace_id", ""),
         run_id=ctx.get("run_id", ""),
     )

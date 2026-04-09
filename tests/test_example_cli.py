@@ -155,9 +155,7 @@ async def test_workflow_against_mocked_server(
     import sys
 
     example_dir = (
-        Path(__file__).resolve().parent.parent
-        / "examples"
-        / "social_media_llm"
+        Path(__file__).resolve().parent.parent / "examples" / "social_media_llm"
     )
     sys.path.insert(0, str(example_dir))
 

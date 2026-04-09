@@ -89,9 +89,8 @@ API on <http://localhost:2024>. Leave it running.
 ### Terminal B — run the CLI
 
 ```bash
-# from the repo root, using the example's .venv
 cd examples/social_media_llm
-uv run python -m examples.social_media_llm "AI in marketing"
+uv run python cli.py "AI in marketing"
 ```
 
 Options:

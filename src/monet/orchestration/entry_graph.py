@@ -7,7 +7,6 @@ its own checkpointer per langgraph.json.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from langchain_core.runnables import (
@@ -18,6 +17,7 @@ from langgraph.graph import END, StateGraph
 from monet._tracing import attached_trace, extract_carrier_from_config
 
 from ._invoke import invoke_agent
+from ._result_parser import ParseFailure, parse_json_output
 from ._state import EntryState
 from ._validate import _assert_registered
 
@@ -32,14 +32,16 @@ async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, An
             trace_id=state.get("trace_id", ""),
             run_id=state.get("run_id", ""),
         )
-    try:
-        triage = json.loads(result.output) if isinstance(result.output, str) else {}
-    except json.JSONDecodeError:
-        triage = {
+    parsed = parse_json_output(result)
+    if isinstance(parsed, ParseFailure):
+        # Safe default: assume complex when triage output is unparseable.
+        triage: dict[str, Any] = {
             "complexity": "complex",
             "suggested_agents": [],
             "requires_planning": True,
         }
+    else:
+        triage = parsed
     return {"triage": triage}
 
 

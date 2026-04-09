@@ -13,6 +13,7 @@ from ._state import (
     EntryState,
     ExecutionState,
     PlanningState,
+    SignalsSummary,
     WaveItem,
     WaveResult,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "EntryState",
     "ExecutionState",
     "PlanningState",
+    "SignalsSummary",
     "WaveItem",
     "WaveResult",
     "build_entry_graph",

@@ -30,11 +30,12 @@ from monet._tracing import (
     get_tracer,
     inject_trace_context,
 )
-from monet.exceptions import SemanticError
-from monet.signals import BLOCKING, in_group
 
 from ._invoke import invoke_agent
-from ._state import ExecutionState, WaveItem, WaveResult
+from ._result_parser import ParseFailure, parse_json_output
+from ._retry_budget import check_budget, increment_budget, reset_budget
+from ._signal_router import EXECUTION_ROUTER
+from ._state import ExecutionState, SignalsSummary, WaveItem, WaveResult
 from ._validate import _assert_registered
 
 MAX_WAVE_RETRIES = 3
@@ -194,9 +195,33 @@ async def prepare_wave(state: ExecutionState) -> dict[str, Any]:
     Pulls every wave_result from earlier waves of the current phase, fetches
     catalogue artifacts where needed, and stores the resulting context list
     in ``pending_context`` so ``dispatch_wave`` can attach it to each Send.
+
+    Also validates that all agents in the upcoming wave are registered.
+    If any are missing, sets ``abort_reason`` so ``route_after_prepare``
+    can terminate the graph cleanly instead of crashing in dispatch_wave.
     """
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
+
+    # Validate agents exist before dispatch — fail-safe, not fail-crash.
+    phases = state["work_brief"].get("phases") or []
+    try:
+        phase = phases[current_phase]
+        wave = phase["waves"][current_wave]
+        for item in wave.get("items") or []:
+            if not default_registry.exists(item["agent_id"], item["command"]):
+                return {
+                    "pending_context": [],
+                    "abort_reason": (
+                        f"Agent '{item['agent_id']}/{item['command']}' not registered."
+                    ),
+                }
+    except (IndexError, KeyError):
+        return {
+            "pending_context": [],
+            "abort_reason": "Invalid phase/wave index in work brief.",
+        }
+
     prior = [
         wr
         for wr in state.get("wave_results", [])
@@ -236,7 +261,7 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
     # data; this is purely an operator-visibility signal.
     if not result.success:
         failure_reasons = "; ".join(
-            (s.get("reason") or "").splitlines()[0][:200]
+            str(s.get("reason", "")).splitlines()[0][:200]
             for s in signals_data
             if s.get("reason")
         )
@@ -264,7 +289,7 @@ async def agent_node(item: WaveItem) -> dict[str, Any]:
 
 
 async def collect_wave(state: ExecutionState) -> dict[str, Any]:
-    """Filter results for current wave; flag blocking signals."""
+    """Filter results for current wave; route signals via EXECUTION_ROUTER."""
     current_phase = state["current_phase_index"]
     current_wave = state["current_wave_index"]
     current_results = _latest_attempts(
@@ -276,17 +301,13 @@ async def collect_wave(state: ExecutionState) -> dict[str, Any]:
         ]
     )
 
-    has_blocking = any(
-        in_group(s.get("type", ""), BLOCKING)
-        for r in current_results
-        for s in r.get("signals", [])
-    )
-    return {
-        "signals": {
-            "has_blocking_signal": has_blocking,
-            "wave_item_count": len(current_results),
-        }
+    all_signals = [s for r in current_results for s in r.get("signals", [])]
+    route = EXECUTION_ROUTER.route(all_signals)
+    summary: SignalsSummary = {
+        "route_action": route.action if route else None,
+        "wave_item_count": len(current_results),
     }
+    return {"signals": summary}
 
 
 async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
@@ -357,7 +378,7 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
             run_id=state.get("run_id", ""),
         )
 
-    verdict_data: dict[str, Any] = {}
+    verdict_data: dict[str, Any]
     if not result.success:
         # QA itself couldn't complete. Treat as fail so the existing
         # revision loop retries transient failures and exhausts to END
@@ -371,11 +392,14 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
             "verdict": "fail",
             "notes": f"QA failed: {reasons}" if reasons else "QA failed (no reason)",
         }
-    elif isinstance(result.output, str) and result.output.strip():
-        try:
-            verdict_data = json.loads(result.output)
-        except json.JSONDecodeError:
-            verdict_data = {"verdict": "pass", "notes": result.output[:200]}
+    else:
+        # Fail-closed: non-JSON QA output → fail, not silent pass.
+        parsed = parse_json_output(result)
+        if isinstance(parsed, ParseFailure):
+            notes = parsed.raw or "unparseable QA output"
+            verdict_data = {"verdict": "fail", "notes": notes}
+        else:
+            verdict_data = parsed
 
     reflection = {
         "phase_index": current_phase,
@@ -383,11 +407,10 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
         "verdict": verdict_data.get("verdict", "pass"),
         "notes": verdict_data.get("notes", ""),
     }
-    reflections = list(state.get("wave_reflections") or [])
-    reflections.append(reflection)
-    update: dict[str, Any] = {"wave_reflections": reflections}
+    # Emit single-item list; _append_reducer on wave_reflections merges it.
+    update: dict[str, Any] = {"wave_reflections": [reflection]}
     if reflection["verdict"] == "fail":
-        update["revision_count"] = state.get("revision_count", 0) + 1
+        update.update(increment_budget(state))
     return update
 
 
@@ -400,15 +423,16 @@ async def advance(state: ExecutionState) -> dict[str, Any]:
     if current_wave_idx + 1 < total_waves:
         return {"current_wave_index": current_wave_idx + 1}
 
-    completed = list(state.get("completed_phases") or [])
-    completed.append(current_phase_idx)
+    # Phase complete — emit single-item list for _int_append_reducer,
+    # reset revision budget for the next phase.
     if current_phase_idx + 1 < len(phases):
         return {
             "current_phase_index": current_phase_idx + 1,
             "current_wave_index": 0,
-            "completed_phases": completed,
+            "completed_phases": [current_phase_idx],
+            **reset_budget(),
         }
-    return {"completed_phases": completed}
+    return {"completed_phases": [current_phase_idx]}
 
 
 async def human_interrupt(state: ExecutionState) -> dict[str, Any]:
@@ -427,18 +451,17 @@ async def human_interrupt(state: ExecutionState) -> dict[str, Any]:
     return {}
 
 
-def dispatch_wave(state: ExecutionState) -> list[Send]:
+def dispatch_wave(state: ExecutionState) -> list[Send] | str:
+    """Build Send objects for parallel agent invocation, or END on abort.
+
+    Agent validation happens in prepare_wave and sets abort_reason on
+    failure. This function checks that flag before fanning out, so the
+    graph terminates cleanly instead of crashing.
+    """
+    if state.get("abort_reason"):
+        return END
     phase = state["work_brief"]["phases"][state["current_phase_index"]]
     wave = phase["waves"][state["current_wave_index"]]
-    for item in wave["items"]:
-        if not default_registry.exists(item["agent_id"], item["command"]):
-            raise SemanticError(
-                type="agent_not_found",
-                message=(
-                    f"Agent '{item['agent_id']}/{item['command']}' is not "
-                    "registered. The planner specified an agent that does not exist."
-                ),
-            )
     pending_context = list(state.get("pending_context") or [])
     trace_carrier = dict(state.get("trace_carrier") or {})
     return [
@@ -465,12 +488,14 @@ def route_after_reflection(state: ExecutionState) -> str:
     signals = state.get("signals") or {}
     reflections = state.get("wave_reflections") or []
     last_reflection = reflections[-1] if reflections else {}
-    if signals.get("has_blocking_signal"):
+    route_action = signals.get("route_action")
+    if route_action == "interrupt":
         return "human_interrupt"
     verdict = last_reflection.get("verdict", "pass")
     if verdict == "pass":
         return "advance"
-    if verdict == "fail" and state.get("revision_count", 0) < MAX_WAVE_RETRIES:
+    # Both explicit "retry" route_action and QA verdict="fail" retry the wave.
+    if verdict == "fail" and check_budget(state, MAX_WAVE_RETRIES):
         return "prepare_wave"
     return END
 
@@ -503,7 +528,9 @@ def build_execution_graph() -> StateGraph[ExecutionState]:
 
     graph.set_entry_point("load_plan")
     graph.add_edge("load_plan", "prepare_wave")
-    graph.add_conditional_edges("prepare_wave", dispatch_wave, ["agent_node"])
+    # dispatch_wave checks abort_reason (set by prepare_wave on validation
+    # failure) and returns END or Send objects accordingly.
+    graph.add_conditional_edges("prepare_wave", dispatch_wave, ["agent_node", END])
     graph.add_edge("agent_node", "collect_wave")
     graph.add_edge("collect_wave", "wave_reflection")
     graph.add_conditional_edges(

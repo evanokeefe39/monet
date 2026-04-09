@@ -33,7 +33,7 @@ def emit_progress(data: dict[str, Any]) -> None:
 
         writer = get_stream_writer()
         writer(data)
-    except Exception:
+    except (LookupError, RuntimeError):
         pass
 
 

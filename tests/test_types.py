@@ -82,22 +82,22 @@ def test_result_success() -> None:
     r = AgentResult(success=True, output="done", trace_id="t1", run_id="r1")
     assert r.success is True
     assert r.output == "done"
-    assert r.artifacts == []
-    assert r.signals == []
+    assert r.artifacts == ()
+    assert r.signals == ()
 
 
 def test_result_with_artifacts() -> None:
     ptr: ArtifactPointer = {"artifact_id": "a1", "url": "http://x"}
-    r = AgentResult(success=True, output="done", artifacts=[ptr])
+    r = AgentResult(success=True, output="done", artifacts=(ptr,))
     assert len(r.artifacts) == 1
     assert r.artifacts[0]["artifact_id"] == "a1"
 
 
 def test_result_with_signals() -> None:
-    signals: list[Signal] = [
+    signals: tuple[Signal, ...] = (
         {"type": SignalType.NEEDS_HUMAN_REVIEW, "reason": "Low", "metadata": None},
         {"type": SignalType.LOW_CONFIDENCE, "reason": "0.3", "metadata": None},
-    ]
+    )
     r = AgentResult(success=True, output="done", signals=signals)
     assert len(r.signals) == 2
     assert r.signals[0]["type"] == "needs_human_review"
@@ -108,18 +108,18 @@ def test_result_with_signals() -> None:
 
 
 def test_has_signal() -> None:
-    signals: list[Signal] = [
+    signals: tuple[Signal, ...] = (
         {"type": SignalType.NEEDS_HUMAN_REVIEW, "reason": "Low", "metadata": None},
-    ]
+    )
     r = AgentResult(success=False, output="", signals=signals)
     assert r.has_signal(SignalType.NEEDS_HUMAN_REVIEW) is True
     assert r.has_signal(SignalType.LOW_CONFIDENCE) is False
 
 
 def test_get_signal() -> None:
-    signals: list[Signal] = [
+    signals: tuple[Signal, ...] = (
         {"type": SignalType.ESCALATION_REQUIRED, "reason": "Admin", "metadata": None},
-    ]
+    )
     r = AgentResult(success=False, output="", signals=signals)
     sig = r.get_signal(SignalType.ESCALATION_REQUIRED)
     assert sig is not None
