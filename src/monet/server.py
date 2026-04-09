@@ -60,7 +60,10 @@ async def bootstrap(
 
         for cap in agents:
             default_manifest.declare(
-                cap["agent_id"], cap["command"], cap.get("description", "")
+                cap["agent_id"],
+                cap["command"],
+                description=cap.get("description", ""),
+                pool=cap.get("pool", "local"),
             )
 
     # 4. Queue

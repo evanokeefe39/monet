@@ -16,7 +16,7 @@ from opentelemetry import trace
 
 if TYPE_CHECKING:
     from monet.queue import TaskQueue
-    from monet.types import AgentResult, AgentRunContext
+    from monet.types import AgentResult, AgentRunContext, Signal
 
 # Default timeout for queue poll (seconds). Override via MONET_AGENT_TIMEOUT.
 _DEFAULT_TIMEOUT = 600.0
@@ -101,6 +101,27 @@ async def invoke_agent(
         "skills": skills or [],
     }
 
+    # Manifest guard: fail fast if agent is not declared
+    from monet._manifest import default_manifest
+
+    if not default_manifest.is_available(agent_id, command):
+        from monet.signals import SignalType
+        from monet.types import AgentResult, Signal
+
+        return AgentResult(
+            success=False,
+            output="",
+            signals=(
+                Signal(
+                    type=SignalType.CAPABILITY_UNAVAILABLE,
+                    reason=f"Agent '{agent_id}/{command}' is not declared in the manifest",
+                    metadata={"agent_id": agent_id, "command": command},
+                ),
+            ),
+            trace_id=resolved_trace_id,
+            run_id=resolved_run_id,
+        )
+
     tracer = trace.get_tracer("monet.orchestration")
     with tracer.start_as_current_span(
         f"agent.{agent_id}.{command}",
@@ -110,7 +131,8 @@ async def invoke_agent(
             "monet.run_id": resolved_run_id,
         },
     ) as span:
-        task_id = await _task_queue.enqueue(agent_id, command, ctx)
+        pool = default_manifest.get_pool(agent_id, command) or "local"
+        task_id = await _task_queue.enqueue(agent_id, command, ctx, pool=pool)
         result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
         span.set_attribute("agent.success", result.success)
         span.set_attribute("agent.signal_count", len(result.signals))
