@@ -6,6 +6,7 @@ are explicit parameters; agent-specific parameters pass as **kwargs.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 import uuid
@@ -14,12 +15,18 @@ from typing import Any
 from opentelemetry import propagate, trace
 
 from monet._registry import default_registry
+from monet.signals import SignalType
 from monet.types import AgentResult, AgentRunContext, ArtifactPointer, Signal
 
 # HTTP transport timeout (seconds). Default 300s is generous because
 # agents doing deep research, long-form writing, or multi-turn tool
 # use routinely exceed 30s. Override via MONET_HTTP_TIMEOUT.
 _DEFAULT_HTTP_TIMEOUT = 300.0
+
+# Local invocation timeout (seconds). Protects against runaway agents
+# that never return. Override via MONET_LOCAL_TIMEOUT. Default 600s
+# (10 minutes) is generous for long-running research agents.
+_DEFAULT_LOCAL_TIMEOUT = 600.0
 
 
 def _get_http_timeout() -> float:
@@ -30,6 +37,16 @@ def _get_http_timeout() -> float:
         return float(raw)
     except ValueError:
         return _DEFAULT_HTTP_TIMEOUT
+
+
+def _get_local_timeout() -> float:
+    raw = os.environ.get("MONET_LOCAL_TIMEOUT")
+    if not raw:
+        return _DEFAULT_LOCAL_TIMEOUT
+    try:
+        return float(raw)
+    except ValueError:
+        return _DEFAULT_LOCAL_TIMEOUT
 
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
@@ -118,10 +135,40 @@ async def invoke_agent(
         if wrapper is None:
             msg = f"No handler for agent_id='{agent_id}', command='{command}'"
             raise LookupError(msg)
-        result = await wrapper(ctx)
+        try:
+            result = await asyncio.wait_for(wrapper(ctx), timeout=_get_local_timeout())
+        except TimeoutError:
+            timeout_signal = Signal(
+                type=SignalType.SEMANTIC_ERROR,
+                reason=f"Agent timed out after {_get_local_timeout()}s",
+                metadata={"error_type": "timeout"},
+            )
+            result = AgentResult(
+                success=False,
+                output="",
+                signals=(timeout_signal,),
+                trace_id=resolved_trace_id,
+                run_id=resolved_run_id,
+            )
         span.set_attribute("agent.success", result.success)
         span.set_attribute("agent.signal_count", len(result.signals))
         return result
+
+
+# Module-level HTTP client for connection pooling across invocations.
+# Lazy-initialized on first HTTP call; avoids import-time httpx dependency
+# for local-only deployments.
+_http_client: Any = None
+
+
+def _get_http_client() -> Any:
+    """Return a shared httpx.AsyncClient, creating it on first use."""
+    global _http_client
+    if _http_client is None:
+        import httpx
+
+        _http_client = httpx.AsyncClient(timeout=_get_http_timeout())
+    return _http_client
 
 
 async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
@@ -132,9 +179,10 @@ async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
     ``MONET_HTTP_TIMEOUT``. Artifacts in the response are deserialized
     back to ``ArtifactPointer`` so catalogue-writing agents transported
     over HTTP retain their pointers on the receiving side.
-    """
-    import httpx
 
+    Uses a module-level httpx.AsyncClient for connection pooling instead
+    of creating a new client per request.
+    """
     payload: dict[str, Any] = {
         "task": ctx["task"],
         "command": ctx["command"],
@@ -144,35 +192,34 @@ async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
     headers: dict[str, str] = {}
     propagate.inject(headers)
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            endpoint,
-            json=payload,
-            headers=headers,
-            timeout=_get_http_timeout(),
-        )
-        response.raise_for_status()
-        data = response.json()
+    client = _get_http_client()
+    response = await client.post(
+        endpoint,
+        json=payload,
+        headers=headers,
+    )
+    response.raise_for_status()
+    data = response.json()
 
     raw_signals = data.get("signals", [])
-    signals: list[Signal] = [
+    signals = tuple(
         Signal(
             type=s.get("type", ""),
             reason=s.get("reason", ""),
             metadata=s.get("metadata"),
         )
         for s in raw_signals
-    ]
+    )
 
     raw_artifacts = data.get("artifacts", []) or []
-    artifacts: list[ArtifactPointer] = [
+    artifacts = tuple(
         ArtifactPointer(
             artifact_id=a.get("artifact_id", ""),
             url=a.get("url", ""),
         )
         for a in raw_artifacts
         if isinstance(a, dict) and a.get("artifact_id")
-    ]
+    )
 
     return AgentResult(
         success=data["success"],

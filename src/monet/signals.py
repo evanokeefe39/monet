@@ -52,6 +52,7 @@ RECOVERABLE: frozenset[SignalType] = frozenset(
         SignalType.DEPENDENCY_FAILED,
         SignalType.RATE_LIMITED,
         SignalType.TOOL_UNAVAILABLE,
+        SignalType.SEMANTIC_ERROR,
     }
 )
 INFORMATIONAL: frozenset[SignalType] = frozenset(
@@ -74,7 +75,10 @@ ROUTING: frozenset[SignalType] = BLOCKING | RECOVERABLE
 
 def in_group(signal_type_str: str, group: frozenset[SignalType]) -> bool:
     """Membership test that accepts the raw string from a Signal TypedDict."""
-    return any(signal_type_str == s.value for s in group)
+    try:
+        return SignalType(signal_type_str) in group
+    except ValueError:
+        return False
 
 
 __all__ = [

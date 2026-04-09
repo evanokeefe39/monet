@@ -19,6 +19,11 @@ def _append_reducer(
     return existing + new
 
 
+def _int_append_reducer(existing: list[int], new: list[int]) -> list[int]:
+    """Reducer that appends int entries to existing list."""
+    return existing + new
+
+
 class AgentStateEntry(TypedDict, total=False):
     """A single agent result entry in graph state."""
 
@@ -70,6 +75,13 @@ class PlanningState(TypedDict, total=False):
     run_id: str
 
 
+class SignalsSummary(TypedDict, total=False):
+    """Typed summary of signal routing state for the current wave."""
+
+    route_action: str | None
+    wave_item_count: int
+
+
 class ExecutionState(TypedDict, total=False):
     """State for the wave-based execution graph."""
 
@@ -77,9 +89,9 @@ class ExecutionState(TypedDict, total=False):
     current_phase_index: int
     current_wave_index: int
     wave_results: Annotated[list[dict[str, Any]], _append_reducer]
-    wave_reflections: list[dict[str, Any]]
-    completed_phases: list[int]
-    signals: dict[str, Any] | None
+    wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
+    completed_phases: Annotated[list[int], _int_append_reducer]
+    signals: SignalsSummary | None
     abort_reason: str | None
     revision_count: int
     trace_id: str

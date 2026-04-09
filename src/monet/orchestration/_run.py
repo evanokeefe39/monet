@@ -1,18 +1,18 @@
 # mypy: disable-error-code="call-overload"
 """Top-level run() sequencer chaining entry → planning → execution.
 
-Uses MemorySaver for direct in-process invocation. HITL interrupts are
-resumable within the same process only. For durable cross-process
-resumption use LangGraph Server (langgraph dev / langgraph up) which
-attaches PostgresSaver automatically per langgraph.json.
+Defaults to MemorySaver for direct in-process invocation. Callers can
+pass any LangGraph checkpointer (e.g. PostgresSaver) for durable
+cross-process resumption. For LangGraph Server deployments the server
+attaches its own checkpointer per langgraph.json, so this parameter
+is only relevant for direct ``run()`` calls.
 """
 
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
@@ -20,21 +20,33 @@ from .entry_graph import build_entry_graph
 from .execution_graph import build_execution_graph
 from .planning_graph import build_planning_graph
 
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
 
 async def run(
     message: str,
     *,
     thread_id: str | None = None,
     auto_approve: bool = True,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> dict[str, Any]:
     """Run a message through entry → planning → execution.
 
-    Returns the final execution state. Compiles each graph with
-    MemorySaver for direct invocation. HITL approval is auto-approved
-    by default for non-interactive use.
+    Args:
+        message: The task to process.
+        thread_id: Thread identifier for checkpointing. Auto-generated
+            if not provided.
+        auto_approve: Auto-approve the planning HITL interrupt.
+            Defaults to True for non-interactive use.
+        checkpointer: LangGraph checkpointer instance. Defaults to
+            MemorySaver (in-process only). Pass PostgresSaver or any
+            BaseCheckpointSaver subclass for durable resumption.
     """
     thread_id = thread_id or f"run-{uuid.uuid4().hex[:8]}"
-    checkpointer = MemorySaver()
+    if checkpointer is None:
+        checkpointer = MemorySaver()
 
     # Entry / triage
     entry = build_entry_graph().compile(checkpointer=checkpointer)

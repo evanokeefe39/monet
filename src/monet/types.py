@@ -5,7 +5,7 @@ All types used across the SDK, catalogue, and orchestration layers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, TypedDict
 
 from .signals import SignalType
@@ -77,8 +77,8 @@ class AgentResult:
 
     success: bool
     output: str | dict[str, Any] | None = None
-    artifacts: list[ArtifactPointer] = field(default_factory=list)
-    signals: list[Signal] = field(default_factory=list)
+    artifacts: tuple[ArtifactPointer, ...] = ()
+    signals: tuple[Signal, ...] = ()
     trace_id: str = ""
     run_id: str = ""
 

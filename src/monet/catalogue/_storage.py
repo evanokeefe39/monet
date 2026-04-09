@@ -49,9 +49,7 @@ class FilesystemStorage:
         """
         artifact_id = metadata["artifact_id"]
         artifact_dir = self.root / artifact_id
-        await asyncio.to_thread(
-            artifact_dir.mkdir, parents=True, exist_ok=True
-        )
+        await asyncio.to_thread(artifact_dir.mkdir, parents=True, exist_ok=True)
 
         async with aiofiles.open(artifact_dir / "content", "wb") as f:
             await f.write(content)

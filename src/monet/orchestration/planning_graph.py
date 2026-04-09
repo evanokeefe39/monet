@@ -21,6 +21,8 @@ from monet import get_catalogue
 from monet._tracing import attached_trace, extract_carrier_from_config
 
 from ._invoke import invoke_agent
+from ._result_parser import ParseFailure, parse_json_output
+from ._retry_budget import check_budget, increment_budget
 from ._state import PlanningState
 from ._validate import _assert_registered
 
@@ -54,18 +56,17 @@ async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str
             run_id=state.get("run_id", ""),
         )
 
-    brief: dict[str, Any] = {}
-    if isinstance(result.output, dict):
-        brief = result.output
-    elif isinstance(result.output, str) and result.output.strip():
-        try:
-            brief = json.loads(result.output)
-        except json.JSONDecodeError:
+    parsed = parse_json_output(result)
+    if isinstance(parsed, ParseFailure):
+        # Fallback: check catalogue artifacts for the brief.
+        if result.artifacts:
+            pointer = result.artifacts[0]
+            content_bytes, _meta = await get_catalogue().read(pointer["artifact_id"])
+            brief: dict[str, Any] = json.loads(content_bytes.decode())
+        else:
             brief = {}
-    elif result.artifacts:
-        pointer = result.artifacts[0]
-        content_bytes, _meta = await get_catalogue().read(pointer["artifact_id"])
-        brief = json.loads(content_bytes.decode())
+    else:
+        brief = parsed
 
     return {"work_brief": brief}
 
@@ -85,11 +86,11 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
 
     if approved:
         return {"plan_approved": True}
-    if feedback and state.get("revision_count", 0) < MAX_REVISIONS:
+    if feedback and check_budget(state, MAX_REVISIONS):
         return {
             "plan_approved": False,
             "human_feedback": feedback,
-            "revision_count": state.get("revision_count", 0) + 1,
+            **increment_budget(state),
         }
     return {"plan_approved": False}
 
@@ -103,7 +104,7 @@ def route_from_planner(state: PlanningState) -> str:
 def route_from_approval(state: PlanningState) -> str:
     if state.get("plan_approved"):
         return END
-    if state.get("human_feedback") and state.get("revision_count", 0) <= MAX_REVISIONS:
+    if state.get("human_feedback") and check_budget(state, MAX_REVISIONS + 1):
         return "planner"
     return END
 

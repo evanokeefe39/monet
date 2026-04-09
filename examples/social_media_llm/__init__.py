@@ -1,10 +1,10 @@
 """Reference monet client — drives the SDK reference stack via a
 LangGraph Server. See ``cli.py`` for the entry point.
 
-Importing this package also works from the repo root via
-``python -m examples.social_media_llm`` — the package ``__init__.py``
-and ``__main__.py`` wire the flat modules (``cli``, ``app``, etc.)
-into this namespace so either invocation style works.
+Run from the example directory::
+
+    cd examples/social_media_llm
+    uv run python cli.py "AI in marketing"
 """
 
 from __future__ import annotations

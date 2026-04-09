@@ -7,8 +7,8 @@ interrupts via :mod:`workflow`.
 Run with::
 
     cd examples/social_media_llm
-    uv run langgraph dev                       # Terminal A
-    uv run python -m examples.social_media_llm "AI in marketing"  # Terminal B
+    uv run langgraph dev                          # Terminal A
+    uv run python cli.py "AI in marketing"        # Terminal B
 """
 
 from __future__ import annotations

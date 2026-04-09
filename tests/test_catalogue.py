@@ -229,9 +229,7 @@ def test_filesystem_storage_no_blocking_syscalls_in_write() -> None:
             # Path(...).resolve() calls — the attr is "resolve".
             if chain and chain[-1] == "resolve":
                 receiver = ".".join(chain[:-1]) or "<expr>"
-                offenders.append(
-                    f"line {node.lineno}: .resolve() on {receiver}"
-                )
+                offenders.append(f"line {node.lineno}: .resolve() on {receiver}")
             # os.getcwd()
             if chain == ["os", "getcwd"]:
                 offenders.append(f"line {node.lineno}: os.getcwd()")
