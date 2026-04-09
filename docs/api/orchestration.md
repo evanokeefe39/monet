@@ -4,94 +4,142 @@ All exports from `monet.orchestration`.
 
 ## State types
 
-### `GraphState`
+### `EntryState`
 
 ```python
-class GraphState(TypedDict, total=False):
+class EntryState(TypedDict, total=False):
     task: str
+    triage: dict[str, Any] | None
     trace_id: str
     run_id: str
-    results: Annotated[list[dict[str, Any]], _append_reducer]
-    needs_review: bool
 ```
 
-Top-level LangGraph state. The `results` field uses an append reducer -- new entries are concatenated with existing entries rather than replacing them.
-
-### `AgentStateEntry`
+### `PlanningState`
 
 ```python
-class AgentStateEntry(TypedDict, total=False):
+class PlanningState(TypedDict, total=False):
+    task: str
+    work_brief: dict[str, Any] | None
+    planning_context: Annotated[list[dict[str, Any]], _append_reducer]
+    human_feedback: str | None
+    plan_approved: bool | None
+    revision_count: int
+    trace_id: str
+    run_id: str
+```
+
+### `ExecutionState`
+
+```python
+class ExecutionState(TypedDict, total=False):
+    work_brief: dict[str, Any]
+    current_phase_index: int
+    current_wave_index: int
+    wave_results: Annotated[list[dict[str, Any]], _append_reducer]
+    wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
+    completed_phases: Annotated[list[int], _int_append_reducer]
+    signals: SignalsSummary | None
+    abort_reason: str | None
+    revision_count: int
+    trace_id: str
+    run_id: str
+    pending_context: list[dict[str, Any]]
+    trace_carrier: dict[str, str]
+```
+
+### `WaveItem`
+
+```python
+class WaveItem(TypedDict, total=False):
     agent_id: str
     command: str
-    effort: str
-    output: str
-    artifact_url: str
-    summary: str
-    confidence: float
-    completeness: str
-    success: bool
-    needs_human_review: bool
-    escalation_requested: bool
-    semantic_error: dict[str, str] | None
+    task: str
+    phase_index: int
+    wave_index: int
+    item_index: int
     trace_id: str
     run_id: str
+    context: list[dict[str, Any]]
+    trace_carrier: dict[str, str]
 ```
 
-A single agent result entry in graph state. All fields are optional (`total=False`).
-
-## Functions
-
-### `create_node`
+### `WaveResult`
 
 ```python
-def create_node(
-    agent_id: str,
-    command: str = "fast",
-    content_limit: int = 4000,
-    *,
-    interrupt_on_review: bool = True,
-) -> Callable[[GraphState], Coroutine[Any, Any, dict[str, Any]]]
+class WaveResult(TypedDict):
+    phase_index: int
+    wave_index: int
+    item_index: int
+    agent_id: str
+    command: str
+    output: str | dict[str, Any] | None
+    artifacts: list[dict[str, Any]]
+    signals: list[dict[str, Any]]
 ```
 
-Creates a LangGraph node function for an agent. The returned async function handles OTel spans, agent invocation, result translation, content limit enforcement, and HITL interrupts.
-
-The node function's `__name__` and `__qualname__` are set to `"{agent_id}_{command}"`.
+## Functions
 
 ### `invoke_agent`
 
 ```python
 async def invoke_agent(
     agent_id: str,
-    command: str,
-    ctx: AgentRunContext,
+    command: str = "fast",
+    task: str = "",
+    context: list[dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+    run_id: str | None = None,
+    skills: list[str] | None = None,
+    **kwargs: Any,
 ) -> AgentResult
 ```
 
-Transport-agnostic agent invocation. Routes based on environment configuration:
-
-- **Local** (default): looks up the handler in the default registry, calls directly
-- **HTTP**: POSTs to the endpoint from `MONET_AGENT_{AGENT_ID}_URL`
+Queue-based agent dispatch. Checks the capability manifest before enqueue — returns `CAPABILITY_UNAVAILABLE` signal instantly if the agent is not declared. Looks up pool from manifest, enqueues to the pool's queue, and polls for result. Cancels the task on timeout.
 
 Environment variables:
 
-- `MONET_AGENT_TRANSPORT` -- `"http"` for HTTP mode, anything else for local
-- `MONET_AGENT_{AGENT_ID}_URL` -- HTTP endpoint for a specific agent
+- `MONET_AGENT_TIMEOUT` — poll timeout in seconds (default 600)
 
-### `build_retry_policy`
-
-```python
-def build_retry_policy(descriptor: CommandDescriptor) -> RetryPolicy
-```
-
-Converts a `CommandDescriptor`'s `RetryConfig` into a LangGraph `RetryPolicy`. Sets `max_attempts = max_retries + 1`.
-
-### `enforce_content_limit`
+### `configure_queue`
 
 ```python
-def enforce_content_limit(
-    entry: dict[str, Any],
-    limit: int = 4000,
-) -> dict[str, Any]
+def configure_queue(queue: TaskQueue | None) -> None
 ```
 
-Checks output length against limit. If over limit and a catalogue client is available, writes full content to the catalogue and replaces the output with a truncated summary plus `artifact_url`. If no catalogue, truncates directly. Returns the (possibly modified) entry dict.
+Set or clear the task queue used by `invoke_agent`. Called by `bootstrap()` or manually in tests.
+
+### `build_entry_graph`
+
+```python
+def build_entry_graph() -> StateGraph
+```
+
+Builds the triage graph. Single node: planner/fast classifies complexity.
+
+### `build_planning_graph`
+
+```python
+def build_planning_graph() -> StateGraph
+```
+
+Builds the planning graph. Planner/plan → human approval gate → work brief output. Max 3 revision rounds.
+
+### `build_execution_graph`
+
+```python
+def build_execution_graph() -> StateGraph
+```
+
+Builds the execution graph. Wave-based parallel execution with QA reflection, retry budget, and signal routing.
+
+## Task Queue Protocol
+
+```python
+class TaskQueue(Protocol):
+    async def enqueue(self, agent_id, command, ctx, pool="local") -> str: ...
+    async def poll_result(self, task_id, timeout) -> AgentResult: ...
+    async def claim(self, pool) -> TaskRecord | None: ...
+    async def complete(self, task_id, result) -> None: ...
+    async def fail(self, task_id, error) -> None: ...
+    async def cancel(self, task_id) -> None: ...
+```

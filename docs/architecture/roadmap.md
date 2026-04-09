@@ -2,63 +2,67 @@
 
 ## Shipped
 
-The following modules are implemented and tested:
-
-### Core SDK (9 modules)
-- [x] `@agent` decorator with dual call signature (`agent("id")` partial form), parameter injection, auto-registration, content offload
-- [x] `AgentResult` (output: `str | dict | None`), `AgentRunContext`, `Signal` (TypedDict) types
-- [x] `SignalType` vocabulary + `BLOCKING`/`RECOVERABLE`/`INFORMATIONAL`/`AUDIT`/`ROUTING` group frozensets
-- [x] `AgentStream` with `.cli()`/`.sse()`/`.http()` named constructors, `.on()` handler builder, default handler wiring
-- [x] `webhook_handler`, `log_handler` handler factories
+### Core SDK
+- [x] `@agent` decorator with dual call signature, parameter injection, auto-registration, content offload, pool assignment
+- [x] `AgentResult`, `AgentRunContext`, `Signal` (TypedDict), `ArtifactPointer` types
+- [x] `SignalType` vocabulary + `BLOCKING`/`RECOVERABLE`/`INFORMATIONAL`/`AUDIT`/`ROUTING` groups + `CAPABILITY_UNAVAILABLE`
+- [x] `AgentStream` with `.cli()`/`.sse()`/`.http()` constructors, `.on()` handler builder
+- [x] `webhook_handler` (with timeout + error handling), `log_handler` handler factories
 - [x] `get_run_context()`, `get_run_logger()` context access
 - [x] Ambient trio: `emit_progress()`, `emit_signal()`, `write_artifact()`
-- [x] `configure_catalogue()` for backend wiring
+- [x] `configure_catalogue()`, `catalogue_from_env()` for backend wiring
+- [x] `resolve_context()` for agent-side catalogue content resolution
 - [x] `NeedsHumanReview`, `EscalationRequired`, `SemanticError` typed exceptions
-- [x] Build-time registry validation (`_assert_registered`) in graph builders; `SemanticError("agent_not_found")` from `fan_out_wave` for unknown planner-specified agents
 - [x] `AgentDescriptor`, `CommandDescriptor`, `SLACharacteristics`, `RetryConfig` descriptors
-- [x] `DescriptorRegistry` with thread-safe registration and test isolation
 - [x] OpenTelemetry tracing (spans, W3C traceparent, gen_ai.* conventions)
 
-### Catalogue (6 modules)
+### Task Queue and Worker
+- [x] `TaskQueue` protocol with pool-based claim (Prefect model)
+- [x] `InMemoryTaskQueue` with per-pool queues, O(1) claim, backpressure, memory cleanup, cancellation
+- [x] `run_worker()` with concurrent execution (semaphore-capped), OTel spans, graceful shutdown
+- [x] `bootstrap()` one-call server init (tracing → catalogue → manifest → queue → worker)
+
+### Capability Manifest
+- [x] `AgentManifest` static capability declaration with pool assignment
+- [x] `@agent` auto-populates both registry and manifest
+- [x] `_assert_registered` checks manifest (not handler registry) at graph build time
+- [x] `invoke_agent` checks manifest before enqueue; `CAPABILITY_UNAVAILABLE` signal on missing agent
+
+### Catalogue
 - [x] `CatalogueClient` protocol
-- [x] `ArtifactMetadata` Pydantic model with PII/retention validation
-- [x] `StorageBackend` protocol
-- [x] `FilesystemStorage` implementation
-- [x] `CatalogueService` (composes storage + SQLite index)
+- [x] `ArtifactMetadata` model
+- [x] `FilesystemStorage` + `SQLiteIndex` implementations
+- [x] `CatalogueService` (composes storage + index)
 - [x] `InMemoryCatalogueClient` for testing
 
-### Orchestration (5 modules)
-- [x] `GraphState`, `AgentStateEntry` lean state schema
-- [x] `create_node()` LangGraph node factory with HITL interrupt support
-- [x] `invoke_agent()` transport-agnostic invocation (local + HTTP)
-- [x] `build_retry_policy()` from descriptor config
-- [x] `enforce_content_limit()` with catalogue offload
+### Orchestration
+- [x] Three-graph supervisor topology: entry (triage) → planning (HITL) → execution (wave-based parallel)
+- [x] Queue-only dispatch: `invoke_agent` enqueues to TaskQueue, polls for results
+- [x] Pointer-only state: `_resolve_wave_result` passes summaries + catalogue pointers only
+- [x] Wave fan-out via LangGraph `Send`, QA reflection gates, retry budget
+- [x] Signal routing: `SignalRouter` maps signal groups to actions (interrupt, retry)
+- [x] State schemas: `EntryState`, `PlanningState`, `ExecutionState`, `WaveItem`, `WaveResult`
 
-### Server (4 modules)
-- [x] FastAPI application factory
-- [x] Agent routes (`POST /agents/{agent_id}/{command}`)
-- [x] Catalogue routes (`POST/GET /artifacts`)
-- [x] Health route
+### Reference Agents
+- [x] Planner (triage + work brief generation)
+- [x] Researcher (fast + deep modes)
+- [x] Writer (content generation)
+- [x] QA (wave reflection evaluation)
+- [x] Publisher (content publishing)
 
-## In progress
+### Server
+- [x] FastAPI application factory with agent and catalogue routes
 
-- [ ] **Supervisor graph topology** -- three-graph system (triage, planning, execution) with wave-based parallel execution. See [Graph Topology](graph-topology.md).
+## Planned (Distribution Mode)
 
-## Planned
+Deferred until there is a deployment beyond single-server monolith. The queue protocol and pool abstractions support this without architecture changes.
 
-- [ ] **Reference agents** -- five agents (planner, researcher, writer, QA, publisher) implemented with pi as the runtime
-- [ ] **Skills system** -- versioned markdown files providing domain knowledge, loaded into agent context at invocation time
-- [ ] **Extensions** -- lifecycle hooks (thinking, todo, context compression, tool result size) following pi's pattern
-- [ ] **Langfuse integration** -- operational configuration for self-hosted Langfuse as OTel backend
-- [ ] **Kaizen hook** -- unconditional post-execution reflection with hansei record
-- [ ] **Work brief structure** -- structured plan artifact with phases, dependency waves, and quality criteria
-- [ ] **Postgres checkpointing** -- durable graph execution state for production
-- [ ] **Postgres metadata index** -- production catalogue index replacing SQLite
-
-## Open design questions
-
-| Item | Description |
-|---|---|
-| Skill store structure | Directory layout, naming conventions, loading mechanism |
-| Extension interface | Precise hook signatures for the reference extensions |
-| Base agent definitions | System prompts, toolsets, default extensions per reference agent |
+- [ ] **Queue API endpoints** — FastAPI routes for remote worker claim/complete/fail
+- [ ] **monet.toml** — declarative pool topology config
+- [ ] **monet worker CLI** — standalone process with AST discovery, heartbeat, poll loop
+- [ ] **Forwarding worker** — claims push-pool tasks, forwards to Cloud Run/ECS
+- [ ] **Lease TTL + sweeper** — requeue crashed tasks
+- [ ] **monet register CLI** — CI/CD command for declaring remote agent deployments
+- [ ] **Redis/Upstash queue backend** — persistent TaskQueue for cross-process workers
+- [ ] **monet.client module** — SDK client utilities (drain_stream, get_state_values, state initializers)
+- [ ] **Optional summarizer agent** — framework-inserted wave context condensation

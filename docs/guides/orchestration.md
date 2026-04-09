@@ -1,169 +1,123 @@
 # Orchestration
 
-The orchestration layer integrates monet agents with LangGraph. It provides node wrappers, state schemas, and utilities that handle the bridge between agent invocations and graph execution.
+The orchestration layer integrates monet agents with LangGraph. It provides a three-graph supervisor topology, a task queue for decoupled dispatch, and pointer-only state management.
 
-## Graph state
+## Three-graph topology
 
-LangGraph state entries are always lean. Full artifact content never lives in graph state -- only summaries, pointers, confidence scores, and signals.
+Every user message flows through three graphs with clean handoffs:
 
-### `GraphState`
+1. **Entry graph** — triage via planner/fast. Classifies as simple or complex.
+2. **Planning graph** — planner/plan generates a work brief. Human approval gate with bounded revision count.
+3. **Execution graph** — wave-based parallel execution via LangGraph `Send`. QA reflection gates. Retry budget. Signal routing.
 
-The top-level state for a monet LangGraph graph:
+See [Graph Topology](../architecture/graph-topology.md) for the full topology diagrams.
 
-| Field | Type | Description |
-|---|---|---|
-| `task` | `str` | The user's task |
-| `trace_id` | `str` | OTel trace ID |
-| `run_id` | `str` | LangGraph run ID |
-| `results` | `list[dict]` | Agent result entries (append-only via reducer) |
-| `needs_review` | `bool` | Whether any agent flagged human review |
+## State schemas
 
-### `AgentStateEntry`
+Each graph has its own TypedDict state:
 
-Each entry in `results` follows this schema:
+- `EntryState` — task, triage result, trace/run IDs
+- `PlanningState` — task, work brief, planning context, human feedback, revision count
+- `ExecutionState` — work brief, phase/wave indices, wave results (append-only), wave reflections, signals, abort reason, pending context
 
-| Field | Type | Description |
-|---|---|---|
-| `agent_id` | `str` | Which agent produced this |
-| `command` | `str` | Which command was invoked |
-| `effort` | `str` | Effort level passed at invocation |
-| `output` | `str` | Inline result or artifact URL |
-| `artifact_url` | `str` | Catalogue URL if offloaded |
-| `summary` | `str` | Bounded summary |
-| `confidence` | `float` | 0.0--1.0 |
-| `completeness` | `str` | `complete`, `partial`, or `resource-bounded` |
-| `success` | `bool` | Whether the agent completed without error |
-| `needs_human_review` | `bool` | Human review signal |
-| `escalation_requested` | `bool` | Escalation signal |
-| `semantic_error` | `dict \| None` | Error info (`type` + `message`) |
-| `trace_id` | `str` | OTel trace ID |
-| `run_id` | `str` | LangGraph run ID |
-
-## Creating nodes
-
-`create_node()` is the factory for LangGraph node functions:
-
-```python
-from monet.orchestration import create_node
-
-researcher_node = create_node(agent_id="researcher", command="deep")
-writer_node = create_node(agent_id="writer", command="fast", content_limit=2000)
-```
-
-Parameters:
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `agent_id` | `str` | required | The agent's registered ID |
-| `command` | `str` | `"fast"` | Which command to invoke |
-| `content_limit` | `int` | `4000` | Max output chars before offload |
-| `interrupt_on_review` | `bool` | `True` | Call `interrupt()` on `needs_human_review` |
-
-The returned async function:
-
-1. Starts an OTel span with agent ID, command, and run context
-2. Constructs an `AgentRunContext` from the graph state
-3. Calls `invoke_agent()` (local or HTTP based on configuration)
-4. Translates `AgentResult` to a lean state entry
-5. Enforces the content limit
-6. Calls `langgraph.interrupt()` if `needs_human_review` is `True` and `interrupt_on_review` is enabled
-7. Returns a state update dict with the result appended to `results`
-
-## Building a graph
-
-```python
-from langgraph.graph import StateGraph
-
-from monet.orchestration import GraphState, create_node
-
-# Define nodes
-researcher = create_node(agent_id="researcher", command="deep")
-writer = create_node(agent_id="writer", command="fast")
-
-# Build graph
-graph = StateGraph(GraphState)
-graph.add_node("research", researcher)
-graph.add_node("write", writer)
-graph.add_edge("research", "write")
-graph.set_entry_point("research")
-graph.set_finish_point("write")
-
-app = graph.compile()
-
-# Run
-result = await app.ainvoke({
-    "task": "Research and write about quantum computing",
-    "trace_id": "trace-123",
-    "run_id": "run-456",
-})
-```
+State is pointer-only: `pending_context` entries contain summaries and catalogue artifact pointers, never full content. Agents that need upstream content call `resolve_context()`.
 
 ## Agent invocation
 
-`invoke_agent()` is transport-agnostic. It routes to local or HTTP invocation based on configuration:
-
-- **Local**: looks up the handler in the agent registry and calls it directly as a Python function
-- **HTTP**: POSTs to the agent's endpoint with the `AgentRunContext` serialised as JSON
-
-Transport mode is controlled by environment variables:
-
-- `MONET_AGENT_TRANSPORT` -- set to `"http"` for HTTP mode (default is local)
-- `MONET_AGENT_{AGENT_ID}_URL` -- endpoint URL for a specific agent in HTTP mode
-
-## Content limit enforcement
-
-`enforce_content_limit()` is called by the node wrapper after each agent response. If the output exceeds the configured limit:
-
-1. If a catalogue client is available: writes the full content to the catalogue, replaces the output with a truncated summary and the `artifact_url`
-2. If no catalogue: truncates the output directly
-
-This keeps graph state lean regardless of how much content agents produce.
-
-## Retry policy
-
-`build_retry_policy()` converts an agent's `CommandDescriptor.retry` configuration into a LangGraph `RetryPolicy`:
+`invoke_agent()` dispatches via the configured task queue:
 
 ```python
-from monet.descriptors import AgentDescriptor, CommandDescriptor, RetryConfig
-from monet.orchestration import build_retry_policy
+from monet.orchestration import invoke_agent
 
-descriptor = AgentDescriptor(
-    agent_id="researcher",
-    commands={
-        "deep": CommandDescriptor(
-            retry=RetryConfig(max_retries=3, retryable_errors=["unexpected_error"])
-        )
-    },
-)
-
-policy = build_retry_policy(descriptor.commands["deep"])
+result = await invoke_agent("researcher", command="deep", task="quantum computing")
 ```
 
-`SemanticError` with `type="unexpected_error"` triggers retry if the descriptor declares it retryable.
+The dispatch flow:
+
+1. Check capability manifest — if agent not declared, return `CAPABILITY_UNAVAILABLE` signal instantly
+2. Look up pool from manifest
+3. Enqueue task to the pool's queue
+4. Poll for result (with configurable timeout via `MONET_AGENT_TIMEOUT`)
+5. On timeout, cancel the task to prevent wasted execution
+
+Transport (local call, HTTP, cloud forwarding) is the worker's concern, not the orchestrator's. The queue abstracts it.
+
+## Task queue
+
+The `TaskQueue` protocol separates orchestration from execution:
+
+- **Producer side** (invoke_agent): `enqueue()` + `poll_result()`
+- **Consumer side** (workers): `claim(pool)` + `complete()` + `fail()`
+
+Workers claim by pool (Prefect model): each worker serves one pool and executes whatever lands in it. Handler lookup is the worker's concern.
+
+The `InMemoryTaskQueue` provides per-pool FIFO queues, O(1) claim, backpressure limits, task cancellation, and memory cleanup. It is production-viable for single-server monolith deployment.
+
+## Server bootstrap
+
+```python
+from monet.server import bootstrap
+
+worker_task = await bootstrap(
+    catalogue_root=".catalogue",
+    enable_tracing=True,
+)
+```
+
+`bootstrap()` handles the full startup sequence with guaranteed ordering:
+
+1. Configure OpenTelemetry tracing
+2. Configure catalogue (from path or `MONET_CATALOGUE_DIR` env var)
+3. Create task queue (in-memory by default)
+4. Start background worker for the local pool
+5. Monitor worker health via done_callback
+
+## Pool system
+
+Agents declare their pool via the `@agent` decorator:
+
+```python
+@agent("researcher", pool="local")     # runs in-process
+@agent("transcriber", pool="default")  # remote worker
+@agent("pipeline", pool="cloud")       # forwarded to Cloud Run/ECS
+```
+
+Default pool is `"local"`. The manifest tracks pool assignments. Workers claim tasks from their assigned pool only.
+
+## Pointer-only state
+
+Full artifact content never enters orchestration state. After each wave:
+
+1. `_resolve_wave_result()` extracts a 200-char summary and catalogue pointers
+2. Downstream agents receive pointers in their context
+3. Agents that need full content call `resolve_context()`:
+
+```python
+from monet import resolve_context
+
+@agent("writer")
+async def write(task: str, context: list) -> str:
+    resolved = await resolve_context(context)
+    # resolved entries now have 'content' field populated from catalogue
+    ...
+```
+
+This keeps LangGraph checkpoints small and LLM context focused.
+
+## Signal routing
+
+The execution graph routes signals via `SignalRouter`:
+
+- `BLOCKING` signals (needs_human_review, escalation_required) → HITL interrupt
+- `RECOVERABLE` signals (rate_limited, tool_unavailable, capability_unavailable) → retry wave
+- `INFORMATIONAL` signals → feed QA reflection verdict
+- `AUDIT` signals → logged, no routing action
 
 ## Human-in-the-loop
 
-HITL is the orchestrator's concern, not the agent's. It is implemented in two ways:
+HITL is the orchestrator's concern, not the agent's:
 
-**Structural checkpoints** -- nodes that always require human review use LangGraph's `interrupt_before` at graph compile time:
-
-```python
-graph.add_node("publish", publisher_node)
-app = graph.compile(interrupt_before=["publish"])
-```
-
-**Policy-driven checkpoints** -- the node wrapper calls `langgraph.interrupt()` when `needs_human_review` is `True` in the agent's signals. This is enabled by default (`interrupt_on_review=True` on `create_node()`). The interrupt payload includes the agent ID, the review reason, and the full state entry.
+- **Planning graph**: human approval gate after work brief generation. Bounded revision count (max 3).
+- **Execution graph**: HITL interrupt on blocking signals or QA failure. Resume with `Command(resume={"action": "abort"|..., "feedback": str})`.
 
 Agents emit honest signals. The orchestrator decides what action each signal triggers.
-
-## Planned features
-
-!!! info "Coming soon"
-    The following orchestration features are designed but not yet implemented:
-
-- **Supervisor graph topology** -- three-graph system (triage, planning, execution) with wave-based parallel execution. See [Graph Topology](../architecture/graph-topology.md).
-- **QA as structural safeguard** -- QA agent invoked by orchestrator policy, independent of producing agent signals
-- **Post-wave reflection** -- QA checkpoint after each execution wave
-- **Work brief structure** -- structured plan artifact with phases, dependency waves, and quality criteria
-- **Postgres checkpointing** -- durable graph execution state (currently uses in-memory or SQLite checkpointers)
-- **Durable execution patterns** -- Temporal integration for intra-invocation durability on long-running agents
