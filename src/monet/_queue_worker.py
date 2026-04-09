@@ -48,11 +48,17 @@ async def run_worker(
     in_flight: set[asyncio.Task[None]] = set()
 
     async def _execute(record: TaskRecord) -> None:
+        from monet.queue import TaskStatus
+
         task_id = record["task_id"]
         agent_id = record["agent_id"]
         command = record["command"]
 
         async with sem:
+            # Check if task was cancelled while waiting for semaphore
+            if record.get("status") == TaskStatus.CANCELLED:
+                return
+
             with _tracer.start_as_current_span(
                 f"worker.execute.{agent_id}.{command}",
                 attributes={

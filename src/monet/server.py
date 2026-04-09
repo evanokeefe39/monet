@@ -83,6 +83,20 @@ async def bootstrap(
     worker_task: asyncio.Task[Any] = asyncio.create_task(
         run_worker(queue, default_registry)
     )
+
+    # Health monitoring: log if worker exits unexpectedly
+    def _on_worker_done(task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            import logging
+
+            logging.getLogger("monet.server").error(
+                "Worker task exited with exception: %s", exc
+            )
+
+    worker_task.add_done_callback(_on_worker_done)
     return worker_task
 
 

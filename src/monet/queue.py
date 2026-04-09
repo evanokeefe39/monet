@@ -30,6 +30,7 @@ class TaskStatus(StrEnum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class TaskRecord(TypedDict):
@@ -108,4 +109,12 @@ class TaskQueue(Protocol):
 
     async def fail(self, task_id: str, error: str) -> None:
         """Post a failure for a claimed task."""
+        ...
+
+    async def cancel(self, task_id: str) -> None:
+        """Cancel a pending or claimed task.
+
+        Workers should check for cancellation and skip execution.
+        If the task is already completed or failed, this is a no-op.
+        """
         ...

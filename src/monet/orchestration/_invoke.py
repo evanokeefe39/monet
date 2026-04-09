@@ -133,7 +133,14 @@ async def invoke_agent(
     ) as span:
         pool = default_manifest.get_pool(agent_id, command) or "local"
         task_id = await _task_queue.enqueue(agent_id, command, ctx, pool=pool)
-        result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
+        try:
+            result = await _task_queue.poll_result(
+                task_id, timeout=_get_timeout()
+            )
+        except TimeoutError:
+            # Cancel the task so workers don't waste resources on it
+            await _task_queue.cancel(task_id)
+            raise
         span.set_attribute("agent.success", result.success)
         span.set_attribute("agent.signal_count", len(result.signals))
         return result
