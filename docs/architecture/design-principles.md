@@ -38,7 +38,7 @@ These architectural decisions apply across the system:
 
 - One uniform interface per agent resolves the MxN contracts problem
 - Agents are reusable capability units, not workflow-specific components
-- Agent selection is fixed at graph construction time -- no runtime discovery
+- Agent selection is fixed at planning time. Capability availability is validated before dispatch
 - HITL is the orchestrator's concern, not the agent's
 - All agent signals are informational -- agents influence but do not control routing
 - The orchestrator preserves agent opacity -- agents collaborate without exposing internals

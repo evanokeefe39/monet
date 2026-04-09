@@ -24,8 +24,8 @@ async def researcher_deep(task: str, context: list) -> str:
 ```
 
 ```python
-# Form 2 — verbose
-@agent(agent_id="writer", command="deep")
+# Form 2 — verbose (with pool assignment)
+@agent(agent_id="writer", command="deep", pool="default")
 async def writer_deep(task: str) -> str:
     """Generate the article body from the brief."""
     return await write(task)

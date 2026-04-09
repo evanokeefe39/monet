@@ -1,8 +1,5 @@
 # Graph Topology
 
-!!! warning "Planned Feature"
-    The three-graph topology described here is under active development and is not yet available in the released library. The core orchestration primitives (`create_node`, `invoke_agent`, `GraphState`) are implemented and usable for building custom graphs today.
-
 ## Overview
 
 The system is structured as three graphs with clean handoffs between them. Each graph has a single, focused responsibility and is independently testable, restartable from its own checkpoint, and independently deployable.
