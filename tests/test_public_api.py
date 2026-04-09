@@ -25,6 +25,7 @@ def test_monet_root_exports() -> None:
         "get_run_context",
         "get_run_logger",
         "get_catalogue",
+        "resolve_context",
         "emit_progress",
         "emit_signal",
         "NeedsHumanReview",
