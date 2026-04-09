@@ -21,7 +21,7 @@ from langchain_core.runnables import (
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
-from monet import emit_progress, get_catalogue
+from monet import emit_progress
 from monet._manifest import default_manifest
 from monet._tracing import (
     EXECUTION_ROOT_SPAN_NAME,
@@ -105,88 +105,28 @@ async def load_plan(state: ExecutionState, config: RunnableConfig) -> dict[str, 
     }
 
 
-async def _resolve_wave_result(wr: dict[str, Any]) -> dict[str, Any]:
-    """Convert a stored WaveResult into a context entry for downstream agents.
+def _resolve_wave_result(wr: dict[str, Any]) -> dict[str, Any]:
+    """Convert a stored WaveResult into a pointer-only context entry.
 
-    If the inline ``output`` is short or absent and the result has catalogue
-    artifacts, text artifacts are fetched and concatenated as ``content``.
-    This is what makes upstream research actually visible to
-    writer/qa/publisher instead of leaving them with a 200-char summary.
-
-    Non-text artifacts (images, PDFs, binary blobs) are skipped rather
-    than blind-decoded as utf-8: decoding a PNG with ``errors="replace"``
-    dumps a sea of U+FFFD characters straight into the next LLM prompt.
-    They surface as a short metadata stub instead. Agents that need the
-    raw bytes can still ``get_catalogue().read(artifact_id)`` directly.
+    The orchestration layer never loads full artifact content. It passes
+    only a short summary and catalogue pointers. Agents that need full
+    upstream content call ``resolve_context()`` from ``monet._context_resolver``.
     """
     output = wr.get("output")
     if isinstance(output, dict):
-        content = json.dumps(output)
+        summary = json.dumps(output)[:200]
     elif isinstance(output, str):
-        content = output
+        summary = output[:200]
     else:
-        content = ""
-
-    artifacts = wr.get("artifacts") or []
-    if (not content or len(content) < 500) and artifacts:
-        catalogue = get_catalogue()
-        fetched_blocks: list[str] = []
-        binary_stubs: list[str] = []
-        for art in artifacts:
-            art_id = art.get("artifact_id") or art.get("id")
-            if not art_id:
-                continue
-            try:
-                raw, meta = await catalogue.read(art_id)
-            except (KeyError, ValueError, FileNotFoundError):
-                continue
-            content_type = (meta.get("content_type") or "").lower()
-            if _is_text_content_type(content_type):
-                fetched_blocks.append(raw.decode("utf-8", errors="replace"))
-            else:
-                size = meta.get("content_length") or len(raw)
-                binary_stubs.append(
-                    f"[binary artifact {art_id[:8]} "
-                    f"type={content_type or 'unknown'} size={size}b "
-                    f"— not inlined]"
-                )
-        if fetched_blocks:
-            content = "\n\n---\n\n".join(fetched_blocks)
-        elif binary_stubs:
-            # No text to inline; surface the binary stubs so downstream
-            # agents at least know artifacts exist.
-            content = "\n".join(binary_stubs)
+        summary = ""
 
     return {
         "type": "prior_output",
         "agent_id": wr.get("agent_id", ""),
         "command": wr.get("command", ""),
-        "summary": content[:200] if content else "",
-        "content": content,
+        "summary": summary,
+        "artifacts": wr.get("artifacts", []),
     }
-
-
-_TEXT_CONTENT_TYPE_PREFIXES: tuple[str, ...] = (
-    "text/",
-    "application/json",
-    "application/xml",
-    "application/yaml",
-    "application/x-yaml",
-    "application/javascript",
-    "application/x-ndjson",
-)
-
-
-def _is_text_content_type(content_type: str) -> bool:
-    """Classify a MIME type as safely decodable as utf-8 text.
-
-    Covers the text/* family plus the common application/* types that
-    carry textual payloads (JSON, XML, YAML, JS, NDJSON). Anything else
-    is treated as binary — agents that need those bytes should read the
-    catalogue directly rather than get a replacement-char soup in their
-    prompt.
-    """
-    return any(content_type.startswith(p) for p in _TEXT_CONTENT_TYPE_PREFIXES)
 
 
 async def prepare_wave(state: ExecutionState) -> dict[str, Any]:
@@ -234,7 +174,7 @@ async def prepare_wave(state: ExecutionState) -> dict[str, Any]:
         for wr in state.get("wave_results", [])
         if (wr.get("phase_index") or 0) < current_phase
     ]
-    pending = [await _resolve_wave_result(wr) for wr in prior_phase_results + prior]
+    pending = [_resolve_wave_result(wr) for wr in prior_phase_results + prior]
     return {"pending_context": pending}
 
 
@@ -330,7 +270,7 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
             and r.get("wave_index") == current_wave
         ]
     )
-    qa_context = [await _resolve_wave_result(wr) for wr in current_results]
+    qa_context = [_resolve_wave_result(wr) for wr in current_results]
 
     # Pull the original item tasks from the work brief so QA knows what
     # each artifact was supposed to accomplish.
