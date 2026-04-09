@@ -358,7 +358,20 @@ async def wave_reflection(state: ExecutionState) -> dict[str, Any]:
         )
 
     verdict_data: dict[str, Any] = {}
-    if isinstance(result.output, str) and result.output.strip():
+    if not result.success:
+        # QA itself couldn't complete. Treat as fail so the existing
+        # revision loop retries transient failures and exhausts to END
+        # on persistent ones. Defaulting to pass silently ships defects.
+        reasons = "; ".join(
+            (s.get("reason") or "").splitlines()[0][:200]
+            for s in result.signals
+            if s.get("reason")
+        )
+        verdict_data = {
+            "verdict": "fail",
+            "notes": f"QA failed: {reasons}" if reasons else "QA failed (no reason)",
+        }
+    elif isinstance(result.output, str) and result.output.strip():
         try:
             verdict_data = json.loads(result.output)
         except json.JSONDecodeError:
