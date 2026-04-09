@@ -25,7 +25,6 @@ from monet.orchestration import (
     build_entry_graph,
     build_execution_graph,
     build_planning_graph,
-    run,
 )
 
 
@@ -276,18 +275,56 @@ async def test_wave_reflection_retries_on_qa_failure() -> None:
 
 
 async def test_run_end_to_end() -> None:
+    """Full entry → planning → execution pipeline via direct graph invocation."""
     with (
         patch("monet.agents.planner._get_model") as planner_mock,
         patch("monet.agents.writer._get_model", return_value=_mock("Some content")),
         patch("monet.agents.qa._get_model", return_value=_mock(_QA)),
     ):
-        # Planner mock returns triage on first call (fast), brief on second (plan)
         triage_resp = _mock(_TRIAGE).ainvoke.return_value
         brief_resp = _mock(_BRIEF).ainvoke.return_value
         planner_mock.return_value.ainvoke = AsyncMock(
             side_effect=[triage_resp, brief_resp]
         )
 
-        result = await run("Write a post about AI", auto_approve=True)
-    assert result["phase"] == "execution"
-    assert len(result["execution"]["wave_results"]) == 1
+        checkpointer = MemorySaver()
+        thread_id = "e2e-test"
+
+        # Entry / triage
+        entry = build_entry_graph().compile(checkpointer=checkpointer)
+        entry_state = await entry.ainvoke(
+            {"task": "Write a post about AI", "trace_id": thread_id, "run_id": thread_id},
+            config={"configurable": {"thread_id": f"{thread_id}-entry"}},
+        )
+        assert entry_state.get("triage", {}).get("complexity") == "complex"
+
+        # Planning with auto-approve
+        planning = build_planning_graph().compile(checkpointer=checkpointer)
+        planning_config: RunnableConfig = {"configurable": {"thread_id": f"{thread_id}-planning"}}
+        await planning.ainvoke(
+            {"task": "Write a post about AI", "trace_id": thread_id, "run_id": thread_id, "revision_count": 0},
+            config=planning_config,
+        )
+        planning_state = await planning.ainvoke(
+            Command(resume={"approved": True, "feedback": None}),
+            config=planning_config,
+        )
+        assert planning_state.get("plan_approved") is True
+
+        # Execution
+        execution = build_execution_graph().compile(checkpointer=checkpointer)
+        exec_state = await execution.ainvoke(
+            {
+                "work_brief": planning_state["work_brief"],
+                "trace_id": thread_id,
+                "run_id": thread_id,
+                "current_phase_index": 0,
+                "current_wave_index": 0,
+                "wave_results": [],
+                "wave_reflections": [],
+                "completed_phases": [],
+                "revision_count": 0,
+            },
+            config={"configurable": {"thread_id": f"{thread_id}-execution"}},
+        )
+    assert len(exec_state["wave_results"]) == 1
