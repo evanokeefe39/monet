@@ -57,14 +57,11 @@ async def test_invoke_agent_local() -> None:
     assert "Test invoke" in result.output
 
 
-async def test_invoke_agent_missing() -> None:
-    """Invoking an unregistered agent times out: no worker can claim it."""
-    import os
-    from unittest.mock import patch
-
+async def test_invoke_agent_missing_returns_capability_unavailable() -> None:
+    """Invoking an undeclared agent returns CapabilityUnavailable instantly."""
     from monet.orchestration import invoke_agent
+    from monet.types import SignalType
 
-    # Use a very short timeout so the test doesn't hang
-    env = {"MONET_AGENT_TIMEOUT": "0.1"}
-    with patch.dict(os.environ, env), pytest.raises(TimeoutError):
-        await invoke_agent("ghost", task="x")
+    result = await invoke_agent("ghost", task="x")
+    assert result.success is False
+    assert result.has_signal(SignalType.CAPABILITY_UNAVAILABLE)

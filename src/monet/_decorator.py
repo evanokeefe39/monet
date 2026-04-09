@@ -240,6 +240,7 @@ def agent(
     agent_id: str,
     command: str = "fast",
     allow_empty: bool = False,
+    pool: str = "local",
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
 
 
@@ -250,6 +251,7 @@ def agent(
     agent_id: str = "",
     command: str = "fast",
     allow_empty: bool = False,
+    pool: str = "local",
 ) -> Any:
     """Decorator that wraps a callable as an agent handler.
 
@@ -331,12 +333,16 @@ def agent(
         # Register in handler registry (worker-side) and manifest (orchestration-side)
         default_registry.register(agent_id, command, wrapper)
         default_manifest.declare(
-            agent_id, command, description=(fn.__doc__ or "").strip().split("\n", 1)[0]
+            agent_id,
+            command,
+            description=(fn.__doc__ or "").strip().split("\n", 1)[0],
+            pool=pool,
         )
 
         # Attach metadata for introspection
         wrapper._agent_id = agent_id  # type: ignore[attr-defined]
         wrapper._command = command  # type: ignore[attr-defined]
+        wrapper._pool = pool  # type: ignore[attr-defined]
 
         return wrapper
 

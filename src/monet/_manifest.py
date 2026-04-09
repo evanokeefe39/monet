@@ -26,6 +26,7 @@ class AgentCapability(TypedDict):
     agent_id: str
     command: str
     description: str
+    pool: str
 
 
 class AgentManifest:
@@ -38,12 +39,26 @@ class AgentManifest:
         self._capabilities: dict[tuple[str, str], AgentCapability] = {}
         self._lock = threading.Lock()
 
-    def declare(self, agent_id: str, command: str, description: str = "") -> None:
+    def declare(
+        self,
+        agent_id: str,
+        command: str,
+        description: str = "",
+        pool: str = "local",
+    ) -> None:
         """Declare that an agent capability exists."""
         with self._lock:
             self._capabilities[(agent_id, command)] = AgentCapability(
-                agent_id=agent_id, command=command, description=description
+                agent_id=agent_id,
+                command=command,
+                description=description,
+                pool=pool,
             )
+
+    def get_pool(self, agent_id: str, command: str) -> str | None:
+        """Return the pool for a declared capability, or None."""
+        cap = self._capabilities.get((agent_id, command))
+        return cap["pool"] if cap else None
 
     def is_available(self, agent_id: str, command: str) -> bool:
         """Check if a capability has been declared."""
