@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from monet._manifest import default_manifest
+from monet._queue_memory import InMemoryTaskQueue
+from monet._queue_worker import run_worker
 from monet._registry import default_registry
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.orchestration._invoke import configure_queue
 
 if TYPE_CHECKING:
     from monet.types import AgentRunContext
@@ -30,8 +36,8 @@ def make_ctx(**overrides: Any) -> AgentRunContext:
 
 @pytest.fixture
 def clean_registry() -> Any:
-    """Isolate each test from registry side effects."""
-    with default_registry.registry_scope():
+    """Isolate each test from registry and manifest side effects."""
+    with default_registry.registry_scope(), default_manifest.manifest_scope():
         yield
 
 
@@ -41,3 +47,21 @@ def catalogue() -> Any:
     configure_catalogue(InMemoryCatalogueClient())
     yield
     configure_catalogue(None)
+
+
+@pytest.fixture(autouse=True)
+async def _queue_worker() -> Any:
+    """Wire an in-memory queue + worker for every async test.
+
+    This makes ``invoke_agent`` work transparently: tasks enqueued by
+    orchestration are claimed and executed by the background worker via
+    the local handler registry.
+    """
+    queue = InMemoryTaskQueue()
+    configure_queue(queue)
+    worker_task = asyncio.create_task(run_worker(queue, default_registry))
+    yield
+    worker_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker_task
+    configure_queue(None)

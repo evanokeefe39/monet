@@ -1,76 +1,56 @@
 """Transport-agnostic agent invocation.
 
-Dispatches to local function call or HTTP POST. Standard envelope fields
-are explicit parameters; agent-specific parameters pass as **kwargs.
+Dispatches via the configured task queue. Transport (local execution,
+HTTP forwarding, etc.) is a worker concern — ``invoke_agent`` only
+knows about the queue.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import secrets
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from opentelemetry import propagate, trace
+from opentelemetry import trace
 
-from monet._registry import default_registry
-from monet.signals import SignalType
-from monet.types import AgentResult, AgentRunContext, ArtifactPointer, Signal
+if TYPE_CHECKING:
+    from monet.queue import TaskQueue
+    from monet.types import AgentResult, AgentRunContext
 
-# HTTP transport timeout (seconds). Default 300s is generous because
-# agents doing deep research, long-form writing, or multi-turn tool
-# use routinely exceed 30s. Override via MONET_HTTP_TIMEOUT.
-_DEFAULT_HTTP_TIMEOUT = 300.0
-
-# Local invocation timeout (seconds). Protects against runaway agents
-# that never return. Override via MONET_LOCAL_TIMEOUT. Default 600s
-# (10 minutes) is generous for long-running research agents.
-_DEFAULT_LOCAL_TIMEOUT = 600.0
-
-
-def _get_http_timeout() -> float:
-    raw = os.environ.get("MONET_HTTP_TIMEOUT")
-    if not raw:
-        return _DEFAULT_HTTP_TIMEOUT
-    try:
-        return float(raw)
-    except ValueError:
-        return _DEFAULT_HTTP_TIMEOUT
-
-
-def _get_local_timeout() -> float:
-    raw = os.environ.get("MONET_LOCAL_TIMEOUT")
-    if not raw:
-        return _DEFAULT_LOCAL_TIMEOUT
-    try:
-        return float(raw)
-    except ValueError:
-        return _DEFAULT_LOCAL_TIMEOUT
-
+# Default timeout for queue poll (seconds). Override via MONET_AGENT_TIMEOUT.
+_DEFAULT_TIMEOUT = 600.0
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
 
-# Transport mode from environment
-TRANSPORT_LOCAL = "local"
-TRANSPORT_HTTP = "http"
+# Module-level queue — set via configure_queue() or bootstrap().
+_task_queue: TaskQueue | None = None
 
 
-def get_transport_mode() -> str:
-    """Read transport mode from MONET_AGENT_TRANSPORT env var."""
-    return os.environ.get("MONET_AGENT_TRANSPORT", TRANSPORT_LOCAL)
+def configure_queue(queue: TaskQueue | None) -> None:
+    """Set or clear the task queue used by ``invoke_agent``.
 
-
-def get_agent_endpoint(agent_id: str, command: str) -> str | None:
-    """Read HTTP endpoint for an agent from environment.
-
-    Convention: MONET_AGENT_{AGENT_ID}_URL (uppercased, hyphens to underscores).
+    In monolith mode, ``bootstrap()`` creates an in-memory queue and
+    starts a background worker. In distributed mode, the queue connects
+    to an external broker (Redis, etc.).
     """
-    env_key = f"MONET_AGENT_{agent_id.upper().replace('-', '_')}_URL"
-    base_url = os.environ.get(env_key)
-    if base_url:
-        return f"{base_url.rstrip('/')}/agents/{agent_id}/{command}"
-    return None
+    global _task_queue
+    _task_queue = queue
+
+
+def get_queue() -> TaskQueue | None:
+    """Return the currently configured queue, or None."""
+    return _task_queue
+
+
+def _get_timeout() -> float:
+    raw = os.environ.get("MONET_AGENT_TIMEOUT")
+    if not raw:
+        return _DEFAULT_TIMEOUT
+    try:
+        return float(raw)
+    except ValueError:
+        return _DEFAULT_TIMEOUT
 
 
 def _generate_trace_id() -> str:
@@ -87,7 +67,7 @@ async def invoke_agent(
     skills: list[str] | None = None,
     **kwargs: Any,
 ) -> AgentResult:
-    """Invoke an agent by ID and command.
+    """Invoke an agent by ID and command via the task queue.
 
     Standard envelope fields are explicit parameters. Agent-specific
     parameters pass as **kwargs but must not shadow reserved fields.
@@ -100,6 +80,13 @@ async def invoke_agent(
             "Pass these as explicit parameters."
         )
         raise ValueError(msg)
+
+    if _task_queue is None:
+        msg = (
+            "No task queue configured. "
+            "Call configure_queue() or bootstrap() before invoking agents."
+        )
+        raise RuntimeError(msg)
 
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_trace_id = trace_id or _generate_trace_id()
@@ -123,109 +110,8 @@ async def invoke_agent(
             "monet.run_id": resolved_run_id,
         },
     ) as span:
-        if get_transport_mode() == TRANSPORT_HTTP:
-            endpoint = get_agent_endpoint(agent_id, command)
-            if endpoint is not None:
-                result = await _invoke_http(endpoint, ctx)
-                span.set_attribute("agent.success", result.success)
-                return result
-
-        # Local invocation
-        wrapper = default_registry.lookup(agent_id, command)
-        if wrapper is None:
-            msg = f"No handler for agent_id='{agent_id}', command='{command}'"
-            raise LookupError(msg)
-        try:
-            result = await asyncio.wait_for(wrapper(ctx), timeout=_get_local_timeout())
-        except TimeoutError:
-            timeout_signal = Signal(
-                type=SignalType.SEMANTIC_ERROR,
-                reason=f"Agent timed out after {_get_local_timeout()}s",
-                metadata={"error_type": "timeout"},
-            )
-            result = AgentResult(
-                success=False,
-                output="",
-                signals=(timeout_signal,),
-                trace_id=resolved_trace_id,
-                run_id=resolved_run_id,
-            )
+        task_id = await _task_queue.enqueue(agent_id, command, ctx)
+        result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
         span.set_attribute("agent.success", result.success)
         span.set_attribute("agent.signal_count", len(result.signals))
         return result
-
-
-# Module-level HTTP client for connection pooling across invocations.
-# Lazy-initialized on first HTTP call; avoids import-time httpx dependency
-# for local-only deployments.
-_http_client: Any = None
-
-
-def _get_http_client() -> Any:
-    """Return a shared httpx.AsyncClient, creating it on first use."""
-    global _http_client
-    if _http_client is None:
-        import httpx
-
-        _http_client = httpx.AsyncClient(timeout=_get_http_timeout())
-    return _http_client
-
-
-async def _invoke_http(endpoint: str, ctx: AgentRunContext) -> AgentResult:
-    """Call an agent over HTTP POST.
-
-    Uses opentelemetry.propagate.inject() for correct OTel context
-    propagation. Timeout defaults to 300s and can be overridden via
-    ``MONET_HTTP_TIMEOUT``. Artifacts in the response are deserialized
-    back to ``ArtifactPointer`` so catalogue-writing agents transported
-    over HTTP retain their pointers on the receiving side.
-
-    Uses a module-level httpx.AsyncClient for connection pooling instead
-    of creating a new client per request.
-    """
-    payload: dict[str, Any] = {
-        "task": ctx["task"],
-        "command": ctx["command"],
-        "trace_id": ctx["trace_id"],
-        "run_id": ctx["run_id"],
-    }
-    headers: dict[str, str] = {}
-    propagate.inject(headers)
-
-    client = _get_http_client()
-    response = await client.post(
-        endpoint,
-        json=payload,
-        headers=headers,
-    )
-    response.raise_for_status()
-    data = response.json()
-
-    raw_signals = data.get("signals", [])
-    signals = tuple(
-        Signal(
-            type=s.get("type", ""),
-            reason=s.get("reason", ""),
-            metadata=s.get("metadata"),
-        )
-        for s in raw_signals
-    )
-
-    raw_artifacts = data.get("artifacts", []) or []
-    artifacts = tuple(
-        ArtifactPointer(
-            artifact_id=a.get("artifact_id", ""),
-            url=a.get("url", ""),
-        )
-        for a in raw_artifacts
-        if isinstance(a, dict) and a.get("artifact_id")
-    )
-
-    return AgentResult(
-        success=data["success"],
-        output=data["output"],
-        artifacts=artifacts,
-        signals=signals,
-        trace_id=data.get("trace_id", ""),
-        run_id=data.get("run_id", ""),
-    )

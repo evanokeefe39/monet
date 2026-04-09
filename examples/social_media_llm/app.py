@@ -25,12 +25,7 @@ from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
-from monet.catalogue import (
-    CatalogueService,
-    FilesystemStorage,
-    SQLiteIndex,
-    configure_catalogue,
-)
+from monet.catalogue import catalogue_from_env, configure_catalogue
 
 if TYPE_CHECKING:
     from langgraph_sdk.client import LangGraphClient
@@ -49,22 +44,8 @@ def configure_app() -> None:
     Idempotent. Safe to call from tests as well as the CLI entry point.
     """
     load_dotenv()
-    # Anchor the default catalogue path to this file's directory so that
-    # the CLI (running from repo root via ``python -m
-    # examples.social_media_llm``) resolves to the same on-disk location
-    # as the server (running from ``langgraph-cli``'s generated build
-    # dir). Both fall through to ``<example>/.catalogue`` by default.
     default_root = Path(__file__).resolve().parent / ".catalogue"
-    env_override = os.environ.get("MONET_CATALOGUE_DIR", "").strip()
-    catalogue_root = Path(env_override) if env_override else default_root
-    catalogue_root.mkdir(parents=True, exist_ok=True)
-    db_url = f"sqlite+aiosqlite:///{catalogue_root / 'index.db'}"
-    configure_catalogue(
-        CatalogueService(
-            storage=FilesystemStorage(root=catalogue_root / "artifacts"),
-            index=SQLiteIndex(db_url=db_url),
-        )
-    )
+    configure_catalogue(catalogue_from_env(default_root=default_root))
 
 
 def check_environment() -> list[str]:

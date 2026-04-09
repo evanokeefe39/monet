@@ -16,6 +16,7 @@ pytest.importorskip("langchain_core")
 
 from langchain_core.messages import AIMessage
 
+from monet._manifest import default_manifest
 from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 from monet.orchestration import invoke_agent
@@ -25,7 +26,7 @@ from monet.types import SignalType
 @pytest.fixture(autouse=True)
 def clean_registry_and_catalogue() -> Any:
     configure_catalogue(InMemoryCatalogueClient())
-    with default_registry.registry_scope():
+    with default_registry.registry_scope(), default_manifest.manifest_scope():
         import importlib
 
         import monet.agents.planner

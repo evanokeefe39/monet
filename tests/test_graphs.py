@@ -18,6 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
+from monet._manifest import default_manifest
 from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 from monet.orchestration import (
@@ -31,7 +32,7 @@ from monet.orchestration import (
 @pytest.fixture(autouse=True)
 def _reset() -> Any:
     configure_catalogue(InMemoryCatalogueClient())
-    with default_registry.registry_scope():
+    with default_registry.registry_scope(), default_manifest.manifest_scope():
         import importlib
 
         import monet.agents.planner

@@ -22,7 +22,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
 from monet import emit_progress, get_catalogue
-from monet._registry import default_registry
+from monet._manifest import default_manifest
 from monet._tracing import (
     EXECUTION_ROOT_SPAN_NAME,
     attached_trace,
@@ -209,7 +209,7 @@ async def prepare_wave(state: ExecutionState) -> dict[str, Any]:
         phase = phases[current_phase]
         wave = phase["waves"][current_wave]
         for item in wave.get("items") or []:
-            if not default_registry.exists(item["agent_id"], item["command"]):
+            if not default_manifest.is_available(item["agent_id"], item["command"]):
                 return {
                     "pending_context": [],
                     "abort_reason": (

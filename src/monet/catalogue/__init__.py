@@ -1,5 +1,10 @@
 """Artifact catalogue — storage, metadata index, service, and configuration."""
 
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
 from monet._catalogue import _set_catalogue_backend
 
 from ._index import SQLiteIndex
@@ -31,6 +36,28 @@ def configure_catalogue(client: CatalogueClient | None) -> None:
     _set_catalogue_backend(client)
 
 
+def catalogue_from_env(*, default_root: Path | None = None) -> CatalogueService:
+    """Create a CatalogueService from environment or default path.
+
+    Resolves ``MONET_CATALOGUE_DIR`` env var if set, otherwise falls
+    back to ``default_root``. Creates directories if needed.
+
+    Args:
+        default_root: Fallback path when ``MONET_CATALOGUE_DIR`` is unset.
+            Defaults to ``Path(".catalogue")``.
+
+    Returns:
+        Configured CatalogueService ready for use.
+    """
+    env_override = os.environ.get("MONET_CATALOGUE_DIR", "").strip()
+    root = Path(env_override) if env_override else (default_root or Path(".catalogue"))
+    root.mkdir(parents=True, exist_ok=True)
+    return CatalogueService(
+        storage=FilesystemStorage(root=root / "artifacts"),
+        index=SQLiteIndex(db_url=f"sqlite+aiosqlite:///{root / 'index.db'}"),
+    )
+
+
 __all__ = [
     "ArtifactMetadata",
     "CatalogueClient",
@@ -38,5 +65,6 @@ __all__ = [
     "FilesystemStorage",
     "InMemoryCatalogueClient",
     "SQLiteIndex",
+    "catalogue_from_env",
     "configure_catalogue",
 ]

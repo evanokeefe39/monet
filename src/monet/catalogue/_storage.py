@@ -84,5 +84,10 @@ class FilesystemStorage:
         async with aiofiles.open(artifact_dir / "content", "rb") as f:
             content = await f.read()
         async with aiofiles.open(artifact_dir / "meta.json") as f:
-            metadata: ArtifactMetadata = json.loads(await f.read())
+            raw = await f.read()
+        try:
+            metadata: ArtifactMetadata = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            msg = f"Corrupt metadata for artifact {artifact_id}"
+            raise ValueError(msg) from exc
         return content, metadata

@@ -46,6 +46,7 @@ def test_monet_catalogue_exports() -> None:
         "FilesystemStorage",
         "InMemoryCatalogueClient",
         "SQLiteIndex",
+        "catalogue_from_env",
         "configure_catalogue",
     }
     assert set(cat.__all__) == expected
