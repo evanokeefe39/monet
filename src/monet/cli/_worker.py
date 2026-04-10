@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import importlib
 import importlib.util
 import logging
@@ -102,28 +101,37 @@ async def _run_worker(
 
 
 async def _run_remote(
-    discovered: list,
+    discovered: list,  # type: ignore[type-arg]
     pool: str,
     concurrency: int,
     server_url: str,
     api_key: str | None,
 ) -> None:
     """Run worker in remote mode with HTTP-based queue."""
+    import contextlib
+
+    import httpx
+
+    from monet.core.manifest import AgentCapability, default_manifest
     from monet.core.worker_client import RemoteQueue, WorkerClient
     from monet.queue import run_worker
+
+    def _current_capabilities() -> list[AgentCapability]:
+        """Read capabilities from the manifest with descriptions."""
+        return [
+            AgentCapability(
+                agent_id=cap["agent_id"],
+                command=cap["command"],
+                description=cap.get("description", ""),
+                pool=cap.get("pool", pool),
+            )
+            for cap in default_manifest.capabilities()
+        ]
 
     client = WorkerClient(server_url, api_key or "")
     worker_id = uuid.uuid4().hex[:8]
 
-    capabilities = [
-        {
-            "agent_id": a.agent_id,
-            "command": a.command,
-            "description": "",
-            "pool": a.pool,
-        }
-        for a in discovered
-    ]
+    capabilities = _current_capabilities()
 
     await client.register(pool, capabilities, worker_id)
     logger.info(
@@ -136,9 +144,13 @@ async def _run_remote(
 
     async def _heartbeat_loop() -> None:
         while True:
-            with contextlib.suppress(Exception):
-                await client.heartbeat(worker_id, pool)
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
+            # Read current capabilities each cycle so hot-reloads
+            # are picked up on the next heartbeat.
+            try:
+                await client.heartbeat(worker_id, pool, _current_capabilities())
+            except (httpx.HTTPError, OSError) as exc:
+                logger.warning("Heartbeat failed: %s", exc)
 
     try:
         heartbeat_task = asyncio.create_task(_heartbeat_loop())

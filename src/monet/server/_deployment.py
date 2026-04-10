@@ -105,6 +105,22 @@ class DeploymentStore:
         )
         await db.commit()
 
+    async def update_capabilities(
+        self, worker_id: str, capabilities: list[dict[str, str]]
+    ) -> None:
+        """Update stored capabilities for all active deployments of a worker.
+
+        Called during heartbeat when a worker sends updated capabilities
+        (e.g. after hot-reload).
+        """
+        db = self._require_db()
+        await db.execute(
+            "UPDATE deployments SET capabilities = ? "
+            "WHERE worker_id = ? AND status = 'active'",
+            (json.dumps(capabilities), worker_id),
+        )
+        await db.commit()
+
     async def get_active(self, pool: str | None = None) -> list[DeploymentRecord]:
         """Get active deployments, optionally filtered by pool.
 
@@ -163,6 +179,45 @@ class DeploymentStore:
         )
         await db.commit()
         return cursor.rowcount
+
+    async def deactivate_stale_returning_worker_ids(
+        self, timeout: int = 90
+    ) -> list[str]:
+        """Mark stale deployments inactive and return their worker_ids.
+
+        Args:
+            timeout: Seconds since last heartbeat before marking inactive.
+
+        Returns:
+            List of worker_ids from deactivated deployments.
+        """
+        db = self._require_db()
+        cutoff = datetime.now(UTC).isoformat()
+
+        # Find worker_ids that will be deactivated.
+        cursor = await db.execute(
+            "SELECT DISTINCT worker_id FROM deployments "
+            "WHERE status = 'active' "
+            "AND last_heartbeat IS NOT NULL "
+            "AND worker_id IS NOT NULL "
+            "AND julianday(?) - julianday(last_heartbeat) > ? / 86400.0",
+            (cutoff, timeout),
+        )
+        rows = await cursor.fetchall()
+        worker_ids = [row[0] for row in rows]
+
+        if worker_ids:
+            # Mark them inactive.
+            await db.execute(
+                "UPDATE deployments SET status = 'inactive' "
+                "WHERE status = 'active' "
+                "AND last_heartbeat IS NOT NULL "
+                "AND julianday(?) - julianday(last_heartbeat) > ? / 86400.0",
+                (cutoff, timeout),
+            )
+            await db.commit()
+
+        return worker_ids
 
     async def close(self) -> None:
         """Close the database connection."""

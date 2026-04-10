@@ -55,12 +55,25 @@ class WorkerClient:
         resp.raise_for_status()
         return str(resp.json()["deployment_id"])
 
-    async def heartbeat(self, worker_id: str, pool: str) -> None:
-        """Send a heartbeat to the server."""
-        resp = await self._client.post(
-            "/worker/heartbeat",
-            json={"worker_id": worker_id, "pool": pool},
-        )
+    async def heartbeat(
+        self,
+        worker_id: str,
+        pool: str,
+        capabilities: list[AgentCapability] | None = None,
+    ) -> None:
+        """Send a heartbeat to the server.
+
+        Args:
+            worker_id: This worker's identifier.
+            pool: Pool this worker claims from.
+            capabilities: Current capability list. When provided, the
+                server reconciles its manifest — declaring new/updated
+                capabilities and removing stale ones for this worker.
+        """
+        payload: dict[str, object] = {"worker_id": worker_id, "pool": pool}
+        if capabilities is not None:
+            payload["capabilities"] = capabilities
+        resp = await self._client.post("/worker/heartbeat", json=payload)
         resp.raise_for_status()
 
     async def claim(self, pool: str) -> TaskRecord | None:
