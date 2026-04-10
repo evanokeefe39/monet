@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from monet.client import MonetClient
 
 from monet.cli._render import (
     prompt_execution_decision,
@@ -91,14 +95,12 @@ async def _interactive_run(topic: str, url: str, auto_approve: bool) -> None:
 
 
 async def _handle_execution_interrupt(
-    client: object,
+    client: MonetClient,
     run_id: str,
 ) -> None:
     """Prompt for retry/abort on an execution interrupt."""
-    from monet.client import MonetClient
     from monet.client._events import RunFailed
 
-    assert isinstance(client, MonetClient)
     decision = prompt_execution_decision()
 
     if decision == "retry":

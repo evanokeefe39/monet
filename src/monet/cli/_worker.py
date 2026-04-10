@@ -9,8 +9,12 @@ import logging
 import sys
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from monet.cli._discovery import DiscoveredAgent
 
 logger = logging.getLogger("monet.cli.worker")
 
@@ -101,7 +105,7 @@ async def _run_worker(
 
 
 async def _run_remote(
-    discovered: list,  # type: ignore[type-arg]
+    discovered: list[DiscoveredAgent],
     pool: str,
     concurrency: int,
     server_url: str,
@@ -109,8 +113,6 @@ async def _run_remote(
 ) -> None:
     """Run worker in remote mode with HTTP-based queue."""
     import contextlib
-
-    import httpx
 
     from monet.core.manifest import AgentCapability, default_manifest
     from monet.core.worker_client import RemoteQueue, WorkerClient
@@ -146,11 +148,13 @@ async def _run_remote(
         while True:
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
             # Read current capabilities each cycle so hot-reloads
-            # are picked up on the next heartbeat.
-            try:
-                await client.heartbeat(worker_id, pool, _current_capabilities())
-            except (httpx.HTTPError, OSError) as exc:
-                logger.warning("Heartbeat failed: %s", exc)
+            # are picked up on the next heartbeat. Transient failures
+            # are handled inside heartbeat_with_tracking; 4xx auth
+            # failures propagate and crash the loop (correct behavior
+            # for a misconfigured API key).
+            await client.heartbeat_with_tracking(
+                worker_id, pool, _current_capabilities()
+            )
 
     try:
         heartbeat_task = asyncio.create_task(_heartbeat_loop())

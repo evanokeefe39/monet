@@ -1,14 +1,10 @@
 [project]
 name = "monet-deployed"
 version = "0.0.0"
-description = "Deployed example — Docker Compose with Postgres + Langfuse."
+description = "Railway deployment — monet server with managed Postgres + Langfuse."
 requires-python = ">=3.12"
 dependencies = [
     "monet[examples]",
-    "langgraph-sdk>=0.1",
-    "langgraph-cli[inmem]>=0.1",
-    "langgraph-checkpoint-postgres>=1.0",
-    "psycopg[binary]>=3.0",
 ]
 
 [tool.uv.sources]

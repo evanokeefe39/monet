@@ -9,6 +9,33 @@ from typing import Any
 import click
 
 
+def _parse_capabilities(caps: Any) -> list[dict[str, str]]:
+    """Normalize capabilities from a deployment record.
+
+    Handles both pre-parsed lists and JSON-encoded strings from the API.
+    Returns an empty list on malformed data rather than crashing.
+    """
+    if isinstance(caps, list):
+        return caps
+    if isinstance(caps, str):
+        try:
+            parsed = json.loads(caps)
+        except (json.JSONDecodeError, ValueError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _render_header(health: dict[str, Any]) -> None:
+    """Render the common server/workers/queued status header."""
+    click.secho(
+        f"Server: {health.get('status', 'unknown')}  "
+        f"Workers: {health.get('workers', 0)}  "
+        f"Queued: {health.get('queued', 0)}",
+        bold=True,
+    )
+
+
 @click.command()
 @click.option(
     "--url",
@@ -92,12 +119,7 @@ async def _show_status(
 
 def _render(health: dict[str, Any], deployments: list[dict[str, Any]]) -> None:
     """Render status to terminal."""
-    click.secho(
-        f"Server: {health.get('status', 'unknown')}  "
-        f"Workers: {health.get('workers', 0)}  "
-        f"Queued: {health.get('queued', 0)}",
-        bold=True,
-    )
+    _render_header(health)
 
     if not deployments:
         click.echo("\nNo active deployments.")
@@ -112,9 +134,7 @@ def _render(health: dict[str, Any], deployments: list[dict[str, Any]]) -> None:
         click.secho(f"Worker {worker_id}", fg="cyan", bold=True)
         click.echo(f"  Pool: {pool_name}  Heartbeat: {heartbeat}")
 
-        caps = dep.get("capabilities") or []
-        if isinstance(caps, str):
-            caps = json.loads(caps)
+        caps = _parse_capabilities(dep.get("capabilities") or [])
 
         if caps:
             click.echo("  Capabilities:")
@@ -132,12 +152,7 @@ def _render(health: dict[str, Any], deployments: list[dict[str, Any]]) -> None:
 
 def _render_flat(health: dict[str, Any], deployments: list[dict[str, Any]]) -> None:
     """Render status as a flat table — one row per capability."""
-    click.secho(
-        f"Server: {health.get('status', 'unknown')}  "
-        f"Workers: {health.get('workers', 0)}  "
-        f"Queued: {health.get('queued', 0)}",
-        bold=True,
-    )
+    _render_header(health)
 
     if not deployments:
         click.echo("\nNo active deployments.")
@@ -148,9 +163,7 @@ def _render_flat(health: dict[str, Any], deployments: list[dict[str, Any]]) -> N
     for dep in deployments:
         worker_id = dep.get("worker_id") or "unassigned"
         pool_name = dep.get("pool", "?")
-        caps = dep.get("capabilities") or []
-        if isinstance(caps, str):
-            caps = json.loads(caps)
+        caps = _parse_capabilities(dep.get("capabilities") or [])
         heartbeat = dep.get("last_heartbeat") or "never"
 
         if not caps:
@@ -191,10 +204,7 @@ def _render_json(health: dict[str, Any], deployments: list[dict[str, Any]]) -> N
     normalized: list[dict[str, Any]] = []
     for dep in deployments:
         entry = dict(dep)
-        caps = entry.get("capabilities") or []
-        if isinstance(caps, str):
-            caps = json.loads(caps)
-        entry["capabilities"] = caps
+        entry["capabilities"] = _parse_capabilities(entry.get("capabilities") or [])
         normalized.append(entry)
 
     output = {"health": health, "deployments": normalized}

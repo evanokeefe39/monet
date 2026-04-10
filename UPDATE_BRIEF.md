@@ -135,6 +135,4 @@ Sequence:
 - `monet/orchestration/_node_wrapper.py` — signal handling and stream writer
 - `monet/orchestration/_state.py` — state schemas and reducers
 - `monet/orchestration/execution_graph.py` — wave fan-out via `Send`
-- `examples/social_media_llm/server_graphs.py` — current bootstrap antipattern
-- `examples/social_media_llm/workflow.py` — client utilities to extract
 - `design-principles.md` — governs all decisions

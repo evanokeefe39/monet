@@ -73,10 +73,24 @@
 - [x] `RedisTaskQueue` — standard Redis with pub/sub notifications + polling fallback
 - [x] `UpstashTaskQueue` — HTTP-based serverless Redis, polling-only, key TTL cleanup
 
+### Client SDK
+- [x] `MonetClient` — typed async client with run lifecycle, event streaming, HITL decisions
+- [x] Typed run events: `TriageComplete`, `PlanReady`, `PlanInterrupt`, `AgentProgress`, `WaveComplete`, `ReflectionComplete`, `ExecutionInterrupt`, `RunComplete`, `RunFailed`
+- [x] Query types: `RunSummary`, `RunDetail`, `PendingDecision`
+- [x] In-process `run()` async generator for local pipeline execution
+
+### Worker Lifecycle
+- [x] Worker heartbeat reconciliation — full capability sync on every heartbeat
+- [x] Per-worker-id reconciliation via `AgentManifest.reconcile_worker()`
+- [x] Stale worker cleanup — background sweeper removes dead workers' capabilities
+- [x] `monet status` CLI command with `--flat` and `--json` output modes
+
+### Core Restructure
+- [x] Moved `_*` prefixed modules into `monet.core/` subpackage
+
 ## Planned
 
 Deferred until there is concrete demand or a deployment requiring it.
 - [ ] **Forwarding worker** — claims push-pool tasks, forwards to Cloud Run/ECS
 - [ ] **Lease TTL + sweeper for push pools** — requeue crashed push tasks
 - [ ] **Optional summarizer agent** — framework-inserted wave context condensation
-- [ ] **Core module restructure** — move `_*` prefixed modules into `monet.core/` package

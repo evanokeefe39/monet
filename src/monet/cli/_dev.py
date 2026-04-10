@@ -62,7 +62,12 @@ def dev(port: int, config_path: str | None) -> None:
         # Merge with user's langgraph.json if present.
         user_config_path = cwd / "langgraph.json"
         if user_config_path.exists():
-            user_config = json.loads(user_config_path.read_text())
+            try:
+                user_config = json.loads(user_config_path.read_text())
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise click.ClickException(
+                    f"Invalid JSON in {user_config_path}: {exc}"
+                ) from exc
             config = merge_config(config, user_config)
             click.echo(
                 f"Merged {len(user_config.get('graphs', {}))} user graph(s) "

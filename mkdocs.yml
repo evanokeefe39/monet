@@ -48,11 +48,15 @@ nav:
     - Defining Agents: guides/agents.md
     - Artifact Catalogue: guides/catalogue.md
     - Orchestration: guides/orchestration.md
+    - Distribution Mode: guides/distribution.md
+    - Client SDK: guides/client.md
     - Server & Transport: guides/server.md
     - Observability: guides/observability.md
   - API Reference:
     - Core SDK: api/core.md
+    - Client: api/client.md
     - Catalogue: api/catalogue.md
+    - Queue Providers: api/queue.md
     - Orchestration: api/orchestration.md
     - Descriptors: api/descriptors.md
     - Server: api/server.md
