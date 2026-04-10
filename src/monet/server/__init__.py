@@ -30,12 +30,16 @@ def create_app(
         config_path: Path to monet.toml. Uses defaults if not provided.
         queue: Task queue implementation. Defaults to InMemoryTaskQueue.
     """
+    import logging
+
     from fastapi import FastAPI as _FastAPI
 
-    from monet.core.manifest import AgentManifest
+    from monet.core.manifest import default_manifest
     from monet.server._config import load_config
     from monet.server._deployment import DeploymentStore
     from monet.server._routes import router
+
+    logger = logging.getLogger("monet.server")
 
     config = load_config(config_path)
 
@@ -45,7 +49,7 @@ def create_app(
         queue = InMemoryTaskQueue()
 
     deployments = DeploymentStore(db_path=":memory:")
-    manifest = AgentManifest()
+    manifest = default_manifest
 
     @asynccontextmanager
     async def lifespan(app: _FastAPI) -> AsyncIterator[None]:
@@ -57,7 +61,17 @@ def create_app(
         async def _sweep_loop() -> None:
             while True:
                 await asyncio.sleep(60)
-                await deployments.deactivate_stale()
+                stale_worker_ids = (
+                    await deployments.deactivate_stale_returning_worker_ids()
+                )
+                for wid in stale_worker_ids:
+                    removed = manifest.remove_by_worker(wid)
+                    if removed:
+                        logger.info(
+                            "Removed %d capabilities for stale worker %s",
+                            len(removed),
+                            wid,
+                        )
 
         sweeper_task = asyncio.create_task(_sweep_loop())
 

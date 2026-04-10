@@ -64,6 +64,7 @@ class HeartbeatRequest(BaseModel):
 
     worker_id: str
     pool: str
+    capabilities: list[dict[str, str]] | None = None
 
 
 class TaskCompleteRequest(BaseModel):
@@ -133,9 +134,33 @@ async def register_worker(
 async def heartbeat(
     body: HeartbeatRequest,
     deployments: Deployments,
+    manifest: Manifest,
 ) -> dict[str, str]:
-    """Update heartbeat for a worker."""
+    """Update heartbeat for a worker.
+
+    If capabilities are included, reconciles the manifest: declares
+    new/updated capabilities for this worker and removes any the worker
+    no longer advertises.
+    """
     await deployments.heartbeat(body.worker_id)
+
+    if body.capabilities is not None:
+        from monet.core.manifest import AgentCapability
+
+        caps = [
+            AgentCapability(
+                agent_id=c.get("agent_id", ""),
+                command=c.get("command", ""),
+                description=c.get("description", ""),
+                pool=c.get("pool", body.pool),
+            )
+            for c in body.capabilities
+        ]
+        manifest.reconcile_worker(body.worker_id, caps)
+
+        # Also update the deployment record's capabilities.
+        await deployments.update_capabilities(body.worker_id, body.capabilities)
+
     return {"status": "ok"}
 
 

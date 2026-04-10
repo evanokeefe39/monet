@@ -14,6 +14,7 @@ from monet.cli._dev import dev
 from monet.cli._register import register
 from monet.cli._run import run
 from monet.cli._server import server
+from monet.cli._status import status
 from monet.cli._worker import worker
 
 __all__ = ["cli"]
@@ -30,3 +31,4 @@ cli.add_command(run)
 cli.add_command(worker)
 cli.add_command(register)
 cli.add_command(server)
+cli.add_command(status)
