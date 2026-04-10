@@ -1,104 +1,161 @@
 # Server & Transport
 
-monet includes a FastAPI server that exposes agents and the catalogue over HTTP. The agent interface is transport-agnostic -- agents run as local Python functions or over HTTP with no code changes.
+monet includes a FastAPI-based orchestration server that manages agent dispatch, worker registration, and the task queue. Agents run as local Python functions or on remote workers -- the orchestrator handles routing transparently.
 
 ## Application factory
 
 ```python
 from monet.server import create_app
-from monet.catalogue import CatalogueService, FilesystemStorage
 
-# Without catalogue
 app = create_app()
-
-# With catalogue
-storage = FilesystemStorage(root="/tmp/monet-catalogue")
-service = CatalogueService(storage=storage, db_url="sqlite:///catalogue.db")
-app = create_app(catalogue_service=service)
+app = create_app(config_path=Path("monet.toml"))
 ```
 
-Run with uvicorn:
+`create_app()` builds a FastAPI application with:
 
-```bash
-uvicorn myapp:app --reload
+- Pool topology from `monet.toml` (defaults to a single `local` pool)
+- In-memory task queue (or pass a custom one)
+- Deployment store for worker tracking
+- Periodic stale-worker sweeper (60-second intervals)
+- API routes under `/api/v1`
+
+```python
+def create_app(
+    config_path: Path | None = None,
+    queue: TaskQueue | None = None,
+) -> FastAPI
 ```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `config_path` | `None` | Path to `monet.toml`. Falls back to cwd. |
+| `queue` | `None` | Task queue instance. Defaults to `InMemoryTaskQueue`. |
+
+## Bootstrap
+
+For programmatic server setup (e.g. in tests or custom entrypoints), use `bootstrap()`:
+
+```python
+from monet.server import bootstrap
+
+worker_task = await bootstrap(
+    catalogue_root="/data/catalogue",
+    enable_tracing=True,
+    queue=my_queue,
+)
+```
+
+```python
+async def bootstrap(
+    *,
+    catalogue_root: str | Path | None = None,
+    enable_tracing: bool = True,
+    agents: list[AgentCapability] | None = None,
+    queue: TaskQueue | None = None,
+    lazy_worker: bool = False,
+) -> asyncio.Task[None] | None
+```
+
+Initialization order:
+
+1. **Tracing** -- configure OpenTelemetry (if `enable_tracing=True`)
+2. **Catalogue** -- resolve root from parameter, `MONET_CATALOGUE_DIR` env, or `.catalogue` default
+3. **Manifest** -- declare additional agent capabilities (if `agents` provided)
+4. **Queue** -- register task queue (defaults to `InMemoryTaskQueue`)
+5. **Worker** -- start background worker task, or defer to first enqueue if `lazy_worker=True`
+
+Returns the worker task (cancel on shutdown) or `None` if `lazy_worker=True`.
+
+## Lazy worker mode
+
+For `langgraph dev` environments where the worker should not start until the first task:
+
+```python
+from monet.server import configure_lazy_worker
+
+configure_lazy_worker(queue)
+```
+
+This patches `queue.enqueue()` to start the worker on first call.
 
 ## Routes
 
-### Health
+All routes are prefixed with `/api/v1`. Authenticated endpoints require `Authorization: Bearer {MONET_API_KEY}`.
+
+### Health (unauthenticated)
 
 ```
-GET /health
+GET /api/v1/health
 ```
-
-Returns `{"status": "ok"}`.
-
-### Agent invocation
-
-```
-POST /agents/{agent_id}/{command}
-```
-
-Request body:
 
 ```json
-{
-    "task": "Research quantum computing trends",
-    "command": "deep",
-    "effort": "high",
-    "trace_id": "trace-abc-123",
-    "run_id": "run-456"
-}
+{"status": "ok", "workers": 5, "queued": 12}
 ```
 
-The server looks up the handler in the agent registry, constructs an `AgentRunContext`, calls the handler, and returns the `AgentResult` as JSON.
-
-### Artifact write
+### Worker registration
 
 ```
-POST /artifacts
+POST /api/v1/worker/register
 ```
 
-Body: raw bytes. Metadata via headers:
+Workers call this on startup with their discovered capabilities. Returns a `deployment_id`.
 
-| Header | Description |
-|---|---|
-| `Content-Type` | MIME type of the artifact |
-| `x-monet-summary` | Text summary |
-| `x-monet-created-by` | Agent name |
-| `x-monet-trace-id` | OTel trace ID |
-| `x-monet-run-id` | LangGraph run ID |
-
-Returns `{"artifact_id": "...", "url": "..."}`.
-
-### Artifact read
+### Worker heartbeat
 
 ```
-GET /artifacts/{artifact_id}
+POST /api/v1/worker/heartbeat
 ```
 
-Returns the artifact content with the appropriate `Content-Type`.
+Called every 30 seconds by workers. If capabilities are included, the server reconciles the manifest (adds new capabilities, removes stale ones for that worker).
 
-### Artifact metadata
+### Task management
 
 ```
-GET /artifacts/{artifact_id}/meta
+GET  /api/v1/tasks/claim/{pool}     # Claim next pending task (204 if empty)
+POST /api/v1/tasks/{task_id}/complete  # Post successful result
+POST /api/v1/tasks/{task_id}/fail      # Post failure
 ```
 
-Returns the metadata sidecar as JSON.
+### Deployments
 
-!!! note
-    Catalogue routes return 501 if no `CatalogueService` was provided to `create_app()`.
+```
+GET  /api/v1/deployments              # List active deployments (filter by ?pool=)
+POST /api/v1/deployments              # Create deployment record (used by monet register)
+```
 
-## Deployment model
+See [Server API Reference](../api/server.md) for full request/response schemas.
 
-The initial deployment is a single FastAPI server hosting all agents and the orchestrator as co-located services. Each agent is a callable invoked as a direct Python function call within the same process.
+## Deployment models
 
-When an agent needs independent scaling, it moves to its own service. The only change is environment configuration:
+### Development
 
-- Set `MONET_AGENT_TRANSPORT=http`
-- Set `MONET_AGENT_{AGENT_ID}_URL=http://agent-service:8000`
+Use `monet dev` to start a LangGraph dev server with monet's default graphs:
 
-The agent interface, the graph, and agent internals are untouched. The node wrapper handles both local and HTTP invocation transparently.
+```bash
+monet dev --port 2024
+```
 
-When a Python SDK agent moves to a separate service, its FastAPI endpoint extracts the OTel `traceparent` header, activates it as the OTel context, sets the `AgentRunContext` from the envelope fields, and calls the decorated function directly. The decorator behaves identically to the co-located case.
+### Single server
+
+Start the orchestration server with a local worker:
+
+```bash
+monet server --port 8000
+monet worker --pool local
+```
+
+### Distributed
+
+Run the server and workers on separate machines:
+
+```bash
+# On orchestration server
+monet server --port 8000 --config monet.toml
+
+# On worker machines
+monet worker --path ./agents --pool default \
+  --server-url http://orchestrator:8000 \
+  --api-key $MONET_API_KEY
+```
+
+See [Distribution Mode](distribution.md) for the full guide on distributed deployment, CLI commands, and configuration.

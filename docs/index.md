@@ -40,7 +40,9 @@ async def researcher_deep(task: str, context: list, effort: str = "high"):
     - [Defining Agents](guides/agents.md) -- the `@agent` decorator, commands, effort, signals
     - [Artifact Catalogue](guides/catalogue.md) -- storage, metadata, backends
     - [Orchestration](guides/orchestration.md) -- LangGraph nodes, state, HITL
-    - [Server & Transport](guides/server.md) -- FastAPI server, HTTP routes
+    - [Distribution Mode](guides/distribution.md) -- distributed deployment, CLI, workers, queue providers
+    - [Client SDK](guides/client.md) -- MonetClient, event streaming, HITL decisions
+    - [Server & Transport](guides/server.md) -- FastAPI server, bootstrap, routes
     - [Observability](guides/observability.md) -- tracing, Langfuse
 - **[API Reference](api/core.md)** -- complete reference for all exports
 - **Architecture**

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
+from monet.core.manifest import AgentCapability, AgentManifest
+from monet.queue import TaskQueue
 from monet.server._auth import require_api_key
+from monet.server._deployment import DeploymentStore
 from monet.types import AgentResult, ArtifactPointer, Signal
-
-if TYPE_CHECKING:
-    from monet.core.manifest import AgentManifest
-    from monet.queue import TaskQueue
-    from monet.server._deployment import DeploymentStore
 
 __all__ = ["router"]
 
@@ -37,9 +35,9 @@ def get_manifest(request: Request) -> AgentManifest:
 
 
 # Type aliases for annotated dependencies
-Queue = Annotated[Any, Depends(get_queue)]
-Deployments = Annotated[Any, Depends(get_deployments)]
-Manifest = Annotated[Any, Depends(get_manifest)]
+Queue = Annotated[TaskQueue, Depends(get_queue)]
+Deployments = Annotated[DeploymentStore, Depends(get_deployments)]
+Manifest = Annotated[AgentManifest, Depends(get_manifest)]
 
 
 # -- Request / Response schemas --------------------------------------------
@@ -115,7 +113,8 @@ async def register_worker(
     manifest: Manifest,
 ) -> WorkerRegisterResponse:
     """Register a worker and its capabilities."""
-    deployment_id = await deployments.create(body.pool, body.capabilities)
+    caps = cast("list[AgentCapability]", body.capabilities)
+    deployment_id = await deployments.create(body.pool, caps)
     await deployments.register_worker(deployment_id, body.worker_id)
     for cap in body.capabilities:
         manifest.declare(
@@ -145,8 +144,6 @@ async def heartbeat(
     await deployments.heartbeat(body.worker_id)
 
     if body.capabilities is not None:
-        from monet.core.manifest import AgentCapability
-
         caps = [
             AgentCapability(
                 agent_id=c.get("agent_id", ""),
@@ -257,7 +254,8 @@ async def create_deployment(
     deployments: Deployments,
 ) -> dict[str, str]:
     """Create a deployment record."""
-    deployment_id = await deployments.create(body.pool, body.capabilities)
+    caps = cast("list[AgentCapability]", body.capabilities)
+    deployment_id = await deployments.create(body.pool, caps)
     return {"deployment_id": deployment_id}
 
 

@@ -76,11 +76,11 @@ async def publish(task: str, context: list) -> str:
     return await execute_publish(draft)
 ```
 
-| Exception | Signal | When to use |
+| Exception | Signal type | When to use |
 |---|---|---|
-| `NeedsHumanReview(reason)` | `signals.needs_human_review = True` | Partial output exists but needs human judgment |
-| `EscalationRequired(reason)` | `signals.escalation_requested = True` | Agent hit a capability or permissions boundary |
-| `SemanticError(type, message)` | `signals.semantic_error` populated | Soft failure -- no results, quality too low, irreconcilable conflict |
+| `NeedsHumanReview(reason)` | `NEEDS_HUMAN_REVIEW` (BLOCKING) | Partial output exists but needs human judgment |
+| `EscalationRequired(reason)` | `ESCALATION_REQUIRED` (BLOCKING) | Agent hit a capability or permissions boundary |
+| `SemanticError(type, message)` | `SEMANTIC_ERROR` (RECOVERABLE) | Soft failure -- no results, quality too low, irreconcilable conflict |
 
 Unexpected exceptions are caught and wrapped as `SemanticError(type="unexpected_error")`. Infrastructure exceptions never crash the LangGraph node.
 
@@ -113,33 +113,55 @@ async def write_report(task: str, context: list) -> str:
 
 If a function returns output longer than 4000 characters and a catalogue client is configured, the decorator automatically offloads the content and returns a pointer. You do not need to call `write_artifact()` for simple cases.
 
-## Running as a server
+## Running a pipeline
 
-monet includes a FastAPI server for HTTP access to agents:
+monet includes a CLI and client SDK for running topics through the full orchestration pipeline.
+
+### Development server
+
+```bash
+monet dev --port 2024
+```
+
+### Submit work via CLI
+
+```bash
+monet run "Research quantum computing trends"
+```
+
+### Submit work via Python
 
 ```python
-from monet.server import create_app
+import asyncio
+from monet.client import MonetClient
 
-app = create_app()
+async def main():
+    client = MonetClient()
+    async for event in client.run("Research quantum computing trends"):
+        print(type(event).__name__, event)
+
+asyncio.run(main())
 ```
 
-Run with uvicorn:
+### In-process (no server)
 
-```bash
-uvicorn myapp:app --reload
+```python
+from monet import run
+
+async def main():
+    async for event in run("Research quantum computing trends"):
+        print(event)
+
+asyncio.run(main())
 ```
 
-Invoke an agent over HTTP:
-
-```bash
-curl -X POST http://localhost:8000/agents/greeter/fast \
-  -H "Content-Type: application/json" \
-  -d '{"task": "Hello world", "trace_id": "abc", "run_id": "run-1"}'
-```
+See [Distribution Mode](guides/distribution.md) for production deployment with workers.
 
 ## Next steps
 
 - [Defining Agents](guides/agents.md) -- full guide to the agent SDK
 - [Artifact Catalogue](guides/catalogue.md) -- storage, metadata, and backends
 - [Orchestration](guides/orchestration.md) -- LangGraph integration
+- [Distribution Mode](guides/distribution.md) -- distributed deployment, CLI, workers
+- [Client SDK](guides/client.md) -- MonetClient, event streaming, HITL decisions
 - [API Reference](api/core.md) -- complete reference for all exports

@@ -1,7 +1,7 @@
 [project]
-name = "monet-quickstart-local"
+name = "monet-local"
 version = "0.0.0"
-description = "Quickstart local — single-process content workflow with monet."
+description = "Local development — Docker Compose with Postgres + Langfuse."
 requires-python = ">=3.12"
 dependencies = [
     "monet[examples]",

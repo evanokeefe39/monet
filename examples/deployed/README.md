@@ -1,56 +1,54 @@
-# Deployed
+# Deployed (Railway)
 
-Run monet with production infrastructure: Postgres checkpointing,
-Langfuse tracing, and a containerised LangGraph server.
+Deploy monet to Railway with managed infrastructure.
 
-## Prerequisites
+## Services
 
-- Docker and Docker Compose
-- uv (for the client)
-- API keys: `GEMINI_API_KEY`, `GROQ_API_KEY`
+| Component | Provider | Notes |
+|-----------|----------|-------|
+| monet server | Railway | Configured by `railway.toml` |
+| Postgres | Railway plugin / Neon | Checkpointing and state |
+| Redis | Railway plugin / Upstash | Task queue (optional for single-worker) |
+| Tracing | Langfuse Cloud | Optional observability |
 
-## Setup
+## Deploy
 
-```bash
-cd examples/deployed
-cp .env.example .env          # fill in API keys
-langgraph build -t monet-deployed .
-docker compose up -d
-```
+1. Fork this repo (or push to your own)
+2. Create a new project on [Railway](https://railway.com)
+3. Connect your repo, set the root directory to `examples/deployed`
+4. Add a **Postgres** plugin (or connect a Neon database)
+5. Set environment variables from `.env.example`
+6. Deploy
 
-### Langfuse first-time setup
+Railway reads `railway.toml` and starts `monet server` automatically.
 
-1. Open http://localhost:3000
-2. Create an organization and project
-3. Settings > API Keys > create a key pair
-4. Add `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` to `.env`
-5. `docker compose restart langgraph-server`
+## Bring your own infrastructure
 
-## Run
+The `.env.example` documents each service with provider alternatives.
+Swap any managed service by changing the connection string:
 
-```bash
-uv sync
-uv run python client.py "AI trends in healthcare"
-```
+- **Postgres**: Railway plugin, Neon, Supabase, RDS, any Postgres 14+
+- **Redis**: Railway plugin, Upstash, ElastiCache, any Redis 7+
+- **Tracing**: Langfuse Cloud, self-hosted Langfuse, or any OTLP endpoint
 
-## Viewing traces
-
-Open http://localhost:3000 after a run completes.
-
-## Production migration
-
-- **Postgres** — swap for managed (RDS, Supabase, Neon)
-- **Langfuse** — use Langfuse Cloud or self-hosted production
-- **LangGraph server** — push image to a container registry
-- **Catalogue** — mount shared volume or implement a cloud backend
-
-## Tear down
+## Connect from your machine
 
 ```bash
-docker compose down -v
+export MONET_API_KEY="your-secret"
+monet run --url https://your-app.up.railway.app "AI trends in healthcare"
 ```
 
-## Simpler setups
+Or use the Python client directly:
 
-- [quickstart-local](../quickstart-local/) — single process, no infra
-- [quickstart-server](../quickstart-server/) — client/server without Docker
+```python
+from monet.client import MonetClient
+
+client = MonetClient(url="https://your-app.up.railway.app")
+async for event in client.run("AI trends in healthcare"):
+    print(event)
+```
+
+## Other setups
+
+- [quickstart](../quickstart/) — zero infrastructure
+- [local](../local/) — Docker Compose with Postgres and Langfuse

@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +55,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from langgraph_sdk.client import LangGraphClient
+
+_log = logging.getLogger("monet.client")
 
 __all__ = [
     "AgentProgress",
@@ -183,6 +186,7 @@ class MonetClient:
                 yield event
 
         except Exception as exc:
+            _log.exception("Run %s failed with unhandled exception", rid)
             rs.status = "failed"
             yield RunFailed(run_id=rid, error=str(exc))
 

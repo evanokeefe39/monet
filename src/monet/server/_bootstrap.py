@@ -31,17 +31,16 @@ def configure_lazy_worker(queue: TaskQueue) -> None:
     from monet.core.queue_worker import run_worker
     from monet.core.registry import default_registry
 
-    _worker_holder: list[asyncio.Task[Any]] = []
+    _worker_task: asyncio.Task[Any] | None = None
     _orig_enqueue = queue.enqueue
 
     async def _lazy_enqueue(
         agent_id: str, command: str, ctx: Any, pool: str = "local"
     ) -> str:
-        if not _worker_holder or _worker_holder[0].done():
-            task = asyncio.create_task(run_worker(queue, default_registry))
-            task.add_done_callback(_on_worker_done)
-            _worker_holder.clear()
-            _worker_holder.append(task)
+        nonlocal _worker_task
+        if _worker_task is None or _worker_task.done():
+            _worker_task = asyncio.create_task(run_worker(queue, default_registry))
+            _worker_task.add_done_callback(_on_worker_done)
         return await _orig_enqueue(agent_id, command, ctx, pool=pool)
 
     def _on_worker_done(task: asyncio.Task[Any]) -> None:

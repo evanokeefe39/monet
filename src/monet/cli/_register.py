@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from pathlib import Path
 
 import click
 import httpx
+
+_log = logging.getLogger("monet.cli.register")
 
 
 @click.command()
@@ -41,6 +44,7 @@ def register(path: str, server_url: str, api_key: str) -> None:
 async def _register(path: Path, server_url: str, api_key: str) -> None:
     """Discover agents and register capabilities with the server."""
     from monet.cli._discovery import discover_agents
+    from monet.core._retry import retry_with_backoff
 
     discovered = discover_agents(path)
     if not discovered:
@@ -65,11 +69,33 @@ async def _register(path: Path, server_url: str, api_key: str) -> None:
         timeout=30.0,
     ) as client:
         for pool_name, capabilities in by_pool.items():
-            resp = await client.post(
-                f"{base_url}/api/v1/deployments",
-                json={"pool": pool_name, "capabilities": capabilities},
-            )
-            resp.raise_for_status()
+            # Default args capture loop vars to avoid late-binding closure bug.
+            async def _do_register(
+                pool: str = pool_name,
+                caps: list[dict[str, str]] = capabilities,
+            ) -> None:
+                resp = await client.post(
+                    f"{base_url}/api/v1/deployments",
+                    json={"pool": pool, "capabilities": caps},
+                )
+                resp.raise_for_status()
+
+            try:
+                await retry_with_backoff(
+                    _do_register,
+                    max_attempts=5,
+                    base_delay=1.0,
+                    max_delay=15.0,
+                    logger=_log,
+                )
+            except httpx.HTTPStatusError as exc:
+                _log.error(
+                    "Registration failed for pool %r after retries: %d %s",
+                    pool_name,
+                    exc.response.status_code,
+                    exc.response.text,
+                )
+                raise
 
     total = len(discovered)
     pools = len(by_pool)
