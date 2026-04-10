@@ -74,7 +74,7 @@ async def run(
         entry_state = (
             await build_entry_graph()
             .compile(checkpointer=ck)
-            .ainvoke(
+            .ainvoke(  # type: ignore[call-overload]
                 {"task": topic, "trace_id": rid, "run_id": rid},
                 config={"configurable": {"thread_id": f"{rid}-entry"}},
             )
@@ -118,7 +118,7 @@ async def run(
         exec_state = (
             await build_execution_graph()
             .compile(checkpointer=ck)
-            .ainvoke(
+            .ainvoke(  # type: ignore[call-overload]
                 {
                     "work_brief": brief,
                     "trace_id": rid,

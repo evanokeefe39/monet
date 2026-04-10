@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, TypedDict
 
-import aiosqlite
+import aiosqlite  # type: ignore[import-not-found]
 
 if TYPE_CHECKING:
     from monet.core.manifest import AgentCapability
@@ -178,7 +178,7 @@ class DeploymentStore:
             (cutoff, timeout),
         )
         await db.commit()
-        return cursor.rowcount
+        return int(cursor.rowcount)
 
     async def deactivate_stale_returning_worker_ids(
         self, timeout: int = 90

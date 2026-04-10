@@ -6,7 +6,7 @@ import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 __all__ = ["PoolConfig", "load_config"]
 
@@ -96,10 +96,10 @@ def load_config(path: Path | None = None) -> dict[str, PoolConfig]:
 
         result[name] = PoolConfig(
             name=name,
-            type=pool_type,  # type: ignore[arg-type]
-            lease_ttl=int(lease_ttl),
-            url=url,
-            auth=auth,
+            type=cast('Literal["local", "pull", "push"]', pool_type),
+            lease_ttl=int(cast("int", lease_ttl)),
+            url=cast("str | None", url),
+            auth=cast("str | None", auth),
         )
 
     return result

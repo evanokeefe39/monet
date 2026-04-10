@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class ArtifactMetadata(TypedDict):
@@ -18,5 +18,5 @@ class ArtifactMetadata(TypedDict):
     agent_id: str | None
     run_id: str | None
     trace_id: str | None
-    tags: dict
+    tags: dict[str, Any]
     created_at: str  # ISO 8601

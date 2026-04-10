@@ -11,10 +11,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from monet.types import ArtifactPointer
-
 if TYPE_CHECKING:
     from monet.catalogue._metadata import ArtifactMetadata
+    from monet.types import ArtifactPointer
 
 
 @runtime_checkable

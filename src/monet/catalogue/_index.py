@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from sqlalchemy import Float, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -73,7 +73,7 @@ class SQLiteIndex:
             row_dict = {c.key: getattr(result, c.key) for c in result.__table__.columns}
             # Convert tags JSON string back to dict
             row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
-            return row_dict  # type: ignore[return-value]
+            return cast("ArtifactMetadata", row_dict)
 
     async def query_by_run(self, run_id: str) -> list[ArtifactMetadata]:
         """Query all artifacts for a given run."""
@@ -86,5 +86,5 @@ class SQLiteIndex:
             for r in rows.scalars():
                 row_dict = {c.key: getattr(r, c.key) for c in r.__table__.columns}
                 row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
-                results.append(row_dict)  # type: ignore[arg-type]
+                results.append(cast("ArtifactMetadata", row_dict))
             return results

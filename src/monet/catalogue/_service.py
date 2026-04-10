@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from monet.catalogue._index import SQLiteIndex
 from monet.catalogue._metadata import ArtifactMetadata
-from monet.catalogue._storage import FilesystemStorage
-from monet.types import ArtifactPointer
+
+if TYPE_CHECKING:
+    from monet.catalogue._index import SQLiteIndex
+    from monet.catalogue._storage import FilesystemStorage
+    from monet.types import ArtifactPointer
 
 
 class CatalogueService:
@@ -55,6 +58,9 @@ class CatalogueService:
         """
         await self._ensure_initialised()
         # Get run context if available — not required
+        run_id: str | None = None
+        trace_id: str | None = None
+        agent_id: str | None = None
         try:
             from monet.core.context import get_run_context
 
@@ -63,7 +69,7 @@ class CatalogueService:
             trace_id = ctx.get("trace_id")
             agent_id = ctx.get("agent_id")
         except (LookupError, RuntimeError):
-            run_id = trace_id = agent_id = None
+            pass
 
         artifact_id = str(uuid.uuid4())
         metadata = ArtifactMetadata(
@@ -77,7 +83,7 @@ class CatalogueService:
             agent_id=agent_id,
             run_id=run_id,
             trace_id=trace_id,
-            tags=dict(kwargs.get("tags", {})) if "tags" in kwargs else {},
+            tags=dict(kwargs["tags"]) if "tags" in kwargs else {},  # type: ignore[call-overload]
             created_at=datetime.now(tz=UTC).isoformat(),
         )
         pointer = await self._storage.write(content, metadata)

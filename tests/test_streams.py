@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from monet.types import Signal
 
 from monet import AgentStream, SemanticError
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
@@ -20,7 +25,7 @@ def _catalogue() -> None:  # type: ignore[misc]
     configure_catalogue(None)
 
 
-def _write_emitter(tmp_path: Path, payloads: list[dict]) -> list[str]:
+def _write_emitter(tmp_path: Path, payloads: list[dict[str, object]]) -> list[str]:
     """Write a tiny Python script that emits the given JSON lines."""
     script = tmp_path / "emit.py"
     body = "import json\n"
@@ -54,8 +59,8 @@ async def test_cli_default_handlers_route_events(tmp_path: Path) -> None:
         ],
     )
 
-    artifacts: list = []
-    signals: list = []
+    artifacts: list[Any] = []
+    signals: list[Signal] = []
     art_token = _artifact_collector.set(artifacts)
     sig_token = _signal_collector.set(signals)
     try:
@@ -76,7 +81,7 @@ async def test_cli_custom_handler_overrides_default(tmp_path: Path) -> None:
         [{"type": "progress", "status": "x"}, {"type": "result", "output": "ok"}],
     )
 
-    seen: list[dict] = []
+    seen: list[dict[str, object]] = []
     result = await AgentStream.cli(cmd=cmd).on("progress", seen.append).run()
 
     assert result == "ok"
@@ -125,7 +130,7 @@ async def test_http_poll_timeout_after_max_polls() -> None:
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        events: list[dict] = []
+        events: list[dict[str, object]] = []
         with pytest.raises(TimeoutError, match="did not produce a result event"):
             async for event in _iter_http_poll(
                 "http://example.com/poll", 0.0, max_polls=3
