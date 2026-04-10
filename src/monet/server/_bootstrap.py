@@ -7,6 +7,7 @@ server entry point (e.g., ``server_graphs.py``).
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,43 @@ from monet.core.manifest import AgentCapability
 if TYPE_CHECKING:
     from monet.queue import TaskQueue
 
+_log = logging.getLogger("monet.server")
+
+
+def configure_lazy_worker(queue: TaskQueue) -> None:
+    """Patch *queue*.enqueue to start a background worker on first call.
+
+    Use when the event loop is not available at configuration time —
+    e.g., ``langgraph dev`` creates its loop at graph invocation time,
+    not at import time.  The worker is started via
+    ``asyncio.create_task`` inside the first ``enqueue`` call, when the
+    loop is guaranteed to be running.
+    """
+    from monet.core.queue_worker import run_worker
+    from monet.core.registry import default_registry
+
+    _worker_holder: list[asyncio.Task[Any]] = []
+    _orig_enqueue = queue.enqueue
+
+    async def _lazy_enqueue(
+        agent_id: str, command: str, ctx: Any, pool: str = "local"
+    ) -> str:
+        if not _worker_holder or _worker_holder[0].done():
+            task = asyncio.create_task(run_worker(queue, default_registry))
+            task.add_done_callback(_on_worker_done)
+            _worker_holder.clear()
+            _worker_holder.append(task)
+        return await _orig_enqueue(agent_id, command, ctx, pool=pool)
+
+    def _on_worker_done(task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            _log.error("Lazy worker exited with exception: %s", exc)
+
+    queue.enqueue = _lazy_enqueue  # type: ignore[assignment]
+
 
 async def bootstrap(
     *,
@@ -22,7 +60,8 @@ async def bootstrap(
     enable_tracing: bool = True,
     agents: list[AgentCapability] | None = None,
     queue: TaskQueue | None = None,
-) -> asyncio.Task[None]:
+    lazy_worker: bool = False,
+) -> asyncio.Task[None] | None:
     """Initialize the monet server with guaranteed ordering.
 
     1. Configure tracing (if enabled)
@@ -38,9 +77,13 @@ async def bootstrap(
         agents: Additional capabilities to declare in the manifest.
             Agents registered via ``@agent`` are auto-declared.
         queue: Task queue instance. Defaults to in-memory queue.
+        lazy_worker: If True, defer worker startup to first enqueue.
+            Use for ``langgraph dev`` where the event loop is not
+            available at import time.
 
     Returns:
-        The background worker task. Cancel it on shutdown.
+        The background worker task, or None when *lazy_worker* is True.
+        Cancel the task on shutdown when non-None.
     """
     # 1. Tracing
     if enable_tracing:
@@ -78,6 +121,10 @@ async def bootstrap(
     configure_queue(queue)
 
     # 5. Worker
+    if lazy_worker:
+        configure_lazy_worker(queue)
+        return None
+
     from monet.core.queue_worker import run_worker
     from monet.core.registry import default_registry
 
@@ -85,20 +132,15 @@ async def bootstrap(
         run_worker(queue, default_registry)
     )
 
-    # Health monitoring: log if worker exits unexpectedly
     def _on_worker_done(task: asyncio.Task[Any]) -> None:
         if task.cancelled():
             return
         exc = task.exception()
         if exc:
-            import logging
-
-            logging.getLogger("monet.server").error(
-                "Worker task exited with exception: %s", exc
-            )
+            _log.error("Worker task exited with exception: %s", exc)
 
     worker_task.add_done_callback(_on_worker_done)
     return worker_task
 
 
-__all__ = ["AgentCapability", "bootstrap"]
+__all__ = ["AgentCapability", "bootstrap", "configure_lazy_worker"]

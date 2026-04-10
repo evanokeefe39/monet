@@ -32,6 +32,7 @@ def test_monet_root_exports() -> None:
         "NeedsHumanReview",
         "EscalationRequired",
         "SemanticError",
+        "run",
     }
     assert set(monet.__all__) == expected
     for name in expected:
@@ -116,7 +117,32 @@ def test_queue_concrete_exports() -> None:
 
 
 def test_server_public_api() -> None:
-    from monet.server import AgentCapability, bootstrap  # noqa: F401
+    from monet.server import (  # noqa: F401
+        AgentCapability,
+        bootstrap,
+        configure_lazy_worker,
+    )
+
+
+def test_client_public_api() -> None:
+    from monet.client import (  # noqa: F401
+        AgentProgress,
+        ExecutionInterrupt,
+        MonetClient,
+        PendingDecision,
+        PlanApproved,
+        PlanInterrupt,
+        PlanReady,
+        ReflectionComplete,
+        RunComplete,
+        RunDetail,
+        RunEvent,
+        RunFailed,
+        RunSummary,
+        TriageComplete,
+        WaveComplete,
+        make_client,
+    )
 
 
 def test_catalogue_handle_public() -> None:

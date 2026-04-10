@@ -1,3 +1,14 @@
+> **Deprecated** — This example is superseded by the graduated quickstart
+> examples:
+>
+> - [`quickstart-local/`](../quickstart-local/) — single-process demo
+> - [`quickstart-server/`](../quickstart-server/) — client/server evaluation
+> - [`deployed/`](../deployed/) — production Docker Compose
+>
+> This example remains for reference but will not receive updates.
+
+---
+
 # social_media_llm — LangGraph Server client for the monet SDK
 
 A minimal interactive terminal client that drives the monet SDK's
