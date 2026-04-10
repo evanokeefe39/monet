@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "entry": "monet.server.default_graphs:build_entry_graph",
+    "planning": "monet.server.default_graphs:build_planning_graph",
+    "execution": "monet.server.default_graphs:build_execution_graph"
+  },
+  "env": ".env"
+}

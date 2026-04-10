@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import click
 
+from monet.cli._dev import dev
 from monet.cli._register import register
+from monet.cli._run import run
 from monet.cli._server import server
 from monet.cli._worker import worker
 
@@ -23,6 +25,8 @@ def cli() -> None:
     """monet — multi-agent orchestration platform."""
 
 
+cli.add_command(dev)
+cli.add_command(run)
 cli.add_command(worker)
 cli.add_command(register)
 cli.add_command(server)

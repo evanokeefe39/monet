@@ -7,7 +7,7 @@ import contextlib
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from monet.server._bootstrap import AgentCapability, bootstrap
+from monet.server._bootstrap import AgentCapability, bootstrap, configure_lazy_worker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from monet.queue import TaskQueue
 
-__all__ = ["AgentCapability", "bootstrap", "create_app"]
+__all__ = ["AgentCapability", "bootstrap", "configure_lazy_worker", "create_app"]
 
 
 def create_app(
