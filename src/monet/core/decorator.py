@@ -76,7 +76,7 @@ def _inject_params(fn: Callable[..., Any], ctx: AgentRunContext) -> dict[str, An
     sig = inspect.signature(fn)
     kwargs: dict[str, Any] = {}
     for param_name in sig.parameters:
-        kwargs[param_name] = ctx[param_name]
+        kwargs[param_name] = ctx[param_name]  # type: ignore[literal-required]
     return kwargs
 
 

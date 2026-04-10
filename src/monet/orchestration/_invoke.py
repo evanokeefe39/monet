@@ -114,7 +114,9 @@ async def invoke_agent(
             signals=(
                 Signal(
                     type=SignalType.CAPABILITY_UNAVAILABLE,
-                    reason=f"Agent '{agent_id}/{command}' is not declared in the manifest",
+                    reason=(
+                        f"Agent '{agent_id}/{command}' is not declared in the manifest"
+                    ),
                     metadata={"agent_id": agent_id, "command": command},
                 ),
             ),

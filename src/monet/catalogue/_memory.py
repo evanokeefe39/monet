@@ -38,7 +38,7 @@ class InMemoryCatalogueClient:
             agent_id=None,
             run_id=None,
             trace_id=None,
-            tags=dict(kwargs.get("tags", {})) if "tags" in kwargs else {},
+            tags=dict(kwargs["tags"]) if "tags" in kwargs else {},  # type: ignore[call-overload]
             created_at=datetime.now(tz=UTC).isoformat(),
         )
         self._store[artifact_id] = (content, metadata)

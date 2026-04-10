@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import logging
 from contextvars import ContextVar
+from typing import TYPE_CHECKING
 
-from monet.types import AgentRunContext
+if TYPE_CHECKING:
+    from monet.types import AgentRunContext
 
 _agent_context: ContextVar[AgentRunContext] = ContextVar("_agent_context")
 

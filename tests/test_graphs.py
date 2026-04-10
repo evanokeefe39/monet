@@ -6,7 +6,7 @@ Patches monet.agents.*._get_model so no API keys are required.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,9 +14,11 @@ import pytest
 pytest.importorskip("langchain_core")
 
 from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
+
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
 
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 from monet.core.manifest import default_manifest

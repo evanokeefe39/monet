@@ -33,7 +33,7 @@ async def _main(message: str) -> None:
 
         # Entry / triage
         entry = build_entry_graph().compile(checkpointer=checkpointer)
-        entry_state = await entry.ainvoke(
+        entry_state = await entry.ainvoke(  # type: ignore[call-overload]
             {"task": message, "trace_id": thread_id, "run_id": thread_id},
             config={"configurable": {"thread_id": f"{thread_id}-entry"}},
         )
@@ -45,7 +45,7 @@ async def _main(message: str) -> None:
         # Planning with auto-approve
         planning = build_planning_graph().compile(checkpointer=checkpointer)
         planning_config = {"configurable": {"thread_id": f"{thread_id}-planning"}}
-        await planning.ainvoke(
+        await planning.ainvoke(  # type: ignore[call-overload]
             {
                 "task": message,
                 "trace_id": thread_id,
@@ -54,7 +54,7 @@ async def _main(message: str) -> None:
             },
             config=planning_config,
         )
-        planning_state = await planning.ainvoke(
+        planning_state = await planning.ainvoke(  # type: ignore[call-overload]
             Command(resume={"approved": True, "feedback": None}),
             config=planning_config,
         )
@@ -64,7 +64,7 @@ async def _main(message: str) -> None:
 
         # Execution
         execution = build_execution_graph().compile(checkpointer=checkpointer)
-        await execution.ainvoke(
+        await execution.ainvoke(  # type: ignore[call-overload]
             {
                 "work_brief": planning_state["work_brief"],
                 "trace_id": thread_id,
@@ -80,9 +80,10 @@ async def _main(message: str) -> None:
         )
         print(json.dumps({"phase": "execution"}, indent=2))
     finally:
-        worker_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await worker_task
+        if worker_task is not None:
+            worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker_task
 
 
 def main() -> None:

@@ -125,7 +125,7 @@ def configure_tracing(
     ep = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if ep and not _exporter_attached:
         try:
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[import-not-found]
                 OTLPSpanExporter,
             )
             from opentelemetry.sdk.trace.export import BatchSpanProcessor

@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-import aiosqlite
+import aiosqlite  # type: ignore[import-not-found]
 
 from monet.queue import TaskStatus
 from monet.signals import SignalType

@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import aiofiles
+import aiofiles  # type: ignore[import-untyped]
 
 from monet.types import ArtifactPointer
 

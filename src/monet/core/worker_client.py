@@ -82,7 +82,7 @@ class WorkerClient:
         if resp.status_code == 204:
             return None
         resp.raise_for_status()
-        return resp.json()  # type: ignore[return-value]
+        return resp.json()  # type: ignore[no-any-return]
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
         """Post a successful result for a claimed task."""

@@ -12,7 +12,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from jinja2 import (  # type: ignore[import-not-found]
+    Environment,
+    FileSystemLoader,
+    StrictUndefined,
+)
 from langchain_core.output_parsers import StrOutputParser
 
 if TYPE_CHECKING:
