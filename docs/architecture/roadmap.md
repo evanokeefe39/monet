@@ -15,11 +15,14 @@
 - [x] `NeedsHumanReview`, `EscalationRequired`, `SemanticError` typed exceptions
 - [x] `AgentDescriptor`, `CommandDescriptor`, `SLACharacteristics`, `RetryConfig` descriptors
 - [x] OpenTelemetry tracing (spans, W3C traceparent, gen_ai.* conventions)
+- [x] `monet.tracing` public module (configure_tracing, get_tracer, inject_trace_context, constants)
+- [x] `CatalogueHandle` re-exported from top-level `monet` namespace
 
 ### Task Queue and Worker
 - [x] `TaskQueue` protocol with pool-based claim (Prefect model)
 - [x] `InMemoryTaskQueue` with per-pool queues, O(1) claim, backpressure, memory cleanup, cancellation
-- [x] `run_worker()` with concurrent execution (semaphore-capped), OTel spans, graceful shutdown
+- [x] `SQLiteTaskQueue` with persistent storage, lease-based claiming, background sweeper
+- [x] `run_worker()` with concurrent execution (semaphore-capped), OTel spans, graceful shutdown, optional registry
 - [x] `bootstrap()` one-call server init (tracing → catalogue → manifest → queue → worker)
 
 ### Capability Manifest
@@ -50,19 +53,30 @@
 - [x] QA (wave reflection evaluation)
 - [x] Publisher (content publishing)
 
-### Server
-- [x] FastAPI application factory with agent and catalogue routes
+### Distribution Mode
+- [x] **monet.toml** — declarative pool topology config with env var resolution
+- [x] **FastAPI orchestration server** — `create_app()` factory with lifespan management
+- [x] **Server API endpoints** — worker registration, heartbeat, task claim/complete/fail, deployments, health
+- [x] **API key authentication** — Bearer token middleware for server endpoints
+- [x] **Deployment records** — SQLite-backed storage for worker capability tracking
+- [x] **monet worker CLI** — standalone process with AST discovery, heartbeat, local/remote modes
+- [x] **monet register CLI** — CI/CD command for declaring remote agent deployments
+- [x] **monet server CLI** — start the orchestration server with uvicorn
+- [x] **AST agent discovery** — scan for @agent decorators without code execution
+- [x] **WorkerClient** — HTTP client for remote worker ↔ server communication
+- [x] **RemoteQueue** — TaskQueue adapter for remote workers
+- [x] **monet.client module** — SDK client utilities (make_client, drain_stream, stream_run, state helpers, graph constants)
 
-## Planned (Distribution Mode)
+### Queue Providers
+- [x] `InMemoryTaskQueue` — in-process, development and testing
+- [x] `SQLiteTaskQueue` — persistent, single-server, lease-based claiming
+- [x] `RedisTaskQueue` — standard Redis with pub/sub notifications + polling fallback
+- [x] `UpstashTaskQueue` — HTTP-based serverless Redis, polling-only, key TTL cleanup
 
-Deferred until there is a deployment beyond single-server monolith. The queue protocol and pool abstractions support this without architecture changes.
+## Planned
 
-- [ ] **Queue API endpoints** — FastAPI routes for remote worker claim/complete/fail
-- [ ] **monet.toml** — declarative pool topology config
-- [ ] **monet worker CLI** — standalone process with AST discovery, heartbeat, poll loop
+Deferred until there is concrete demand or a deployment requiring it.
 - [ ] **Forwarding worker** — claims push-pool tasks, forwards to Cloud Run/ECS
-- [ ] **Lease TTL + sweeper** — requeue crashed tasks
-- [ ] **monet register CLI** — CI/CD command for declaring remote agent deployments
-- [ ] **Redis/Upstash queue backend** — persistent TaskQueue for cross-process workers
-- [ ] **monet.client module** — SDK client utilities (drain_stream, get_state_values, state initializers)
+- [ ] **Lease TTL + sweeper for push pools** — requeue crashed push tasks
 - [ ] **Optional summarizer agent** — framework-inserted wave context condensation
+- [ ] **Core module restructure** — move `_*` prefixed modules into `monet.core/` package

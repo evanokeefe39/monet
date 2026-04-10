@@ -11,16 +11,45 @@ and executes whatever lands in it. Handler lookup is the worker's concern.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
     from monet.types import AgentResult, AgentRunContext
 
 __all__ = [
+    "InMemoryTaskQueue",  # noqa: F822
+    "RedisTaskQueue",  # noqa: F822
+    "SQLiteTaskQueue",  # noqa: F822
     "TaskQueue",
     "TaskRecord",
     "TaskStatus",
+    "UpstashTaskQueue",  # noqa: F822
+    "run_worker",  # noqa: F822
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "InMemoryTaskQueue":
+        from monet.core.queue_memory import InMemoryTaskQueue
+
+        return InMemoryTaskQueue
+    if name == "SQLiteTaskQueue":
+        from monet.core.queue_sqlite import SQLiteTaskQueue
+
+        return SQLiteTaskQueue
+    if name == "RedisTaskQueue":
+        from monet.core.queue_redis import RedisTaskQueue
+
+        return RedisTaskQueue
+    if name == "UpstashTaskQueue":
+        from monet.core.queue_upstash import UpstashTaskQueue
+
+        return UpstashTaskQueue
+    if name == "run_worker":
+        from monet.core.queue_worker import run_worker
+
+        return run_worker
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class TaskStatus(StrEnum):

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from monet._catalogue import get_catalogue
+from monet.core.catalogue import get_catalogue
 
 __all__ = ["resolve_context"]
 

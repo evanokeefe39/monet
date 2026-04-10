@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from monet._registry import AgentRegistry, default_registry
+from monet.core.registry import AgentRegistry, default_registry
 
 
 def _dummy_handler() -> str:

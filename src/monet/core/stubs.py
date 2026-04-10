@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .types import ArtifactPointer, Signal
+    from monet.types import ArtifactPointer, Signal
 
 
 # ── Signal collector — set by decorator before each invocation ────────────────
@@ -65,7 +65,7 @@ async def write_artifact(
     the ambient trio (emit_progress, emit_signal, write_artifact). The
     pointer is appended to ``AgentResult.artifacts`` automatically.
     """
-    from ._catalogue import get_catalogue
+    from .catalogue import get_catalogue
 
     return await get_catalogue().write(
         content=content,

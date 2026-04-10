@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from monet._manifest import default_manifest
-from monet._queue_memory import InMemoryTaskQueue
-from monet._queue_worker import run_worker
-from monet._registry import default_registry
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.core.manifest import default_manifest
+from monet.core.queue_memory import InMemoryTaskQueue
+from monet.core.queue_worker import run_worker
+from monet.core.registry import default_registry
 from monet.orchestration._invoke import configure_queue
 
 if TYPE_CHECKING:

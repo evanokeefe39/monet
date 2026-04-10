@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "entry": "./server_graphs.py:build_entry_graph",
+    "planning": "./server_graphs.py:build_planning_graph",
+    "execution": "./server_graphs.py:build_execution_graph"
+  },
+  "env": ".env"
+}

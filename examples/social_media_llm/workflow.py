@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 from client import stream_run
 from display import print_streaming_event
 
-from monet._tracing import TRACE_CARRIER_METADATA_KEY
+from monet.tracing import TRACE_CARRIER_METADATA_KEY
 
 if TYPE_CHECKING:
     from collections.abc import Callable

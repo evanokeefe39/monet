@@ -13,9 +13,8 @@ import sys
 
 
 async def _main(message: str) -> None:
-    from monet.server import bootstrap
-
     import monet.agents  # noqa: F401 — registers reference agents
+    from monet.server import bootstrap
 
     worker_task = await bootstrap(enable_tracing=True)
 

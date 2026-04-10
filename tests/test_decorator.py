@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from monet import EscalationRequired, NeedsHumanReview, SemanticError, agent
-from monet._manifest import default_manifest
-from monet._registry import (
+from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.core.manifest import default_manifest
+from monet.core.registry import (
     default_registry,  # internal: needed for registry_scope test fixture
 )
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 
 if TYPE_CHECKING:
     from monet.types import AgentRunContext
@@ -133,7 +133,7 @@ def test_dual_call_signature() -> None:
     async def fast_handler(task: str) -> str:
         return f"fast:{task}"
 
-    from monet._registry import default_registry
+    from monet.core.registry import default_registry
 
     assert default_registry.lookup("dual-test", "fast") is not None
 

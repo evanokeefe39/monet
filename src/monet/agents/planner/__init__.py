@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from monet import agent, emit_progress, get_run_logger
-from monet._manifest import default_manifest
+from monet.core.manifest import default_manifest
 from monet.exceptions import NeedsHumanReview
 
 from .._prompts import extract_text, make_env

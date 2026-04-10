@@ -18,20 +18,21 @@ import hashlib
 import inspect
 from typing import TYPE_CHECKING, Any, overload
 
-from ._catalogue import _artifact_collector, _artifact_hashes, get_catalogue
-from ._context import _agent_context
-from ._manifest import default_manifest
-from ._registry import default_registry
-from ._stubs import _signal_collector
-from ._tracing import get_tracer
-from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
-from .types import (
+from monet.exceptions import EscalationRequired, NeedsHumanReview, SemanticError
+from monet.types import (
     AgentResult,
     AgentRunContext,
     ArtifactPointer,
     Signal,
     SignalType,
 )
+
+from .catalogue import _artifact_collector, _artifact_hashes, get_catalogue
+from .context import _agent_context
+from .manifest import default_manifest
+from .registry import default_registry
+from .stubs import _signal_collector
+from .tracing import get_tracer
 
 # Default content limit for automatic offload (bytes).
 #
@@ -113,7 +114,7 @@ async def _wrap_result(
         output_str = str(return_value)
         output = output_str
         if len(output_str) > content_limit:
-            from ._catalogue import _catalogue_backend
+            from .catalogue import _catalogue_backend
 
             encoded = output_str.encode()
             already_written = hashlib.sha256(encoded).hexdigest() in written_hashes

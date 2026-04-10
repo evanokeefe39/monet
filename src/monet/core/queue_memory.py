@@ -38,11 +38,7 @@ class InMemoryTaskQueue:
     @property
     def pending_count(self) -> int:
         """Number of tasks in PENDING state across all pools."""
-        return sum(
-            1
-            for t in self._tasks.values()
-            if t["status"] == TaskStatus.PENDING
-        )
+        return sum(1 for t in self._tasks.values() if t["status"] == TaskStatus.PENDING)
 
     async def enqueue(
         self,

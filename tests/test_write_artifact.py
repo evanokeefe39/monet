@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from monet import agent, get_catalogue
-from monet._manifest import default_manifest
-from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.core.manifest import default_manifest
+from monet.core.registry import default_registry  # internal: registry_scope fixture
 
 if TYPE_CHECKING:
     from monet.types import AgentRunContext

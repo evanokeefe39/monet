@@ -1,10 +1,10 @@
 """monet — multi-agent orchestration SDK."""
 
-from ._catalogue import get_catalogue
-from ._context import get_run_context, get_run_logger
-from ._context_resolver import resolve_context
-from ._decorator import agent
-from ._stubs import emit_progress, emit_signal, write_artifact
+from .core.catalogue import CatalogueHandle, get_catalogue
+from .core.context import get_run_context, get_run_logger
+from .core.context_resolver import resolve_context
+from .core.decorator import agent
+from .core.stubs import emit_progress, emit_signal, write_artifact
 from .exceptions import EscalationRequired, NeedsHumanReview, SemanticError
 from .handlers import log_handler, webhook_handler
 from .signals import AUDIT, BLOCKING, INFORMATIONAL, RECOVERABLE, ROUTING
@@ -21,6 +21,7 @@ __all__ = [
     "AgentRunContext",
     "AgentStream",
     "ArtifactPointer",
+    "CatalogueHandle",
     "EscalationRequired",
     "NeedsHumanReview",
     "SemanticError",
@@ -32,8 +33,8 @@ __all__ = [
     "get_catalogue",
     "get_run_context",
     "get_run_logger",
-    "resolve_context",
     "log_handler",
+    "resolve_context",
     "webhook_handler",
     "write_artifact",
 ]

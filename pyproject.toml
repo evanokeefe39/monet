@@ -26,7 +26,14 @@ dependencies = [
     "httpx>=0.27",
     "aiofiles>=23.0",
     "aiosqlite>=0.19",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "click>=8.0",
+    "pydantic>=2.0",
 ]
+
+[project.scripts]
+monet = "monet.cli:cli"
 
 [project.optional-dependencies]
 agents = [
@@ -112,3 +119,15 @@ warn_unused_ignores = false
 [[tool.mypy.overrides]]
 module = "examples.*"
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "redis.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "upstash_redis.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "click.*"
+ignore_missing_imports = true

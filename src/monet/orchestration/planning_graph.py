@@ -18,7 +18,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 
 from monet import get_catalogue
-from monet._tracing import attached_trace, extract_carrier_from_config
+from monet.core.tracing import attached_trace, extract_carrier_from_config
 
 from ._invoke import invoke_agent
 from ._result_parser import ParseFailure, parse_json_output

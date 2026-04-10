@@ -11,6 +11,7 @@ def test_monet_root_exports() -> None:
         "AgentResult",
         "AgentRunContext",
         "ArtifactPointer",
+        "CatalogueHandle",
         "Signal",
         "SignalType",
         "AUDIT",
@@ -84,7 +85,39 @@ def test_get_catalogue_returns_handle_with_read_and_write() -> None:
 
 
 def test_handle_agent_event_not_in_sdk() -> None:
-    """handle_agent_event should not exist in the SDK — applications inline their own dispatch."""
+    """handle_agent_event should not exist in the SDK."""
     import monet.catalogue as cat
 
     assert not hasattr(cat, "handle_agent_event")
+
+
+def test_tracing_public_api() -> None:
+    from monet.tracing import (  # noqa: F401
+        EXECUTION_ROOT_SPAN_NAME,
+        RUN_ROOT_SPAN_NAME,
+        TRACE_CARRIER_METADATA_KEY,
+        attached_trace,
+        configure_tracing,
+        extract_carrier_from_config,
+        get_tracer,
+        inject_trace_context,
+    )
+
+
+def test_queue_concrete_exports() -> None:
+    from monet.queue import (  # noqa: F401
+        InMemoryTaskQueue,
+        SQLiteTaskQueue,
+        TaskQueue,
+        TaskRecord,
+        TaskStatus,
+        run_worker,
+    )
+
+
+def test_server_public_api() -> None:
+    from monet.server import AgentCapability, bootstrap  # noqa: F401
+
+
+def test_catalogue_handle_public() -> None:
+    from monet import CatalogueHandle  # noqa: F401

@@ -56,7 +56,7 @@ class CatalogueService:
         await self._ensure_initialised()
         # Get run context if available — not required
         try:
-            from monet._context import get_run_context
+            from monet.core.context import get_run_context
 
             ctx = get_run_context()
             run_id = ctx.get("run_id")
