@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from monet import AgentStream, SemanticError
-from monet._catalogue import _artifact_collector
-from monet._stubs import _signal_collector
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.core.catalogue import _artifact_collector
+from monet.core.stubs import _signal_collector
 
 
 @pytest.fixture(autouse=True)

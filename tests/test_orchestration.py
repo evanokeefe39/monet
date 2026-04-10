@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from monet import agent
-from monet._manifest import default_manifest
-from monet._registry import (
+from monet.core.manifest import default_manifest
+from monet.core.registry import (
     default_registry,  # internal: needed for registry_scope test fixture
 )
 

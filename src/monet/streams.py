@@ -16,8 +16,8 @@ import json
 import shlex
 from typing import TYPE_CHECKING, Any
 
-from ._catalogue import get_catalogue
-from ._stubs import emit_progress, emit_signal
+from .core.catalogue import get_catalogue
+from .core.stubs import emit_progress, emit_signal
 from .exceptions import SemanticError
 from .signals import SignalType
 from .types import Signal

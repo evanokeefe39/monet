@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from contextvars import ContextVar
 
-from .types import AgentRunContext
+from monet.types import AgentRunContext
 
 _agent_context: ContextVar[AgentRunContext] = ContextVar("_agent_context")
 

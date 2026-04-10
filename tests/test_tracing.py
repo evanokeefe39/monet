@@ -6,7 +6,7 @@ import base64
 
 import pytest
 
-from monet._tracing import (
+from monet.core.tracing import (
     _apply_honeycomb_shortcut,
     _apply_langfuse_shortcut,
     _apply_langsmith_shortcut,
@@ -114,7 +114,7 @@ def test_trace_context_propagates_across_extract_attach() -> None:
     """Spans opened after re-attaching an injected carrier share the
     same trace_id as the parent span. This is the mechanism that makes
     every agent span in one monet run part of a single Langfuse trace."""
-    from monet._tracing import (
+    from monet.core.tracing import (
         detach_trace_context,
         extract_and_attach_trace_context,
         inject_trace_context,

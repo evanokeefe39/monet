@@ -41,7 +41,7 @@ from prompts import (
 )
 from workflow import run_execution, run_planning, run_triage
 
-from monet._tracing import (
+from monet.tracing import (
     RUN_ROOT_SPAN_NAME,
     configure_tracing,
     get_tracer,

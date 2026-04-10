@@ -16,7 +16,7 @@ from opentelemetry import trace
 
 if TYPE_CHECKING:
     from monet.queue import TaskQueue
-    from monet.types import AgentResult, AgentRunContext, Signal
+    from monet.types import AgentResult, AgentRunContext
 
 # Default timeout for queue poll (seconds). Override via MONET_AGENT_TIMEOUT.
 _DEFAULT_TIMEOUT = 600.0
@@ -102,7 +102,7 @@ async def invoke_agent(
     }
 
     # Manifest guard: fail fast if agent is not declared
-    from monet._manifest import default_manifest
+    from monet.core.manifest import default_manifest
 
     if not default_manifest.is_available(agent_id, command):
         from monet.signals import SignalType
@@ -134,9 +134,7 @@ async def invoke_agent(
         pool = default_manifest.get_pool(agent_id, command) or "local"
         task_id = await _task_queue.enqueue(agent_id, command, ctx, pool=pool)
         try:
-            result = await _task_queue.poll_result(
-                task_id, timeout=_get_timeout()
-            )
+            result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
         except TimeoutError:
             # Cancel the task so workers don't waste resources on it
             await _task_queue.cancel(task_id)

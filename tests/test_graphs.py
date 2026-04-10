@@ -18,9 +18,9 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from monet._manifest import default_manifest
-from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.core.manifest import default_manifest
+from monet.core.registry import default_registry  # internal: registry_scope fixture
 from monet.orchestration import (
     build_entry_graph,
     build_execution_graph,
@@ -293,16 +293,27 @@ async def test_run_end_to_end() -> None:
         # Entry / triage
         entry = build_entry_graph().compile(checkpointer=checkpointer)
         entry_state = await entry.ainvoke(
-            {"task": "Write a post about AI", "trace_id": thread_id, "run_id": thread_id},
+            {
+                "task": "Write a post about AI",
+                "trace_id": thread_id,
+                "run_id": thread_id,
+            },
             config={"configurable": {"thread_id": f"{thread_id}-entry"}},
         )
         assert entry_state.get("triage", {}).get("complexity") == "complex"
 
         # Planning with auto-approve
         planning = build_planning_graph().compile(checkpointer=checkpointer)
-        planning_config: RunnableConfig = {"configurable": {"thread_id": f"{thread_id}-planning"}}
+        planning_config: RunnableConfig = {
+            "configurable": {"thread_id": f"{thread_id}-planning"}
+        }
         await planning.ainvoke(
-            {"task": "Write a post about AI", "trace_id": thread_id, "run_id": thread_id, "revision_count": 0},
+            {
+                "task": "Write a post about AI",
+                "trace_id": thread_id,
+                "run_id": thread_id,
+                "revision_count": 0,
+            },
             config=planning_config,
         )
         planning_state = await planning.ainvoke(

@@ -274,7 +274,7 @@ async def test_service_write_propagates_unexpected_exceptions(tmp_path: Path) ->
     service = CatalogueService(storage, index)
 
     with patch(
-        "monet._context.get_run_context",
+        "monet.core.context.get_run_context",
         side_effect=TypeError("unexpected"),
     ):
         import pytest

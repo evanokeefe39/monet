@@ -8,7 +8,7 @@ checked at fan-out time and surface as SemanticError so HITL can respond.
 
 from __future__ import annotations
 
-from monet._manifest import default_manifest
+from monet.core.manifest import default_manifest
 
 
 def _assert_registered(agent_id: str, command: str) -> None:

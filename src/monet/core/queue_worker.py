@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from opentelemetry import trace
 
 if TYPE_CHECKING:
-    from monet._registry import AgentRegistry
+    from monet.core.registry import AgentRegistry
     from monet.queue import TaskQueue, TaskRecord
 
 logger = logging.getLogger("monet.worker")
@@ -29,7 +29,7 @@ _SHUTDOWN_TIMEOUT = 30.0
 
 async def run_worker(
     queue: TaskQueue,
-    registry: AgentRegistry,
+    registry: AgentRegistry | None = None,
     pool: str = "local",
     max_concurrency: int = 10,
 ) -> None:
@@ -40,10 +40,15 @@ async def run_worker(
 
     Args:
         queue: The task queue to poll.
-        registry: Handler registry for local execution.
+        registry: Handler registry for local execution. Defaults to the
+            global registry populated by ``@agent`` decorators.
         pool: Pool name this worker serves. Claims only tasks in this pool.
         max_concurrency: Max concurrent task executions. Default 10.
     """
+    if registry is None:
+        from monet.core.registry import default_registry
+
+        registry = default_registry
     sem = asyncio.Semaphore(max_concurrency)
     in_flight: set[asyncio.Task[None]] = set()
 

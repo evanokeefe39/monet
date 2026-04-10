@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from monet._manifest import default_manifest
 from monet.catalogue import configure_catalogue
+from monet.core.manifest import default_manifest
 from monet.orchestration._invoke import configure_queue, get_queue
 
 if TYPE_CHECKING:

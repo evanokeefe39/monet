@@ -1,0 +1,13 @@
+[project]
+name = "monet-quickstart"
+version = "0.0.0"
+description = "Quickstart example — client/server content workflow with monet."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+    "langgraph-sdk>=0.1",
+    "langgraph-cli[inmem]>=0.1",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }

@@ -16,9 +16,9 @@ pytest.importorskip("langchain_core")
 
 from langchain_core.messages import AIMessage
 
-from monet._manifest import default_manifest
-from monet._registry import default_registry  # internal: registry_scope fixture
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.core.manifest import default_manifest
+from monet.core.registry import default_registry  # internal: registry_scope fixture
 from monet.orchestration import invoke_agent
 from monet.types import SignalType
 

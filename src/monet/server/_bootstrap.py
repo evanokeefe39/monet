@@ -10,8 +10,9 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from monet.core.manifest import AgentCapability
+
 if TYPE_CHECKING:
-    from monet._manifest import AgentCapability
     from monet.queue import TaskQueue
 
 
@@ -43,7 +44,7 @@ async def bootstrap(
     """
     # 1. Tracing
     if enable_tracing:
-        from monet._tracing import configure_tracing
+        from monet.core.tracing import configure_tracing
 
         configure_tracing()
 
@@ -56,7 +57,7 @@ async def bootstrap(
 
     # 3. Manifest declarations (supplemental to @agent auto-declarations)
     if agents:
-        from monet._manifest import default_manifest
+        from monet.core.manifest import default_manifest
 
         for cap in agents:
             default_manifest.declare(
@@ -68,7 +69,7 @@ async def bootstrap(
 
     # 4. Queue
     if queue is None:
-        from monet._queue_memory import InMemoryTaskQueue
+        from monet.core.queue_memory import InMemoryTaskQueue
 
         queue = InMemoryTaskQueue()
 
@@ -77,8 +78,8 @@ async def bootstrap(
     configure_queue(queue)
 
     # 5. Worker
-    from monet._queue_worker import run_worker
-    from monet._registry import default_registry
+    from monet.core.queue_worker import run_worker
+    from monet.core.registry import default_registry
 
     worker_task: asyncio.Task[Any] = asyncio.create_task(
         run_worker(queue, default_registry)
@@ -100,4 +101,4 @@ async def bootstrap(
     return worker_task
 
 
-__all__ = ["bootstrap"]
+__all__ = ["AgentCapability", "bootstrap"]

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from monet.orchestration import AGENT_FAILED_EVENT_STATUS
 
 if TYPE_CHECKING:
-    from monet._catalogue import CatalogueHandle
+    from monet import CatalogueHandle
 
 
 # ── Headers / sections ────────────────────────────────────────────────

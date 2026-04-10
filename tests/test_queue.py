@@ -6,9 +6,9 @@ import asyncio
 
 import pytest
 
-from monet._queue_memory import InMemoryTaskQueue
-from monet._queue_worker import run_worker
-from monet._registry import AgentRegistry
+from monet.core.queue_memory import InMemoryTaskQueue
+from monet.core.queue_worker import run_worker
+from monet.core.registry import AgentRegistry
 from monet.queue import TaskStatus
 from monet.types import AgentResult, AgentRunContext, SignalType
 
@@ -282,9 +282,7 @@ async def test_cancel_completed_task_is_noop() -> None:
     task_id = await q.enqueue("agent", "fast", _make_ctx())
     record = await q.claim("local")
     assert record is not None
-    await q.complete(
-        task_id, AgentResult(success=True, trace_id="t", run_id="r")
-    )
+    await q.complete(task_id, AgentResult(success=True, trace_id="t", run_id="r"))
     await q.cancel(task_id)
     result = await q.poll_result(task_id, timeout=1.0)
     assert result.success is True

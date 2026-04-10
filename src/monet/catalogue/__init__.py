@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from monet._catalogue import _set_catalogue_backend
+from monet.core.catalogue import _set_catalogue_backend
 
 from ._index import SQLiteIndex
 from ._memory import InMemoryCatalogueClient

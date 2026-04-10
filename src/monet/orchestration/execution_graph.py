@@ -22,8 +22,8 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 
 from monet import emit_progress
-from monet._manifest import default_manifest
-from monet._tracing import (
+from monet.core.manifest import default_manifest
+from monet.core.tracing import (
     EXECUTION_ROOT_SPAN_NAME,
     attached_trace,
     extract_carrier_from_config,
@@ -110,7 +110,7 @@ def _resolve_wave_result(wr: dict[str, Any]) -> dict[str, Any]:
 
     The orchestration layer never loads full artifact content. It passes
     only a short summary and catalogue pointers. Agents that need full
-    upstream content call ``resolve_context()`` from ``monet._context_resolver``.
+    upstream content call ``resolve_context()`` from ``monet.core.context_resolver``.
     """
     output = wr.get("output")
     if isinstance(output, dict):
