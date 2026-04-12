@@ -30,10 +30,20 @@ class FilesystemStorage:
     """
 
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
-        # Constructor is sync by API contract; callers that need a fully
-        # async startup should ``await asyncio.to_thread(FilesystemStorage, ...)``
-        # or rely on lazy creation in ``write()``.
+        # Enforce the "root is absolute" invariant at construction time so
+        # the async ``write()`` path can format ``file://`` URIs via
+        # ``Path.as_uri()`` without ever calling ``.absolute()`` /
+        # ``.resolve()`` itself. Both of those internally hit
+        # ``os.getcwd``, which ``blockbuster`` intercepts under
+        # ``langgraph dev`` and raises as a ``BlockingError`` — the same
+        # incident guarded by
+        # ``test_filesystem_storage_no_blocking_syscalls_in_write``.
+        #
+        # Calling ``.absolute()`` is safe *here* because the constructor
+        # is sync and runs at import time or during explicit startup,
+        # outside any ASGI event loop. Callers that want a fully async
+        # startup can still ``await asyncio.to_thread(FilesystemStorage, ...)``.
+        self.root = Path(root).absolute()
         self.root.mkdir(parents=True, exist_ok=True)
 
     async def write(
@@ -56,13 +66,15 @@ class FilesystemStorage:
         async with aiofiles.open(artifact_dir / "meta.json", "w") as f:
             await f.write(json.dumps(metadata, indent=2))
 
-        # ``self.root`` is guaranteed absolute by the caller (server_graphs.py
-        # resolves it at import time), so the joined path is already absolute
-        # and can be formatted by ``Path.as_uri()`` directly. Do NOT call
-        # ``.resolve()`` here — on Windows it invokes ``os.path.realpath`` ->
-        # ``os.getcwd`` which is a blocking syscall. Under ``langgraph dev``
-        # that is intercepted by blockbuster and raised as a BlockingError,
-        # killing every agent invocation with an empty AgentResult.
+        # ``self.root`` is absolute — enforced in ``__init__`` — so the
+        # joined path is already absolute and can be formatted by
+        # ``Path.as_uri()`` directly. Do NOT call ``.resolve()`` /
+        # ``.absolute()`` here — both invoke ``os.getcwd`` on Windows
+        # (and ``os.path.realpath`` in the resolve case), which
+        # ``blockbuster`` intercepts under ``langgraph dev`` and raises
+        # as a ``BlockingError``, killing every agent invocation with an
+        # empty AgentResult. See
+        # ``test_filesystem_storage_no_blocking_syscalls_in_write``.
         return ArtifactPointer(
             artifact_id=artifact_id,
             url=(artifact_dir / "content").as_uri(),

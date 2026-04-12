@@ -68,7 +68,7 @@ Returns the worker task (cancel on shutdown) or `None` if `lazy_worker=True`.
 
 ## Lazy worker mode
 
-For `langgraph dev` environments where the worker should not start until the first task:
+For `aegra dev` environments where the worker should not start until the first task:
 
 ```python
 from monet.server import configure_lazy_worker
@@ -129,10 +129,10 @@ See [Server API Reference](../api/server.md) for full request/response schemas.
 
 ### Development
 
-Use `monet dev` to start a LangGraph dev server with monet's default graphs:
+Use `monet dev` to start an Aegra dev server with monet's default graphs:
 
 ```bash
-monet dev --port 2024
+monet dev --port 2026
 ```
 
 ### Single server

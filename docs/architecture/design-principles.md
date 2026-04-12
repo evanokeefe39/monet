@@ -1,6 +1,6 @@
 # Design Principles
 
-monet's architecture draws from two sources: Mario Zechner's pi-agent design philosophy and Toyota's production system principles. This page summarises the key ideas that shaped the system. For the full treatment, see [SPEC.md](https://github.com/evanokeefe39/monet/blob/master/SPEC.md).
+monet's architecture draws from two sources: Mario Zechner's pi-agent design philosophy and Toyota's production system principles. This page summarises the key ideas that shaped the system.
 
 ## From pi-agent
 
@@ -47,3 +47,9 @@ These architectural decisions apply across the system:
 
 - Preserve opacity -- agents are blackboxes with interfaces
 - The orchestrator's only opinion is that agents are blackboxes
+
+## Agent quality ownership
+
+- The orchestrator cannot enforce agent output quality -- agents are potentially untrusted black boxes. It provides signal mechanisms for agents to communicate failure and quality concerns. QA agents are the semantic quality layer. If a user brings a research agent that hallucinates, monet's framework cannot fix this design flaw -- only surface it through QA reflection and human review gates
+- Good agent citizenship means: validate your own output, raise `EscalationRequired` on unrecoverable failure, emit appropriate signals for quality concerns. The decorator catches empty results structurally, but only the agent knows whether non-empty content is actually useful
+- Three lines of defense: agent self-validation (agent's job), QA reflection gates (orchestrator's job), human review at interrupts (human's job)

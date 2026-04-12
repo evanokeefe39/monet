@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from monet import agent, emit_progress, get_catalogue
+from monet import agent, emit_progress, get_catalogue, resolve_context
 
 from .._prompts import extract_text, make_env
 
@@ -34,8 +34,9 @@ async def publisher_publish(
 ) -> str:
     """Format upstream content as publication-ready markdown."""
     emit_progress({"status": "publishing", "agent": "publisher"})
+    context = await resolve_context(context or [])
 
-    prompt = _env.get_template("publish.j2").render(task=task, context=context or [])
+    prompt = _env.get_template("publish.j2").render(task=task, context=context)
     model = _get_model(_model_string())
     response = await model.ainvoke([{"role": "user", "content": prompt}])
     content = extract_text(response)

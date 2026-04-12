@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from monet import agent, emit_progress, get_catalogue
+from monet import agent, emit_progress, get_catalogue, resolve_context
 
 from .._prompts import extract_text, make_env
 
@@ -32,8 +32,9 @@ writer = agent("writer")
 async def writer_deep(task: str, context: list[dict[str, Any]] | None = None) -> str:
     """Generate polished long-form content from a brief and prior research."""
     emit_progress({"status": "writing", "agent": "writer"})
+    context = await resolve_context(context or [])
 
-    prompt = _env.get_template("deep.j2").render(task=task, context=context or [])
+    prompt = _env.get_template("deep.j2").render(task=task, context=context)
     model = _get_model(_model_string())
     response = await model.ainvoke([{"role": "user", "content": prompt}])
     content = extract_text(response)

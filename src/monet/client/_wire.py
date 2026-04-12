@@ -31,7 +31,7 @@ MONET_GRAPH_KEY = "monet_graph"
 # ── Client factory ──────────────────────────────────────────────────
 
 
-def make_client(url: str = "http://localhost:2024") -> LangGraphClient:
+def make_client(url: str = "http://localhost:2026") -> LangGraphClient:
     """Create a LangGraph SDK client pointed at *url*."""
     from langgraph_sdk import get_client
 

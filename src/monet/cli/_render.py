@@ -52,6 +52,8 @@ def render_event(event: RunEvent) -> None:
 
     elif isinstance(event, AgentProgress):
         click.secho(f"  [{event.agent_id}] {event.status}", dim=True)
+        if event.reasons:
+            click.secho(f"    {event.reasons}", fg="red", dim=True)
 
     elif isinstance(event, WaveComplete):
         click.secho(
@@ -71,6 +73,11 @@ def render_event(event: RunEvent) -> None:
 
     elif isinstance(event, RunComplete):
         click.secho("Done.", fg="green", bold=True)
+        for wr in event.wave_results:
+            for art in wr.get("artifacts") or []:
+                url = art.get("url", "")
+                if url:
+                    click.secho(f"  {url}", dim=True)
 
     elif isinstance(event, RunFailed):
         click.secho(f"Failed: {event.error}", fg="red", bold=True)

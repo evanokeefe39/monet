@@ -13,7 +13,7 @@ Returns an uncompiled StateGraph.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
@@ -37,6 +37,9 @@ from ._retry_budget import check_budget, increment_budget, reset_budget
 from ._signal_router import EXECUTION_ROUTER
 from ._state import ExecutionState, SignalsSummary, WaveItem, WaveResult
 from ._validate import _assert_registered
+
+if TYPE_CHECKING:
+    from monet.core.hooks import GraphHookRegistry
 
 MAX_WAVE_RETRIES = 3
 
@@ -454,14 +457,57 @@ def route_after_interrupt(state: ExecutionState) -> str:
     return "prepare_wave"
 
 
-def build_execution_graph() -> StateGraph[ExecutionState]:
-    """Build the execution graph. Returns uncompiled StateGraph."""
+def build_execution_graph(
+    hooks: GraphHookRegistry | None = None,
+) -> StateGraph[ExecutionState]:
+    """Build the execution graph. Returns uncompiled StateGraph.
+
+    Args:
+        hooks: Optional graph hook registry. Fires:
+            - ``before_wave`` in prepare_wave with wave context dict
+            - ``after_wave_server`` in collect_wave with signals summary
+            - ``between_waves`` in prepare_wave with pending context list
+              (only when prior wave results exist)
+    """
     _assert_registered("qa", "fast")
+
+    # Wrap nodes that need hook integration via closures.
+    _prepare_inner = prepare_wave
+    _collect_inner = collect_wave
+
+    async def _prepare_with_hooks(state: ExecutionState) -> dict[str, Any]:
+        update = await _prepare_inner(state)
+        if hooks and not update.get("abort_reason"):
+            # between_waves: fire when there are prior results to compress/enrich.
+            pending = update.get("pending_context", [])
+            if pending:
+                update["pending_context"] = await hooks.run("between_waves", pending)
+            # before_wave: fire with the wave context before dispatch.
+            wave_ctx = {
+                "phase_index": state["current_phase_index"],
+                "wave_index": state["current_wave_index"],
+                "pending_context": update.get("pending_context", []),
+            }
+            wave_ctx = await hooks.run("before_wave", wave_ctx)
+            update["pending_context"] = wave_ctx.get(
+                "pending_context", update.get("pending_context", [])
+            )
+        return update
+
+    async def _collect_with_hooks(state: ExecutionState) -> dict[str, Any]:
+        update = await _collect_inner(state)
+        if hooks:
+            update["signals"] = await hooks.run("after_wave_server", update["signals"])
+        return update
+
+    prepare_node = _prepare_with_hooks if hooks else prepare_wave
+    collect_node = _collect_with_hooks if hooks else collect_wave
+
     graph = StateGraph(ExecutionState)
     graph.add_node("load_plan", load_plan)
-    graph.add_node("prepare_wave", prepare_wave)
+    graph.add_node("prepare_wave", prepare_node)
     graph.add_node("agent_node", agent_node)  # type: ignore[arg-type]
-    graph.add_node("collect_wave", collect_wave)
+    graph.add_node("collect_wave", collect_node)
     graph.add_node("wave_reflection", wave_reflection)
     graph.add_node("advance", advance)
     graph.add_node("human_interrupt", human_interrupt)

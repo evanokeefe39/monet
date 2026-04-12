@@ -9,7 +9,7 @@ Returns an uncompiled StateGraph.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
@@ -25,6 +25,9 @@ from ._result_parser import ParseFailure, parse_json_output
 from ._retry_budget import check_budget, increment_budget
 from ._state import PlanningState
 from ._validate import _assert_registered
+
+if TYPE_CHECKING:
+    from monet.core.hooks import GraphHookRegistry
 
 MAX_REVISIONS = 3
 
@@ -109,11 +112,36 @@ def route_from_approval(state: PlanningState) -> str:
     return END
 
 
-def build_planning_graph() -> StateGraph[PlanningState]:
-    """Build the planning graph with HITL approval. Returns uncompiled StateGraph."""
+def build_planning_graph(
+    hooks: GraphHookRegistry | None = None,
+) -> StateGraph[PlanningState]:
+    """Build the planning graph with HITL approval. Returns uncompiled StateGraph.
+
+    Args:
+        hooks: Optional graph hook registry. Fires ``before_planning``
+            with the planning state before the planner runs, and
+            ``after_planning`` with the work brief after planning.
+    """
     _assert_registered("planner", "plan")
+
+    _planner_inner = planner_node
+
+    async def _planner_with_hooks(
+        state: PlanningState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        if hooks:
+            state = await hooks.run("before_planning", state)
+        update = await _planner_inner(state, config)
+        if hooks and update.get("work_brief"):
+            update["work_brief"] = await hooks.run(
+                "after_planning", update["work_brief"]
+            )
+        return update
+
+    node = _planner_with_hooks if hooks else planner_node
+
     graph = StateGraph(PlanningState)
-    graph.add_node("planner", planner_node)
+    graph.add_node("planner", node)
     graph.add_node("human_approval", human_approval_node)
     graph.set_entry_point("planner")
     graph.add_conditional_edges(

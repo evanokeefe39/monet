@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import json
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -13,6 +15,9 @@ from monet.core.tracing import (
     configure_tracing,
     get_tracer,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -147,3 +152,91 @@ def test_tracer_creates_span() -> None:
     ) as span:
         span.set_attribute("agent.success", True)
     # No assertion needed — just verify no exceptions
+
+
+def test_file_exporter_writes_jsonl(
+    clean_otel_env: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spans opened while MONET_TRACE_FILE is set land as JSONL on disk."""
+    from monet.core import tracing
+
+    path = tmp_path / "traces.jsonl"
+    monkeypatch.setenv("MONET_TRACE_FILE", str(path))
+    # The module-level flag persists across tests — reset it so this test
+    # actually attaches a fresh processor against its own tmp_path.
+    monkeypatch.setattr(tracing, "_file_exporter_attached", False)
+
+    tracing.configure_tracing()
+
+    tracer = tracing.get_tracer("test.file_exporter")
+    with tracer.start_as_current_span("test.span") as span:
+        span.set_attribute("monet.test", "value")
+
+    assert tracing._provider is not None
+    tracing._provider.force_flush()
+
+    content = path.read_text(encoding="utf-8").strip()
+    assert content, "trace file should not be empty"
+    records = [json.loads(line) for line in content.splitlines()]
+    assert any(rec.get("name") == "test.span" for rec in records)
+
+
+def test_file_exporter_idempotent(
+    clean_otel_env: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated configure_tracing() calls do not duplicate the exporter."""
+    from monet.core import tracing
+
+    path = tmp_path / "idempotent.jsonl"
+    monkeypatch.setenv("MONET_TRACE_FILE", str(path))
+    monkeypatch.setattr(tracing, "_file_exporter_attached", False)
+
+    tracing.configure_tracing()
+    tracing.configure_tracing()
+    tracing.configure_tracing()
+
+    tracer = tracing.get_tracer("test.idempotent")
+    with tracer.start_as_current_span("once"):
+        pass
+
+    assert tracing._provider is not None
+    tracing._provider.force_flush()
+
+    records = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").strip().splitlines()
+    ]
+    # Span name "once" should appear exactly once — no duplicates from
+    # multiple stacked processors.
+    assert sum(1 for rec in records if rec.get("name") == "once") == 1
+
+
+def test_file_exporter_creates_parent_dir(
+    clean_otel_env: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nonexistent parent directories are created lazily on exporter init."""
+    from monet.core import tracing
+
+    path = tmp_path / "nested" / "deeper" / "traces.jsonl"
+    assert not path.parent.exists()
+    monkeypatch.setenv("MONET_TRACE_FILE", str(path))
+    monkeypatch.setattr(tracing, "_file_exporter_attached", False)
+
+    tracing.configure_tracing()
+
+    tracer = tracing.get_tracer("test.nested")
+    with tracer.start_as_current_span("nested.span"):
+        pass
+
+    assert tracing._provider is not None
+    tracing._provider.force_flush()
+
+    assert path.parent.is_dir()
+    assert path.exists()
+    assert path.read_text(encoding="utf-8").strip()

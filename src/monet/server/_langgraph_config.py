@@ -1,4 +1,4 @@
-"""LangGraph configuration generation and merging for ``monet dev``."""
+"""Aegra / LangGraph configuration generation and merging for ``monet dev``."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ if TYPE_CHECKING:
 
 
 def default_config() -> dict[str, Any]:
-    """Return the built-in LangGraph config for monet's default graphs.
+    """Return the built-in Aegra config for monet's default graphs.
 
     This config points to the three standard graphs (entry, planning,
-    execution) exported by ``monet.server.default_graphs``.
+    execution) exported by ``monet.server.default_graphs``, and mounts
+    monet's worker/task routes via the ``http.app`` custom-routes field.
     """
     return {
         "dependencies": ["."],
@@ -22,22 +23,27 @@ def default_config() -> dict[str, Any]:
             "planning": "monet.server.default_graphs:build_planning_graph",
             "execution": "monet.server.default_graphs:build_execution_graph",
         },
+        "http": {
+            "app": "monet.server._aegra_routes:app",
+        },
         "env": ".env",
     }
 
 
 def merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Merge a user-provided LangGraph config on top of the base config.
+    """Merge a user-provided config on top of the base config.
 
     Merge rules:
     - ``graphs``: user entries override by key, base entries preserved
     - ``dependencies``: union of both lists (deduplicated, order preserved)
+    - ``http``: user value wins if present (replaces entire section)
     - ``env``: user value wins if present
     - All other keys: user value wins if present
 
     Args:
         base: The default config from :func:`default_config`.
-        override: User-provided config loaded from ``langgraph.json``.
+        override: User-provided config loaded from ``aegra.json``
+            or ``langgraph.json``.
 
     Returns:
         Merged configuration dict.
@@ -64,7 +70,7 @@ def merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
     if "env" in override:
         merged["env"] = override["env"]
 
-    # Pass through any other user keys (e.g. "python_version").
+    # Pass through any other user keys (e.g. "http", "auth").
     for key, value in override.items():
         if key not in ("graphs", "dependencies", "env"):
             merged[key] = value
@@ -73,7 +79,7 @@ def merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
 
 
 def write_config(config: dict[str, Any], target_dir: Path) -> Path:
-    """Write a LangGraph config to ``.monet/langgraph.json``.
+    """Write an Aegra config to ``.monet/aegra.json``.
 
     Creates the ``.monet/`` directory if it does not exist.
 
@@ -86,6 +92,6 @@ def write_config(config: dict[str, Any], target_dir: Path) -> Path:
     """
     monet_dir = target_dir / ".monet"
     monet_dir.mkdir(exist_ok=True)
-    config_path = monet_dir / "langgraph.json"
+    config_path = monet_dir / "aegra.json"
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     return config_path

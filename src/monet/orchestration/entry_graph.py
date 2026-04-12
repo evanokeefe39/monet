@@ -7,7 +7,7 @@ its own checkpointer per langgraph.json.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
@@ -20,6 +20,9 @@ from ._invoke import invoke_agent
 from ._result_parser import ParseFailure, parse_json_output
 from ._state import EntryState
 from ._validate import _assert_registered
+
+if TYPE_CHECKING:
+    from monet.core.hooks import GraphHookRegistry
 
 
 async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, Any]:
@@ -45,11 +48,31 @@ async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, An
     return {"triage": triage}
 
 
-def build_entry_graph() -> StateGraph[EntryState]:
-    """Build the triage graph. Returns uncompiled StateGraph."""
+def build_entry_graph(
+    hooks: GraphHookRegistry | None = None,
+) -> StateGraph[EntryState]:
+    """Build the triage graph. Returns uncompiled StateGraph.
+
+    Args:
+        hooks: Optional graph hook registry. Fires ``after_triage`` with
+            the triage dict after classification.
+    """
     _assert_registered("planner", "fast")
+
+    _triage_inner = triage_node
+
+    async def _triage_with_hooks(
+        state: EntryState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        update = await _triage_inner(state, config)
+        if hooks:
+            update["triage"] = await hooks.run("after_triage", update["triage"])
+        return update
+
+    node = _triage_with_hooks if hooks else triage_node
+
     graph = StateGraph(EntryState)
-    graph.add_node("triage", triage_node)
+    graph.add_node("triage", node)
     graph.set_entry_point("triage")
     graph.add_edge("triage", END)
     return graph

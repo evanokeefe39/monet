@@ -22,9 +22,9 @@ from monet.cli._setup import check_env
 @click.argument("topic")
 @click.option(
     "--url",
-    default="http://localhost:2024",
+    default="http://localhost:2026",
     envvar="MONET_SERVER_URL",
-    help="LangGraph server URL.",
+    help="Aegra server URL.",
 )
 @click.option(
     "--auto-approve",
@@ -35,9 +35,9 @@ from monet.cli._setup import check_env
 def run(topic: str, url: str, auto_approve: bool) -> None:
     """Run a topic through the monet orchestration pipeline.
 
-    Connects to a running monet LangGraph server, streams events to the
-    terminal, and prompts for human decisions at plan approval and
-    execution interrupt points.
+    Connects to a running Aegra server, streams events to the terminal,
+    and prompts for human decisions at plan approval and execution
+    interrupt points.
 
     Use --auto-approve to skip plan approval prompts.
     """

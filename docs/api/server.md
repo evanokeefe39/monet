@@ -65,7 +65,7 @@ from monet.server import configure_lazy_worker
 def configure_lazy_worker(queue: TaskQueue) -> None
 ```
 
-Patches `queue.enqueue()` to start the worker on first call. For `langgraph dev` environments.
+Patches `queue.enqueue()` to start the worker on first call. For `aegra dev` environments.
 
 ---
 

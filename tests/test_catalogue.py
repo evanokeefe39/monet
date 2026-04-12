@@ -12,6 +12,8 @@ from monet.catalogue._storage import FilesystemStorage
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 
 # --- InMemoryCatalogueClient ---
 
@@ -287,3 +289,62 @@ async def test_service_write_propagates_unexpected_exceptions(tmp_path: Path) ->
                 confidence=0.9,
                 completeness="complete",
             )
+
+
+# --- Regression: relative roots must not leak into file:// URIs ---
+
+
+def test_filesystem_storage_relative_root_becomes_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FilesystemStorage normalises a relative root to absolute at construction.
+
+    Regression: ``catalogue_from_env()`` constructs the storage with
+    ``Path(".catalogue")`` by default. ``Path.as_uri()`` refuses to format
+    a relative path as ``file://``, so every ``write()`` call used to raise
+    ``ValueError: relative path can't be expressed as a file URI`` after
+    content was already on disk. Enforcing absoluteness in ``__init__``
+    closes the contract gap.
+    """
+    monkeypatch.chdir(tmp_path)
+    storage = FilesystemStorage("relative/root")
+    assert storage.root.is_absolute()
+    # And the resolved root lives under the new cwd, as expected.
+    assert storage.root == (tmp_path / "relative" / "root").absolute()
+
+
+async def test_catalogue_from_env_default_root_produces_absolute_uri(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end regression: the default (relative) catalogue root must
+    round-trip through write() and produce a valid file:// URI. Before the
+    fix this raised ``ValueError: relative path can't be expressed as a
+    file URI`` inside every agent invocation that wrote an artifact.
+    """
+    from urllib.parse import unquote, urlparse
+
+    from monet.catalogue import catalogue_from_env
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MONET_CATALOGUE_DIR", raising=False)
+
+    service = catalogue_from_env()
+    ptr = await service.write(
+        b"hello",
+        content_type="text/plain",
+        summary="regression",
+        confidence=1.0,
+        completeness="complete",
+    )
+
+    assert ptr["url"].startswith("file://")
+    # The URL must round-trip back to an existing file on disk.
+    parsed = urlparse(ptr["url"])
+    # On Windows the path component looks like "/C:/Users/..."; strip the
+    # leading slash and URL-decode before handing to pathlib.
+    raw_path = unquote(parsed.path)
+    if raw_path.startswith("/") and len(raw_path) > 2 and raw_path[2] == ":":
+        raw_path = raw_path[1:]
+    from pathlib import Path as _Path
+
+    assert _Path(raw_path).exists(), f"round-tripped path missing: {raw_path}"

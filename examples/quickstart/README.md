@@ -33,8 +33,9 @@ monet run "AI trends in healthcare" --auto-approve
 
 ## Custom graphs
 
-Drop a `langgraph.json` in this directory to add or override graphs.
-`monet dev` merges your graphs with monet's defaults (entry, planning, execution).
+Drop an `aegra.json` (or `langgraph.json`) in this directory to add or
+override graphs. `monet dev` merges your graphs with monet's defaults
+(entry, planning, execution).
 
 ## Programmatic usage
 
