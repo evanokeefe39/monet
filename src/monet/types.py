@@ -11,6 +11,7 @@ from typing import Any, TypedDict
 from .signals import SignalType
 
 __all__ = [
+    "AgentMeta",
     "AgentResult",
     "AgentRunContext",
     "ArtifactPointer",
@@ -33,6 +34,16 @@ class Signal(TypedDict):
     type: str
     reason: str
     metadata: dict[str, Any] | None
+
+
+# --- Agent metadata (passed to hooks) ---
+
+
+class AgentMeta(TypedDict):
+    """Metadata about the agent being invoked, passed to hook handlers."""
+
+    agent_id: str
+    command: str
 
 
 # --- Artifact pointer ---

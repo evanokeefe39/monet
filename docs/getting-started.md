@@ -120,7 +120,7 @@ monet includes a CLI and client SDK for running topics through the full orchestr
 ### Development server
 
 ```bash
-monet dev --port 2024
+monet dev --port 2026
 ```
 
 ### Submit work via CLI

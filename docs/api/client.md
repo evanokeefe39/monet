@@ -6,7 +6,7 @@
 from monet.client import MonetClient
 
 class MonetClient:
-    def __init__(self, url: str = "http://localhost:2024") -> None
+    def __init__(self, url: str = "http://localhost:2026") -> None
 ```
 
 High-level typed async client for interacting with a monet server. Manages the three-graph topology (entry, planning, execution) and translates LangGraph state into typed events.

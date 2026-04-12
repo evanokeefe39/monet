@@ -29,6 +29,7 @@ from monet.types import (
 
 from .catalogue import _artifact_collector, _artifact_hashes, get_catalogue
 from .context import _agent_context
+from .hooks import run_after_agent_hooks, run_before_agent_hooks
 from .manifest import default_manifest
 from .registry import default_registry
 from .stubs import _signal_collector
@@ -289,6 +290,15 @@ def agent(
             signal_list: list[Signal] = []
             written_hashes: set[str] = set()
             tracer = get_tracer("monet.agent")
+
+            # before_agent hooks run before context vars are set so hooks
+            # see the raw incoming context, not the decorator's internal state.
+            # Hook failure is fatal: agent never runs, result is failed.
+            try:
+                ctx = await run_before_agent_hooks(ctx, agent_id, command)
+            except Exception as hook_exc:
+                return _handle_exception(hook_exc, ctx, artifacts, signal_list)
+
             ctx_token = _agent_context.set(ctx)
             sig_token = _signal_collector.set(signal_list)
             art_token = _artifact_collector.set(artifacts)
@@ -317,6 +327,10 @@ def agent(
                             allow_empty=allow_empty,
                         )
                         span.set_attribute("agent.success", agent_result.success)
+                        # after_agent hooks run before the result leaves the worker.
+                        agent_result = await run_after_agent_hooks(
+                            agent_result, agent_id, command
+                        )
                         return agent_result
                     except Exception as exc:
                         agent_result = _handle_exception(
@@ -324,6 +338,10 @@ def agent(
                         )
                         span.set_attribute("agent.success", False)
                         span.record_exception(exc)
+                        # after_agent hooks also run on failed results.
+                        agent_result = await run_after_agent_hooks(
+                            agent_result, agent_id, command
+                        )
                         return agent_result
             finally:
                 _artifact_hashes.reset(hash_token)

@@ -8,7 +8,7 @@ Usage::
 
     from monet.client import MonetClient
 
-    client = MonetClient("http://localhost:2024")
+    client = MonetClient("http://localhost:2026")
     async for event in client.run("AI trends in healthcare", auto_approve=True):
         print(event)
 """
@@ -78,6 +78,25 @@ __all__ = [
 ]
 
 
+def _build_agent_progress(run_id: str, data: dict[str, Any]) -> AgentProgress | None:
+    """Convert a custom-stream wire dict into an ``AgentProgress`` event.
+
+    Extracted as a pure helper so the field-extraction contract is directly
+    unit-testable without a live langgraph client. Returns ``None`` when the
+    dict does not carry an ``agent`` field — the caller should skip it
+    rather than emit a malformed event.
+    """
+    agent = data.get("agent", "")
+    if not agent:
+        return None
+    return AgentProgress(
+        run_id=run_id,
+        agent_id=agent,
+        status=data.get("status", ""),
+        reasons=data.get("reasons", ""),
+    )
+
+
 class MonetClient:
     """Client for a monet LangGraph server.
 
@@ -88,7 +107,7 @@ class MonetClient:
     - **Results** — inspect completed runs and their artifacts
     """
 
-    def __init__(self, url: str = "http://localhost:2024") -> None:
+    def __init__(self, url: str = "http://localhost:2026") -> None:
         self._client: LangGraphClient = make_client(url)
         self._store = _RunStore()
 
@@ -502,10 +521,9 @@ class MonetClient:
                 yield RunFailed(run_id=run_id, error=str(data))
                 return
             if mode == "custom" and isinstance(data, dict):
-                agent = data.get("agent", "")
-                status = data.get("status", "")
-                if agent:
-                    yield AgentProgress(run_id=run_id, agent_id=agent, status=status)
+                progress = _build_agent_progress(run_id, data)
+                if progress is not None:
+                    yield progress
 
         # Post-stream: inspect final state
         values, nxt = await get_state_values(self._client, thread_id)

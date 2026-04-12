@@ -23,7 +23,7 @@ def configure_lazy_worker(queue: TaskQueue) -> None:
     """Patch *queue*.enqueue to start a background worker on first call.
 
     Use when the event loop is not available at configuration time —
-    e.g., ``langgraph dev`` creates its loop at graph invocation time,
+    e.g., ``aegra dev`` creates its loop at graph invocation time,
     not at import time.  The worker is started via
     ``asyncio.create_task`` inside the first ``enqueue`` call, when the
     loop is guaranteed to be running.
@@ -77,7 +77,7 @@ async def bootstrap(
             Agents registered via ``@agent`` are auto-declared.
         queue: Task queue instance. Defaults to in-memory queue.
         lazy_worker: If True, defer worker startup to first enqueue.
-            Use for ``langgraph dev`` where the event loop is not
+            Use for ``aegra dev`` where the event loop is not
             available at import time.
 
     Returns:

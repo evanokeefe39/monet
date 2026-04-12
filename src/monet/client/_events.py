@@ -53,6 +53,7 @@ class AgentProgress:
     run_id: str
     agent_id: str
     status: str
+    reasons: str = ""
 
 
 @dataclass(frozen=True)

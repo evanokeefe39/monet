@@ -18,10 +18,10 @@ _env = make_env(Path(__file__).parent)
 
 
 @functools.cache
-def _get_model(model_string: str) -> Any:
+def _get_model(model_string: str, *, temperature: float = 0.0) -> Any:
     from langchain.chat_models import init_chat_model  # type: ignore[import-not-found]
 
-    return init_chat_model(model_string)
+    return init_chat_model(model_string, temperature=temperature)
 
 
 def _model_string() -> str:

@@ -6,9 +6,9 @@ Deploy monet to Railway with managed infrastructure.
 
 | Component | Provider | Notes |
 |-----------|----------|-------|
-| monet server | Railway | Configured by `railway.toml` |
-| Postgres | Railway plugin / Neon | Checkpointing and state |
-| Redis | Railway plugin / Upstash | Task queue (optional for single-worker) |
+| Aegra (monet) | Railway | Configured by `railway.toml` — graph execution + worker routes |
+| Postgres | Railway plugin / Neon | Checkpointing, thread state, deployments |
+| Redis | Railway plugin / Upstash | Task queue (optional — only for distributed workers) |
 | Tracing | Langfuse Cloud | Optional observability |
 
 ## Deploy
@@ -20,11 +20,22 @@ Deploy monet to Railway with managed infrastructure.
 5. Set environment variables from `.env.example`
 6. Deploy
 
-Railway reads `railway.toml` and starts `monet server` automatically.
+Railway reads `railway.toml` and starts `aegra serve` automatically.
+Aegra serves both the graph execution API and monet's worker/task
+management routes on a single port.
+
+## Docker Compose
+
+For self-hosted deployment, use the included `docker-compose.yml`:
+
+```bash
+cd examples/deployed
+cp .env.example .env     # fill in API keys
+docker compose up
+```
 
 ## Bring your own infrastructure
 
-The `.env.example` documents each service with provider alternatives.
 Swap any managed service by changing the connection string:
 
 - **Postgres**: Railway plugin, Neon, Supabase, RDS, any Postgres 14+

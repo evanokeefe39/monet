@@ -8,10 +8,13 @@ def test_monet_root_exports() -> None:
 
     expected = {
         "agent",
+        "AgentMeta",
         "AgentResult",
         "AgentRunContext",
         "ArtifactPointer",
         "CatalogueHandle",
+        "GraphHookRegistry",
+        "HookRegistry",
         "Signal",
         "SignalType",
         "AUDIT",
@@ -21,6 +24,7 @@ def test_monet_root_exports() -> None:
         "ROUTING",
         "AgentStream",
         "log_handler",
+        "on_hook",
         "webhook_handler",
         "write_artifact",
         "get_run_context",

@@ -51,6 +51,7 @@ agents = [
 ]
 examples = [
     "monet[agents]",
+    "aegra-cli>=0.9",
     "langchain-google-genai>=2.0",
     "langchain-groq>=0.2",
     "langchain-community>=0.3",
@@ -80,7 +81,7 @@ dev = [
     "mypy>=1.14",
     "mkdocs-material>=9.7.6",
     "pre-commit>=4.5.1",
-    "langgraph-cli>=0.1",
+    "aegra-cli>=0.9",
 ]
 
 [tool.pytest.ini_options]
@@ -126,6 +127,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "upstash_redis.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "aegra.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

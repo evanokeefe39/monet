@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from monet import Signal, SignalType, agent, emit_progress, emit_signal
+from monet import Signal, SignalType, agent, emit_progress, emit_signal, resolve_context
 from monet.exceptions import SemanticError
 
 from .._prompts import extract_text, make_env
@@ -34,13 +34,14 @@ qa = agent("qa")
 async def qa_fast(task: str, context: list[dict[str, Any]] | None = None) -> str:
     """Evaluate content quality. May emit LOW_CONFIDENCE / REVISION_SUGGESTED.
 
-    The artifact(s) being evaluated are passed via ``context`` — typically the
-    full text of upstream wave outputs, with catalogue artifacts already
-    resolved by the orchestrator.
+    The artifact(s) being evaluated are passed via ``context`` — upstream
+    wave outputs carry short summaries and catalogue pointers. We resolve
+    them here to get the full content before grading.
     """
     emit_progress({"status": "evaluating", "agent": "qa"})
+    context = await resolve_context(context or [])
 
-    prompt = _env.get_template("fast.j2").render(task=task, context=context or [])
+    prompt = _env.get_template("fast.j2").render(task=task, context=context)
     model = _get_model(_model_string())
     response = await model.ainvoke([{"role": "user", "content": prompt}])
     raw = extract_text(response).strip()

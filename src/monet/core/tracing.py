@@ -9,22 +9,86 @@ from __future__ import annotations
 import atexit
 import base64
 import os
+import threading
 import warnings
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from opentelemetry import context as _ot_context
 from opentelemetry import propagate, trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Sequence
 
     from langchain_core.runnables import RunnableConfig
 
 _provider: TracerProvider | None = None
 _exporter_attached: bool = False
+_file_exporter_attached: bool = False
+
+
+class _JsonLinesFileExporter(SpanExporter):
+    """Writes each finished span to a JSONL file. Debug-only.
+
+    Intended for local dev loops where OTLP isn't up. Each finished span
+    becomes one line of JSON (via :meth:`ReadableSpan.to_json`), appended
+    to the configured path under an internal lock.
+
+    Why the lock: :class:`SimpleSpanProcessor.on_end` calls ``export()`` on
+    whatever thread ended the span with no internal serialisation, and
+    plain ``file.write()`` is not atomic for lines longer than the OS pipe
+    buffer. Two concurrent worker spans ending simultaneously would
+    interleave and produce JSONL lines that fail ``json.loads``. The lock
+    serialises the writes.
+
+    Characteristics:
+
+    - Blocks the thread calling ``span.end()`` for the duration of the
+      write. Do not use behind production hot paths.
+    - No rotation. File grows unbounded. Intended lifetime is a debugging
+      session.
+    - File handle is closed on :meth:`shutdown`, which the
+      :class:`TracerProvider`'s atexit hook calls. On abrupt process exit
+      the OS reclaims the descriptor.
+    """
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        # buffering=1 selects line buffering in text mode so ``tail -f``
+        # works even without an explicit force_flush call. The explicit
+        # flush() inside the lock is cross-platform belt-and-suspenders.
+        self._file = path.open("a", encoding="utf-8", buffering=1)
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        with self._lock:
+            if self._file.closed:
+                return SpanExportResult.FAILURE
+            for span in spans:
+                # indent=None → single-line JSON. Requires OTel SDK ≥ 1.20,
+                # matching the runtime dep pin in pyproject.toml.
+                self._file.write(span.to_json(indent=None) + "\n")
+            self._file.flush()
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if not self._file.closed:
+                self._file.close()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        with self._lock:
+            if not self._file.closed:
+                self._file.flush()
+        return True
 
 
 # ── Cross-boundary wire constants ─────────────────────────────────────
@@ -103,9 +167,12 @@ def configure_tracing(
 ) -> None:
     """Configure OTel tracing. Idempotent — safe to call multiple times.
 
-    Reads OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_SERVICE_NAME from environment.
+    Reads ``OTEL_EXPORTER_OTLP_ENDPOINT`` and ``OTEL_SERVICE_NAME`` from the
+    environment. When ``MONET_TRACE_FILE`` is set, additionally attaches a
+    JSONL file exporter for local debugging. The file exporter runs in
+    addition to any OTLP exporter, not as a replacement.
     """
-    global _provider, _exporter_attached
+    global _provider, _exporter_attached, _file_exporter_attached
 
     _apply_langfuse_shortcut()
     _apply_langsmith_shortcut()
@@ -139,6 +206,13 @@ def configure_tracing(
                 "Traces will not be exported.",
                 stacklevel=2,
             )
+
+    file_path = os.environ.get("MONET_TRACE_FILE")
+    if file_path and not _file_exporter_attached:
+        _provider.add_span_processor(
+            SimpleSpanProcessor(_JsonLinesFileExporter(Path(file_path)))
+        )
+        _file_exporter_attached = True
 
 
 def get_tracer(name: str = "monet") -> trace.Tracer:

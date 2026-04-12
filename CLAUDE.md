@@ -82,22 +82,17 @@ GitHub Actions runs ruff, mypy, and pytest on push/PR to main. All checks must p
 
 ## Architecture
 
-System design is outlined in SPEC.md and TARGET_ARCHITECTURE.md. Key design principles: agents are opaque capability units with a uniform interface, the orchestrator owns routing and HITL policy, OpenTelemetry observability is non-negotiable, and context engineering (controlling exactly what the model sees) is prioritized over prompt gymnastics.
+Key design principles: agents are opaque capability units with a uniform interface, the orchestrator owns routing and HITL policy, OpenTelemetry observability is non-negotiable, and context engineering is prioritized over prompt gymnastics. See `docs/architecture/design-principles.md`.
 
-Orchestration/execution separation:
-- `invoke_agent()` dispatches via TaskQueue (enqueue + poll_result). Transport is a worker concern.
-- Workers claim tasks by pool (Prefect model). Three pool types planned: local (sidecar), pull (remote), push (cloud forwarding).
-- `AgentManifest` (orchestration-side) tracks what agents are available and their pool assignment. `AgentRegistry` (worker-side) maps to executable handlers.
-- `_assert_registered` checks the manifest at graph build time. `invoke_agent` checks manifest before enqueue, returns `CAPABILITY_UNAVAILABLE` signal instantly if missing.
-- Pointer-only state: `_resolve_wave_result` returns summaries + catalogue pointers. Full content stays in catalogue. Agents call `resolve_context()` when they need upstream content.
+- Three-graph supervisor topology (entry, planning, execution): `docs/architecture/graph-topology.md`
+- Agent SDK (`@agent` decorator, `AgentStream`, signals, exceptions): `docs/guides/agents.md`, `docs/api/core.md`
+- Orchestration (invoke_agent, task queue, pointer-only state, signal routing): `docs/guides/orchestration.md`, `docs/api/orchestration.md`
+- Distribution (pools, workers, monet.toml, CLI): `docs/guides/distribution.md`, `docs/api/server.md`
+- Catalogue (artifact storage, metadata): `docs/guides/catalogue.md`, `docs/api/catalogue.md`
+- Observability (OTel, Langfuse, trace continuity): `docs/guides/observability.md`
+- Server: Aegra (Apache 2.0 LangGraph Platform replacement) for dev and production. `monet dev` shells to `aegra dev`, production uses `aegra serve`. Worker/task routes mounted as Aegra custom HTTP routes via `_aegra_routes.py`.
 
-Decorator/stream/orchestrator division of labour:
-- The `@agent` decorator is registration + context injection only. It populates both the handler registry and the capability manifest (with pool assignment).
-- `AgentStream` is the translation boundary between an external agent's output and the SDK primitives.
-- The orchestrator reads `AgentResult.output` (inline string/dict/None) and `AgentResult.artifacts` (catalogue pointers) as distinct fields.
-- Large string returns from `@agent` functions are auto-offloaded to the catalogue when content exceeds `DEFAULT_CONTENT_LIMIT`. The pointer lands in `artifacts`; `output` becomes a 200-char inline summary.
+## Unimplemented
 
-Three-graph supervisor topology:
-- Entry graph: triage via planner/fast → simple or complex routing
-- Planning graph: planner/plan → human approval gate → work brief output
-- Execution graph: wave-based parallel execution via Send, QA reflection gates, retry budget, signal routing (BLOCKING → HITL interrupt, RECOVERABLE → retry)
+- Push pool dispatch: `_config.py` declares a `push` pool type (for Cloud Run, Vercel Functions, Lambda) with URL + auth config, but no dispatch implementation exists. `invoke_agent` always enqueues to the task queue for pull-based workers. Implementing push requires a dispatcher in the orchestration layer that POSTs tasks to the pool's configured URL instead of enqueuing.
+- End-to-end integration tests: the test suite covers unit and component tests but has no E2E coverage across deployment topologies. Needs tests for: (1) `monet dev` → `monet run` full pipeline with HITL approve/revise/reject, (2) `aegra serve` with external Postgres, (3) multiple concurrent `monet worker` instances claiming from the same server, (4) `MONET_QUEUE_BACKEND=redis` and `sqlite` queue backends under load, (5) custom graph registration via `aegra.json` with non-monet graphs, (6) worker reconnection after server restart, (7) the `monet run --auto-approve` happy path end-to-end. Current tests mock the queue and graph layers — no test starts a real server and drives a real run through it.

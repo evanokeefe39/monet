@@ -6,7 +6,7 @@ monet supports distributed execution where the orchestration server and agent wo
 
 In distribution mode, three components collaborate:
 
-1. **Orchestration server** — hosts LangGraph graphs, routes tasks to pools, manages worker lifecycle
+1. **Orchestration server** — hosts graphs via Aegra, routes tasks to pools, manages worker lifecycle
 2. **Workers** — poll for tasks by pool, execute agent handlers, report results
 3. **Client** — submits work, streams events, handles HITL decisions
 
@@ -114,19 +114,19 @@ Discovers agents via AST scanning and posts deployment records to the server, gr
 
 ### monet dev
 
-Start a LangGraph dev server with monet's default graphs.
+Start an Aegra dev server with monet's default graphs and worker/task routes.
 
 ```bash
 monet dev
-monet dev --port 2024 --config ./langgraph.json
+monet dev --port 2026 --config ./aegra.json
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `--port` | `2024` | Port for the LangGraph dev server |
-| `--config` | — | Path to langgraph.json (merged with monet defaults) |
+| `--port` | `2026` | Port for the Aegra dev server |
+| `--config` | — | Path to aegra.json (merged with monet defaults) |
 
-If a `langgraph.json` exists in the current directory, its graphs are merged on top of monet's defaults (entry, planning, execution).
+If an `aegra.json` (or `langgraph.json`) exists in the current directory, its graphs are merged on top of monet's defaults (entry, planning, execution).
 
 ### monet run
 
@@ -139,7 +139,7 @@ monet run "Write a blog post about AI safety" --auto-approve
 
 | Option | Default | Description |
 |---|---|---|
-| `--url` | `http://localhost:2024` | LangGraph server URL (env: `MONET_SERVER_URL`) |
+| `--url` | `http://localhost:2026` | Aegra server URL (env: `MONET_SERVER_URL`) |
 | `--auto-approve` | off | Auto-approve plans without prompting |
 
 Connects to a running server, streams events to the terminal, and prompts for HITL decisions at plan approval and execution interrupt points.

@@ -7,10 +7,10 @@ The `MonetClient` provides a typed async interface for interacting with a runnin
 ```python
 from monet.client import MonetClient
 
-client = MonetClient(url="http://localhost:2024")
+client = MonetClient(url="http://localhost:2026")
 ```
 
-The default URL points to a LangGraph dev server started with `monet dev`. For a production orchestration server, use its URL instead.
+The default URL points to an Aegra server started with `monet dev`. For a production deployment, use its URL instead.
 
 ## Starting a run
 

@@ -92,6 +92,49 @@ async def researcher_deep(task: str) -> None:
     )
 ```
 
+## Agent quality responsibility
+
+The orchestrator treats agents as potentially untrusted black boxes of unknown quality. It provides mechanisms for agents to communicate failure and quality concerns, but it cannot enforce output quality. If your research agent hallucinates, monet cannot fix that design flaw. If your writer agent produces thin content, the framework will not thicken it.
+
+Three lines of defense exist, and each agent author should understand them:
+
+1. **Agent self-validation (your job).** Validate your own output before returning it. If a required tool fails, raise `EscalationRequired` to halt execution immediately. If output quality is uncertain, emit a `LOW_CONFIDENCE` signal. Don't return garbage and hope the next layer catches it.
+2. **QA reflection gates.** The execution graph runs QA agents after each wave. QA evaluates semantic quality: is the content well-cited, does it address the brief, is it complete? QA catches content defects that structural checks cannot.
+3. **Human review gates.** BLOCKING signals pause execution for human decision. The human can abort a run that no automated check caught.
+
+An agent that catches all exceptions and returns empty or garbage content will pass the decorator's structural checks (non-empty string). It will eventually be caught by QA or human review, but it wastes time and compute. Good citizenship means raising the right signal at the right time.
+
+### Resolving upstream content
+
+Downstream agents receive upstream output as short summaries plus catalogue pointers. To access the full content, call `resolve_context()`:
+
+```python
+from monet import agent, resolve_context
+
+writer = agent("writer")
+
+@writer(command="deep")
+async def writer_deep(task: str, context: list) -> str:
+    # Without this call, context entries contain only 200-char summaries.
+    context = await resolve_context(context)
+    # Now each entry has a 'content' field with the full upstream text.
+    return await synthesise(task, context)
+```
+
+Every agent that consumes upstream output (writer, QA, publisher) should call `resolve_context()` before using the context. See [Pointer-only state](orchestration.md#pointer-only-state) for the design rationale.
+
+### Signal strategy
+
+| Situation | What to do | Signal group | Result |
+|---|---|---|---|
+| Required tool is broken | `raise EscalationRequired(reason)` | BLOCKING | Immediate interrupt |
+| Content needs human review | `raise NeedsHumanReview(reason)` | BLOCKING | Immediate interrupt |
+| Retryable error | `raise SemanticError(type, message)` | RECOVERABLE | Automatic retry |
+| Quality concern (non-fatal) | `emit_signal(Signal(type=LOW_CONFIDENCE, ...))` | INFORMATIONAL | Passed to QA |
+| Partial result | `emit_signal(Signal(type=PARTIAL_RESULT, ...))` | INFORMATIONAL | Passed to QA |
+
+The orchestrator routes on signal *groups*, never individual types. Your agent decides the severity; the orchestrator enforces the consequence.
+
 ## Signals — non-fatal events
 
 Use `emit_signal` to surface non-fatal events. Signals accumulate; the agent continues. The orchestrator routes on signal *groups*, never raw strings — see [`docs/api/core.md`](../api/core.md#signaltype-and-routing-groups).
