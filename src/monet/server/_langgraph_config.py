@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import json
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from pathlib import Path
+import os
+from pathlib import Path
+from typing import Any
 
 
 def default_config() -> dict[str, Any]:
@@ -78,10 +78,59 @@ def merge_config(base: dict[str, Any], override: dict[str, Any]) -> dict[str, An
     return merged
 
 
+def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, Any]:
+    """Resolve module-style graph references to relative file paths.
+
+    Aegra's graph loader only supports filesystem paths and splits on
+    the first ``:``, so absolute Windows paths (``C:\\...``) break the
+    parser.  This converts module-style entries like
+    ``monet.server.default_graphs:build_entry_graph`` to a POSIX
+    relative path from *config_dir* (the ``.monet/`` directory where
+    ``aegra.json`` lives), e.g. ``../src/monet/server/default_graphs.py``.
+
+    File-style references (ending in ``.py`` or starting with ``./``
+    / ``../``) are left unchanged.
+    """
+    from pathlib import PurePosixPath
+
+    graphs = config.get("graphs")
+    if not graphs:
+        return config
+
+    resolved = dict(config)
+    resolved_graphs: dict[str, str] = {}
+    for graph_id, ref in graphs.items():
+        if ":" not in ref:
+            resolved_graphs[graph_id] = ref
+            continue
+        module_part, export = ref.rsplit(":", 1)
+        # Already a file path — leave it alone.
+        if module_part.endswith(".py") or module_part.startswith(("./", "../", "/")):
+            resolved_graphs[graph_id] = ref
+            continue
+        # Module path — resolve to its file on disk.
+        mod = importlib.import_module(module_part)
+        if mod.__file__ is None:
+            raise ValueError(
+                f"Cannot resolve module '{module_part}' to a file path "
+                f"(namespace package?). Use a file path in aegra.json instead."
+            )
+        # Build a relative path from the config dir so the reference
+        # never contains a Windows drive letter (which Aegra's `:`
+        # split would misparse).  Use POSIX separators for portability.
+        abs_path = Path(mod.__file__).resolve()
+        rel_path = PurePosixPath(os.path.relpath(abs_path, config_dir.resolve()))
+        resolved_graphs[graph_id] = f"{rel_path}:{export}"
+    resolved["graphs"] = resolved_graphs
+    return resolved
+
+
 def write_config(config: dict[str, Any], target_dir: Path) -> Path:
     """Write an Aegra config to ``.monet/aegra.json``.
 
-    Creates the ``.monet/`` directory if it does not exist.
+    Creates the ``.monet/`` directory if it does not exist.  Module-style
+    graph references are resolved to absolute file paths before writing,
+    since Aegra's graph loader only supports filesystem paths.
 
     Args:
         config: The merged config dict.
@@ -91,6 +140,7 @@ def write_config(config: dict[str, Any], target_dir: Path) -> Path:
         Path to the written config file.
     """
     monet_dir = target_dir / ".monet"
+    config = _resolve_graph_paths(config, monet_dir)
     monet_dir.mkdir(exist_ok=True)
     config_path = monet_dir / "aegra.json"
     config_path.write_text(json.dumps(config, indent=2) + "\n")

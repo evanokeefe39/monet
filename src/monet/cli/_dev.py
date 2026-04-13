@@ -159,8 +159,15 @@ def _run_curated(cmd: list[str], port: int) -> int:
             line = raw.rstrip()
             if _should_drop(line):
                 continue
-            # Unknown line — pass through to the user.
-            click.echo(line)
+            # Unknown line — pass through to the user.  Replace chars
+            # the console codec can't handle (e.g. emoji on Windows cp1252).
+            try:
+                click.echo(line)
+            except UnicodeEncodeError:
+                safe = line.encode(
+                    sys.stdout.encoding or "utf-8", errors="replace"
+                ).decode(sys.stdout.encoding or "utf-8", errors="replace")
+                click.echo(safe)
     except KeyboardInterrupt:
         click.echo("\nShutting down...")
         proc.terminate()
