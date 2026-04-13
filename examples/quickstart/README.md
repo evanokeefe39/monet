@@ -1,6 +1,13 @@
 # Quickstart
 
-Run the monet content workflow with zero infrastructure.
+Run the monet content workflow locally.
+
+## Prerequisites
+
+- **Docker Desktop** — `monet dev` uses Aegra, which auto-starts PostgreSQL
+  in a Docker container. Install from https://www.docker.com/products/docker-desktop/
+  and make sure it's running before you start.
+- **Python 3.12+** and **uv**
 
 ## Setup
 

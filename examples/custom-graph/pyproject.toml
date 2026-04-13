@@ -1,0 +1,11 @@
+[project]
+name = "monet-custom-graph"
+version = "0.0.0"
+description = "Custom graph + hooks example — BYO agents, worker hooks, graph hooks."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }

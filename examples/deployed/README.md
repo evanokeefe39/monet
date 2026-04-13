@@ -61,5 +61,5 @@ async for event in client.run("AI trends in healthcare"):
 
 ## Other setups
 
-- [quickstart](../quickstart/) — zero infrastructure
+- [quickstart](../quickstart/) — minimal setup
 - [local](../local/) — Docker Compose with Postgres and Langfuse

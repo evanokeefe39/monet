@@ -64,5 +64,5 @@ docker compose --profile tracing down -v
 
 ## Other setups
 
-- [quickstart](../quickstart/) — zero infrastructure
+- [quickstart](../quickstart/) — minimal setup
 - [deployed](../deployed/) — Railway with managed infrastructure
