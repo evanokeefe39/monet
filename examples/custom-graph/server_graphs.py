@@ -18,6 +18,11 @@ Point ``aegra.json`` here::
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langgraph.graph import StateGraph
+
 # --- Import agents so @agent decorators fire and register handlers ---
 import agents.summarizer  # noqa: F401
 
@@ -39,6 +44,16 @@ _queue = InMemoryTaskQueue()
 configure_queue(_queue)
 configure_lazy_worker(_queue)
 
-from graphs.review_pipeline import build_review_graph  # noqa: E402
+from graphs.review_pipeline import (  # noqa: E402
+    build_review_graph as _build_review_graph,
+)
+
+
+# Aegra's factory classifier treats a 1-arg function as a config-accepting
+# factory. The real builder accepts optional hooks, so wrap as 0-arg.
+def build_review_graph() -> StateGraph:  # type: ignore[type-arg]
+    """0-arg wrapper for Aegra compatibility."""
+    return _build_review_graph()
+
 
 __all__ = ["build_review_graph"]

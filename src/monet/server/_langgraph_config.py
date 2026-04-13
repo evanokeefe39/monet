@@ -108,17 +108,34 @@ def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, 
         if module_part.endswith(".py") or module_part.startswith(("./", "../", "/")):
             resolved_graphs[graph_id] = ref
             continue
-        # Module path — resolve to its file on disk.
-        mod = importlib.import_module(module_part)
-        if mod.__file__ is None:
+        # Resolve the module to an absolute .py path.  Try import first
+        # (works for installed packages like monet.server.default_graphs),
+        # then fall back to looking for a local .py file (works for user
+        # scripts like ``server_graphs`` in the working directory).
+        abs_path: Path | None = None
+        try:
+            mod = importlib.import_module(module_part)
+            if mod.__file__ is not None:
+                abs_path = Path(mod.__file__).resolve()
+        except ModuleNotFoundError:
+            pass
+
+        if abs_path is None:
+            # Try as a local file: module.sub → module/sub.py
+            candidate = Path.cwd() / (module_part.replace(".", os.sep) + ".py")
+            if candidate.exists():
+                abs_path = candidate.resolve()
+
+        if abs_path is None:
             raise ValueError(
-                f"Cannot resolve module '{module_part}' to a file path "
-                f"(namespace package?). Use a file path in aegra.json instead."
+                f"Cannot resolve '{module_part}' to a file path. "
+                f"Not importable as a module and "
+                f"'{module_part.replace('.', os.sep)}.py' not found in {Path.cwd()}."
             )
+
         # Build a relative path from the config dir so the reference
         # never contains a Windows drive letter (which Aegra's `:`
-        # split would misparse).  Use POSIX separators for portability.
-        abs_path = Path(mod.__file__).resolve()
+        # split would misparse).
         rel_path = PurePosixPath(os.path.relpath(abs_path, config_dir.resolve()))
         resolved_graphs[graph_id] = f"{rel_path}:{export}"
     resolved["graphs"] = resolved_graphs
