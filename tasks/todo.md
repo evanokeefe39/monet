@@ -4,7 +4,7 @@
 
 Restructured examples/ into three graduated examples:
 
-- [x] `examples/quickstart/` — zero infrastructure, `monet dev` + `monet run`
+- [x] `examples/quickstart/` — minimal setup (Docker Desktop required), `monet dev` + `monet run`
 - [x] `examples/local/` — Docker Compose with Postgres + optional Langfuse (profiles)
 - [x] `examples/deployed/` — Railway with managed infrastructure (Neon, Upstash, Langfuse Cloud)
 
