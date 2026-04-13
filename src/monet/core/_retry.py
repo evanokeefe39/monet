@@ -105,8 +105,10 @@ async def retry_with_backoff[T](
                 )
             await asyncio.sleep(delay)
 
-    # Unreachable — the loop either returns or raises on each iteration.
-    raise RuntimeError("retry_with_backoff exhausted without returning or raising")
+    # Satisfy mypy: the loop always returns or re-raises on final attempt,
+    # but the type checker cannot prove exhaustiveness.
+    msg = "retry_with_backoff: max_attempts must be >= 1"
+    raise RuntimeError(msg)
 
 
 def _compute_delay(attempt: int, base_delay: float, max_delay: float) -> float:

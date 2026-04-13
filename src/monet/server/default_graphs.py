@@ -21,6 +21,9 @@ import monet.agents  # noqa: F401 — registers reference agents
 from monet.catalogue import catalogue_from_env, configure_catalogue
 from monet.core.tracing import configure_tracing
 from monet.orchestration import (
+    build_chat_graph as _build_chat_graph,
+)
+from monet.orchestration import (
     build_entry_graph as _build_entry_graph,
 )
 from monet.orchestration import (
@@ -48,6 +51,8 @@ def _create_queue() -> TaskQueue:
     - ``redis``: Redis-backed queue (requires ``REDIS_URI``).
     - ``sqlite``: SQLite-backed queue (uses ``MONET_QUEUE_DB``, default
       ``.monet/queue.db``).
+    - ``upstash``: Upstash Redis queue (requires ``UPSTASH_REDIS_REST_URL``
+      and ``UPSTASH_REDIS_REST_TOKEN``).
     """
     backend = os.getenv("MONET_QUEUE_BACKEND", "memory")
     if backend == "redis":
@@ -58,6 +63,10 @@ def _create_queue() -> TaskQueue:
         from monet.core.queue_sqlite import SQLiteTaskQueue
 
         return SQLiteTaskQueue(os.getenv("MONET_QUEUE_DB", ".monet/queue.db"))  # type: ignore[return-value]
+    if backend == "upstash":
+        from monet.core.queue_upstash import UpstashTaskQueue
+
+        return UpstashTaskQueue()  # type: ignore[return-value]
     return InMemoryTaskQueue()  # type: ignore[no-any-return]
 
 
@@ -77,6 +86,11 @@ configure_lazy_worker(queue)
 # with no arguments — the default ``hooks=None`` is what we want here.
 
 
+def build_chat_graph() -> StateGraph:  # type: ignore[type-arg]
+    """0-arg wrapper for Aegra compatibility."""
+    return _build_chat_graph()
+
+
 def build_entry_graph() -> StateGraph:  # type: ignore[type-arg]
     """0-arg wrapper for Aegra compatibility."""
     return _build_entry_graph()
@@ -93,6 +107,7 @@ def build_execution_graph() -> StateGraph:  # type: ignore[type-arg]
 
 
 __all__ = [
+    "build_chat_graph",
     "build_entry_graph",
     "build_execution_graph",
     "build_planning_graph",

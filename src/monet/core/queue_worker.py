@@ -20,23 +20,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger("monet.worker")
 _tracer = trace.get_tracer("monet.worker")
 
-# How long to sleep between claim attempts when the pool queue is empty.
-_POLL_INTERVAL = 0.1
-
-# Graceful shutdown: max seconds to wait for in-flight tasks.
-_SHUTDOWN_TIMEOUT = 30.0
-
 
 async def run_worker(
     queue: TaskQueue,
     registry: AgentRegistry | None = None,
     pool: str = "local",
     max_concurrency: int = 10,
+    poll_interval: float = 0.1,
+    shutdown_timeout: float = 30.0,
 ) -> None:
     """Poll queue by pool, execute concurrently via registry.
 
     Runs until the current ``asyncio.Task`` is cancelled. On cancellation,
-    waits up to ``_SHUTDOWN_TIMEOUT`` seconds for in-flight tasks to complete.
+    waits up to *shutdown_timeout* seconds for in-flight tasks to complete.
 
     Args:
         queue: The task queue to poll.
@@ -44,6 +40,10 @@ async def run_worker(
             global registry populated by ``@agent`` decorators.
         pool: Pool name this worker serves. Claims only tasks in this pool.
         max_concurrency: Max concurrent task executions. Default 10.
+        poll_interval: Seconds to sleep between claim attempts when the
+            pool queue is empty. Default 0.1.
+        shutdown_timeout: Max seconds to wait for in-flight tasks during
+            graceful shutdown. Default 30.
     """
     if registry is None:
         from monet.core.registry import default_registry
@@ -95,7 +95,7 @@ async def run_worker(
         while True:
             record = await queue.claim(pool)
             if record is None:
-                await asyncio.sleep(_POLL_INTERVAL)
+                await asyncio.sleep(poll_interval)
                 continue
             task = asyncio.create_task(_execute(record))
             in_flight.add(task)
@@ -107,7 +107,7 @@ async def run_worker(
                 "Worker shutting down, waiting for %d in-flight tasks",
                 len(in_flight),
             )
-            _done, pending = await asyncio.wait(in_flight, timeout=_SHUTDOWN_TIMEOUT)
+            _done, pending = await asyncio.wait(in_flight, timeout=shutdown_timeout)
             if pending:
                 logger.warning(
                     "Worker shutdown timeout, cancelling %d tasks",

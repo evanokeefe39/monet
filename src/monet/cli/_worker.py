@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import importlib.util
 import logging
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -18,8 +19,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("monet.cli.worker")
 
-# Heartbeat interval in seconds.
-_HEARTBEAT_INTERVAL = 30.0
+
+def _read_env_float(name: str, default: float) -> float:
+    """Read a float from an environment variable with validation."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        msg = f"{name}={raw!r} is not a valid number"
+        raise click.BadParameter(msg) from None
+    if value <= 0:
+        msg = f"{name}={raw!r} must be positive"
+        raise click.BadParameter(msg)
+    return value
 
 
 @click.command()
@@ -32,12 +46,14 @@ _HEARTBEAT_INTERVAL = 30.0
 @click.option(
     "--pool",
     default="local",
+    envvar="MONET_WORKER_POOL",
     help="Pool to claim tasks from.",
 )
 @click.option(
     "--concurrency",
     default=10,
     type=int,
+    envvar="MONET_WORKER_CONCURRENCY",
     help="Max concurrent task executions.",
 )
 @click.option(
@@ -52,23 +68,55 @@ _HEARTBEAT_INTERVAL = 30.0
     default=None,
     help="API key for server auth.",
 )
+@click.option(
+    "--agents",
+    "agents_file",
+    envvar="MONET_WORKER_AGENTS",
+    default=None,
+    type=click.Path(exists=True),
+    help="Path to agents.toml for declarative agent registration.",
+)
 def worker(
     path: str,
     pool: str,
     concurrency: int,
     server_url: str | None,
     api_key: str | None,
+    agents_file: str | None,
 ) -> None:
     """Start a monet worker process.
 
     Scans --path for @agent decorated functions, imports them to
     populate the handler registry, and starts polling for tasks.
 
+    Optionally loads --agents (agents.toml) for declarative registration
+    of external agents (HTTP, SSE, CLI transports).
+
     In local mode (no --server-url): uses an in-memory queue.
     In remote mode (--server-url set): registers with the server,
     starts a heartbeat loop, and claims tasks via HTTP.
+
+    Tuning env vars (rarely needed):
+      MONET_WORKER_POLL_INTERVAL — seconds between claim attempts (default 0.1)
+      MONET_WORKER_SHUTDOWN_TIMEOUT — graceful shutdown wait (default 30)
+      MONET_WORKER_HEARTBEAT_INTERVAL — remote heartbeat cycle (default 30)
     """
-    asyncio.run(_run_worker(Path(path), pool, concurrency, server_url, api_key))
+    poll_interval = _read_env_float("MONET_WORKER_POLL_INTERVAL", 0.1)
+    shutdown_timeout = _read_env_float("MONET_WORKER_SHUTDOWN_TIMEOUT", 30.0)
+    heartbeat_interval = _read_env_float("MONET_WORKER_HEARTBEAT_INTERVAL", 30.0)
+    asyncio.run(
+        _run_worker(
+            Path(path),
+            pool,
+            concurrency,
+            server_url,
+            api_key,
+            agents_file=Path(agents_file) if agents_file else None,
+            poll_interval=poll_interval,
+            shutdown_timeout=shutdown_timeout,
+            heartbeat_interval=heartbeat_interval,
+        )
+    )
 
 
 async def _run_worker(
@@ -77,6 +125,11 @@ async def _run_worker(
     concurrency: int,
     server_url: str | None,
     api_key: str | None,
+    *,
+    agents_file: Path | None = None,
+    poll_interval: float = 0.1,
+    shutdown_timeout: float = 30.0,
+    heartbeat_interval: float = 30.0,
 ) -> None:
     """Discover agents, configure queue, and run the worker loop."""
     from monet.cli._discovery import discover_agents
@@ -98,10 +151,31 @@ async def _run_worker(
         spec.loader.exec_module(module)  # type: ignore[union-attr]
         logger.info("Imported %s", agent_file)
 
+    # Load declarative agent config if provided.
+    if agents_file is not None:
+        from monet.core._agents_config import load_agents
+
+        count = load_agents(agents_file)
+        logger.info("Registered %d agent(s) from %s", count, agents_file)
+
     if server_url:
-        await _run_remote(discovered, pool, concurrency, server_url, api_key)
+        await _run_remote(
+            discovered,
+            pool,
+            concurrency,
+            server_url,
+            api_key,
+            poll_interval=poll_interval,
+            shutdown_timeout=shutdown_timeout,
+            heartbeat_interval=heartbeat_interval,
+        )
     else:
-        await _run_local(pool, concurrency)
+        await _run_local(
+            pool,
+            concurrency,
+            poll_interval=poll_interval,
+            shutdown_timeout=shutdown_timeout,
+        )
 
 
 async def _run_remote(
@@ -110,6 +184,10 @@ async def _run_remote(
     concurrency: int,
     server_url: str,
     api_key: str | None,
+    *,
+    poll_interval: float = 0.1,
+    shutdown_timeout: float = 30.0,
+    heartbeat_interval: float = 30.0,
 ) -> None:
     """Run worker in remote mode with HTTP-based queue."""
     import contextlib
@@ -146,7 +224,7 @@ async def _run_remote(
 
     async def _heartbeat_loop() -> None:
         while True:
-            await asyncio.sleep(_HEARTBEAT_INTERVAL)
+            await asyncio.sleep(heartbeat_interval)
             # Read current capabilities each cycle so hot-reloads
             # are picked up on the next heartbeat. Transient failures
             # are handled inside heartbeat_with_tracking; 4xx auth
@@ -159,7 +237,13 @@ async def _run_remote(
     try:
         heartbeat_task = asyncio.create_task(_heartbeat_loop())
         queue = RemoteQueue(client, pool)
-        await run_worker(queue, pool=pool, max_concurrency=concurrency)
+        await run_worker(
+            queue,
+            pool=pool,
+            max_concurrency=concurrency,
+            poll_interval=poll_interval,
+            shutdown_timeout=shutdown_timeout,
+        )
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Worker shutting down")
     finally:
@@ -170,7 +254,13 @@ async def _run_remote(
         await client.close()
 
 
-async def _run_local(pool: str, concurrency: int) -> None:
+async def _run_local(
+    pool: str,
+    concurrency: int,
+    *,
+    poll_interval: float = 0.1,
+    shutdown_timeout: float = 30.0,
+) -> None:
     """Run worker in local mode with an in-memory queue."""
     from monet.orchestration._invoke import configure_queue
     from monet.queue import InMemoryTaskQueue, run_worker
@@ -180,6 +270,12 @@ async def _run_local(pool: str, concurrency: int) -> None:
     logger.info("Worker running in local mode (pool=%s)", pool)
 
     try:
-        await run_worker(queue, pool=pool, max_concurrency=concurrency)
+        await run_worker(
+            queue,
+            pool=pool,
+            max_concurrency=concurrency,
+            poll_interval=poll_interval,
+            shutdown_timeout=shutdown_timeout,
+        )
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Worker shutting down")

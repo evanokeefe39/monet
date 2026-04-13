@@ -11,10 +11,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from monet.core._serialization import (
+    deserialize_result,
+    now_iso,
+    safe_parse_context,
+    serialize_result,
+)
 
 if TYPE_CHECKING:
     from monet.queue import TaskRecord
@@ -22,44 +29,7 @@ if TYPE_CHECKING:
 
 __all__ = ["UpstashTaskQueue"]
 
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _serialize_result(result: AgentResult) -> str:
-    """Serialize an AgentResult to JSON for Redis storage."""
-    return json.dumps(
-        {
-            "success": result.success,
-            "output": result.output,
-            "artifacts": [dict(a) for a in result.artifacts],
-            "signals": [dict(s) for s in result.signals],
-            "trace_id": result.trace_id,
-            "run_id": result.run_id,
-        }
-    )
-
-
-def _deserialize_result(data: str) -> AgentResult:
-    """Deserialize an AgentResult from JSON stored in Redis."""
-    from monet.types import AgentResult, ArtifactPointer, Signal
-
-    d: dict[str, Any] = json.loads(data)
-    return AgentResult(
-        success=d["success"],
-        output=d.get("output"),
-        artifacts=tuple(
-            ArtifactPointer(artifact_id=a["artifact_id"], url=a["url"])
-            for a in d.get("artifacts", ())
-        ),
-        signals=tuple(
-            Signal(type=s["type"], reason=s["reason"], metadata=s.get("metadata"))
-            for s in d.get("signals", ())
-        ),
-        trace_id=d.get("trace_id", ""),
-        run_id=d.get("run_id", ""),
-    )
+_log = logging.getLogger(__name__)
 
 
 class UpstashTaskQueue:
@@ -146,7 +116,7 @@ class UpstashTaskQueue:
 
         task_id = str(uuid.uuid4())
         key = self._task_key(task_id)
-        now = _now_iso()
+        now = now_iso()
 
         fields: dict[str, str] = {
             "task_id": task_id,
@@ -192,10 +162,13 @@ class UpstashTaskQueue:
             if TaskStatus(status_raw) in terminal:
                 result_raw = await self._redis.hget(key, "result")
                 if result_raw:
-                    return _deserialize_result(result_raw)
+                    try:
+                        return deserialize_result(result_raw)
+                    except (json.JSONDecodeError, KeyError):
+                        _log.warning("Corrupt result JSON for task %s", task_id)
                 # Terminal without a result — build a failure stub.
                 ctx_raw = await self._redis.hget(key, "context")
-                ctx: dict[str, Any] = json.loads(ctx_raw) if ctx_raw else {}
+                ctx = safe_parse_context(ctx_raw, source="upstash.poll_result") or {}
                 return AgentResult(
                     success=False,
                     output="",
@@ -236,7 +209,7 @@ class UpstashTaskQueue:
             return None
 
         key = self._task_key(task_id)
-        now = _now_iso()
+        now = now_iso()
 
         # Verify the task still exists and is pending.
         status_raw = await self._redis.hget(key, "status")
@@ -252,17 +225,26 @@ class UpstashTaskQueue:
         if not data:
             return None
 
-        ctx: AgentRunContext = json.loads(data["context"])
+        ctx = safe_parse_context(data.get("context"), source="upstash.claim")
+        if ctx is None:
+            ctx = {}
+
         result_raw = data.get("result")
+        result: AgentResult | None = None
+        if result_raw:
+            try:
+                result = deserialize_result(result_raw)
+            except (json.JSONDecodeError, KeyError):
+                _log.warning("Corrupt result JSON for task %s", task_id)
 
         record: TaskRecord = {
             "task_id": data["task_id"],
             "agent_id": data["agent_id"],
             "command": data["command"],
             "pool": data["pool"],
-            "context": ctx,
+            "context": ctx,  # type: ignore[typeddict-item]
             "status": TaskStatus(data["status"]),
-            "result": _deserialize_result(result_raw) if result_raw else None,
+            "result": result,
             "created_at": data["created_at"],
             "claimed_at": data.get("claimed_at"),
             "completed_at": data.get("completed_at"),
@@ -283,12 +265,12 @@ class UpstashTaskQueue:
             msg = f"Unknown task_id: {task_id}"
             raise KeyError(msg)
 
-        now = _now_iso()
+        now = now_iso()
         await self._redis.hset(
             key,
             values={
                 "status": TaskStatus.COMPLETED,
-                "result": _serialize_result(result),
+                "result": serialize_result(result),
                 "completed_at": now,
             },
         )
@@ -312,7 +294,7 @@ class UpstashTaskQueue:
             msg = f"Unknown task_id: {task_id}"
             raise KeyError(msg)
 
-        ctx: dict[str, Any] = json.loads(ctx_raw)
+        ctx = safe_parse_context(ctx_raw, source="upstash.fail") or {}
         fail_result = AgentResult(
             success=False,
             output="",
@@ -327,12 +309,12 @@ class UpstashTaskQueue:
             run_id=ctx.get("run_id", ""),
         )
 
-        now = _now_iso()
+        now = now_iso()
         await self._redis.hset(
             key,
             values={
                 "status": TaskStatus.FAILED,
-                "result": _serialize_result(fail_result),
+                "result": serialize_result(fail_result),
                 "error": error,
                 "completed_at": now,
             },
@@ -361,7 +343,7 @@ class UpstashTaskQueue:
         ):
             return
 
-        now = _now_iso()
+        now = now_iso()
         await self._redis.hset(
             key,
             values={"status": TaskStatus.CANCELLED, "completed_at": now},

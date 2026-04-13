@@ -32,6 +32,10 @@ _KNOWN_EVENT_TYPES: frozenset[str] = frozenset(
     {"progress", "signal", "artifact", "result", "error"}
 )
 
+# Default timeouts for HTTP transports (seconds).
+_DEFAULT_CONNECT_TIMEOUT = 5.0
+_DEFAULT_READ_TIMEOUT = 30.0
+
 
 class AgentStream:
     """Typed async event bus over an external agent's output.
@@ -44,15 +48,30 @@ class AgentStream:
 
     def __init__(self) -> None:
         self._handlers: dict[str, list[Handler]] = {}
+        self._after_handlers: dict[str, list[Handler]] = {}
         self._iter_factory: Callable[[], AsyncIterator[dict[str, Any]]] | None = None
 
     # ── named constructors ────────────────────────────────────────────────────
 
     @classmethod
-    def cli(cls, cmd: list[str], **kwargs: Any) -> AgentStream:
-        """Stream newline-delimited JSON from a subprocess's stdout."""
+    def cli(
+        cls,
+        cmd: list[str],
+        *,
+        stdin_payload: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> AgentStream:
+        """Stream newline-delimited JSON from a subprocess's stdout.
+
+        Args:
+            cmd: Command and arguments to execute.
+            stdin_payload: If provided, serialised as JSON and written to
+                the subprocess's stdin before reading events.
+        """
         stream = cls()
-        stream._iter_factory = lambda: _iter_subprocess(cmd, **kwargs)
+        stream._iter_factory = lambda: _iter_subprocess(
+            cmd, stdin_payload=stdin_payload, **kwargs
+        )
         return stream
 
     @classmethod
@@ -67,6 +86,50 @@ class AgentStream:
         """Poll ``url`` every ``interval`` seconds for new JSON events."""
         stream = cls()
         stream._iter_factory = lambda: _iter_http_poll(url, interval, **kwargs)
+        return stream
+
+    @classmethod
+    def http_post(
+        cls,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = _DEFAULT_READ_TIMEOUT,
+        **kwargs: Any,
+    ) -> AgentStream:
+        """POST *payload* as JSON and stream newline-delimited JSON events.
+
+        Args:
+            url: Endpoint URL.
+            payload: JSON body (typically ``{task, context, command, agent_id}``).
+            timeout: Per-request read timeout in seconds.
+        """
+        stream = cls()
+        stream._iter_factory = lambda: _iter_http_post(
+            url, payload, timeout=timeout, **kwargs
+        )
+        return stream
+
+    @classmethod
+    def sse_post(
+        cls,
+        url: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = _DEFAULT_READ_TIMEOUT,
+        **kwargs: Any,
+    ) -> AgentStream:
+        """POST *payload* and stream SSE events from the response.
+
+        Args:
+            url: Endpoint URL.
+            payload: JSON body.
+            timeout: Per-request read timeout in seconds.
+        """
+        stream = cls()
+        stream._iter_factory = lambda: _iter_sse_post(
+            url, payload, timeout=timeout, **kwargs
+        )
         return stream
 
     @classmethod
@@ -85,8 +148,25 @@ class AgentStream:
 
         Multiple handlers per event type are called in registration order.
         Sync handlers are invoked directly; async handlers are awaited.
+
+        When any handler is registered for an event type via ``.on()``,
+        the default handler for that type is **replaced**.  Use
+        ``.on_after()`` to supplement (not replace) the default.
         """
         self._handlers.setdefault(event_type, []).append(handler)
+        return self
+
+    def on_after(self, event_type: str, handler: Handler) -> AgentStream:
+        """Register a handler that runs **after** the default handler.
+
+        Unlike ``.on()``, which replaces the default, ``.on_after()``
+        supplements it.  The default handler runs first, then all
+        after-handlers in registration order.  Errors in after-handlers
+        are logged at warning level but do not crash the stream.
+
+        Returns self for chaining.
+        """
+        self._after_handlers.setdefault(event_type, []).append(handler)
         return self
 
     # ── execution ─────────────────────────────────────────────────────────────
@@ -119,6 +199,11 @@ class AgentStream:
             else:
                 await self._default_handler(event_type, event)
 
+            # After-handlers supplement defaults (non-fatal).
+            after = self._after_handlers.get(event_type)
+            if after:
+                await self._run_after_handlers(event_type, after, event)
+
             if event_type == "result":
                 output = event.get("output")
                 result_value = output if isinstance(output, str) else None
@@ -139,6 +224,28 @@ class AgentStream:
             raise RuntimeError(msg)
         async for event in self._iter_factory():
             yield event
+
+    async def _run_after_handlers(
+        self,
+        event_type: str,
+        handlers: list[Handler],
+        event: dict[str, Any],
+    ) -> None:
+        """Run after-handlers with error isolation."""
+        import logging
+
+        _log = logging.getLogger("monet.streams")
+        for handler in handlers:
+            try:
+                out = handler(event)
+                if inspect.isawaitable(out):
+                    await out
+            except Exception:
+                _log.warning(
+                    "after-handler for %r failed",
+                    event_type,
+                    exc_info=True,
+                )
 
     async def _default_handler(self, event_type: str, event: dict[str, Any]) -> None:
         if event_type == "progress":
@@ -183,17 +290,32 @@ class AgentStream:
 
 
 async def _iter_subprocess(
-    cmd: list[str], **kwargs: Any
+    cmd: list[str],
+    *,
+    stdin_payload: dict[str, Any] | None = None,
+    **kwargs: Any,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Spawn ``cmd`` and yield one parsed JSON object per stdout line."""
+    """Spawn ``cmd`` and yield one parsed JSON object per stdout line.
+
+    If *stdin_payload* is provided, it is serialised as JSON and written
+    to the subprocess's stdin before reading events.
+    """
+    stdin_arg = asyncio.subprocess.PIPE if stdin_payload is not None else None
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=stdin_arg,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         **kwargs,
     )
     assert proc.stdout is not None
     try:
+        if stdin_payload is not None and proc.stdin is not None:
+            proc.stdin.write(json.dumps(stdin_payload).encode())
+            proc.stdin.write(b"\n")
+            await proc.stdin.drain()
+            proc.stdin.close()
+
         async for line in proc.stdout:
             text = line.decode().strip()
             if not text:
@@ -203,6 +325,11 @@ async def _iter_subprocess(
             except json.JSONDecodeError as exc:
                 msg = f"Invalid JSON line from {shlex.join(cmd)}: {text!r}"
                 raise ValueError(msg) from exc
+    except (Exception, asyncio.CancelledError):
+        # Ensure subprocess is killed on any failure or cancellation.
+        if proc.returncode is None:
+            proc.kill()
+        raise
     finally:
         return_code = await proc.wait()
     if return_code != 0:
@@ -222,8 +349,15 @@ async def _iter_sse(url: str, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
     """Stream JSON events from an SSE endpoint."""
     import httpx
 
+    timeout = httpx.Timeout(
+        connect=_DEFAULT_CONNECT_TIMEOUT,
+        read=_DEFAULT_READ_TIMEOUT,
+        write=5.0,
+        pool=5.0,
+    )
+
     async with (
-        httpx.AsyncClient(timeout=None) as client,
+        httpx.AsyncClient(timeout=timeout) as client,
         client.stream("GET", url, **kwargs) as response,
     ):
         response.raise_for_status()
@@ -246,7 +380,14 @@ async def _iter_http_poll(
     """
     import httpx
 
-    async with httpx.AsyncClient() as client:
+    timeout = httpx.Timeout(
+        connect=_DEFAULT_CONNECT_TIMEOUT,
+        read=_DEFAULT_READ_TIMEOUT,
+        write=5.0,
+        pool=5.0,
+    )
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
         for _ in range(max_polls):
             response = await client.get(url, **kwargs)
             response.raise_for_status()
@@ -258,6 +399,78 @@ async def _iter_http_poll(
         raise TimeoutError(
             f"HTTP poll at {url} did not produce a result event after {max_polls} polls"
         )
+
+
+async def _iter_http_post(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    timeout: float = _DEFAULT_READ_TIMEOUT,
+    **kwargs: Any,
+) -> AsyncIterator[dict[str, Any]]:
+    """POST *payload* as JSON and stream newline-delimited JSON events.
+
+    The external agent is expected to respond with a streaming body where
+    each line is a JSON object following the monet event protocol.
+    """
+    import httpx
+
+    http_timeout = httpx.Timeout(
+        connect=_DEFAULT_CONNECT_TIMEOUT,
+        read=timeout,
+        write=5.0,
+        pool=5.0,
+    )
+
+    async with (
+        httpx.AsyncClient(timeout=http_timeout) as client,
+        client.stream("POST", url, json=payload, **kwargs) as response,
+    ):
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                yield json.loads(text)
+            except json.JSONDecodeError as exc:
+                msg = f"Invalid JSON line from POST {url}: {text!r}"
+                raise ValueError(msg) from exc
+
+
+async def _iter_sse_post(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    timeout: float = _DEFAULT_READ_TIMEOUT,
+    **kwargs: Any,
+) -> AsyncIterator[dict[str, Any]]:
+    """POST *payload* and stream SSE events from the response.
+
+    The external agent receives a JSON POST and responds with an SSE
+    stream using the monet event protocol.
+    """
+    import httpx
+
+    http_timeout = httpx.Timeout(
+        connect=_DEFAULT_CONNECT_TIMEOUT,
+        read=timeout,
+        write=5.0,
+        pool=5.0,
+    )
+
+    async with (
+        httpx.AsyncClient(timeout=http_timeout) as client,
+        client.stream("POST", url, json=payload, **kwargs) as response,
+    ):
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:") :].strip()
+            if not data:
+                continue
+            yield json.loads(data)
 
 
 __all__ = ["AgentStream"]

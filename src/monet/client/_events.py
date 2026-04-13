@@ -154,3 +154,14 @@ class PendingDecision:
     decision_type: str  # "plan_approval" | "execution_review"
     summary: str = ""
     detail: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ChatSummary:
+    """Lightweight chat session record returned by ``list_chats``."""
+
+    thread_id: str
+    name: str
+    message_count: int
+    created_at: str = ""
+    updated_at: str = ""

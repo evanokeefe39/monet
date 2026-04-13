@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import aiosqlite  # type: ignore[import-not-found]
 
+from monet.core._serialization import (
+    deserialize_result,
+    now_iso,
+    safe_parse_context,
+    serialize_result,
+)
 from monet.queue import TaskStatus
 from monet.signals import SignalType
-from monet.types import AgentResult, ArtifactPointer, Signal
+from monet.types import AgentResult, Signal
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,6 +33,8 @@ if TYPE_CHECKING:
     from monet.types import AgentRunContext
 
 __all__ = ["SQLiteTaskQueue"]
+
+_log = logging.getLogger(__name__)
 
 # Default lease TTL in seconds.
 _DEFAULT_LEASE_TTL = 300
@@ -55,51 +64,27 @@ CREATE INDEX IF NOT EXISTS idx_pool_status ON tasks (pool, status)
 """
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _serialize_result(r: AgentResult) -> str:
-    return json.dumps(
-        {
-            "success": r.success,
-            "output": r.output,
-            "artifacts": [dict(a) for a in r.artifacts],
-            "signals": [dict(s) for s in r.signals],
-            "trace_id": r.trace_id,
-            "run_id": r.run_id,
-        }
-    )
-
-
-def _deserialize_result(raw: str) -> AgentResult:
-    d: dict[str, Any] = json.loads(raw)
-    return AgentResult(
-        success=d["success"],
-        output=d["output"],
-        artifacts=tuple(
-            ArtifactPointer(artifact_id=a["artifact_id"], url=a["url"])
-            for a in d.get("artifacts", ())
-        ),
-        signals=tuple(
-            Signal(type=s["type"], reason=s["reason"], metadata=s.get("metadata"))
-            for s in d.get("signals", ())
-        ),
-        trace_id=d.get("trace_id", ""),
-        run_id=d.get("run_id", ""),
-    )
-
-
 def _row_to_record(row: aiosqlite.Row) -> TaskRecord:
     """Convert a database row to a TaskRecord TypedDict."""
+    ctx = safe_parse_context(row[4], source="sqlite._row_to_record")
+    if ctx is None:
+        ctx = {}
+
+    result: AgentResult | None = None
+    if row[6]:
+        try:
+            result = deserialize_result(row[6])
+        except (json.JSONDecodeError, KeyError):
+            _log.warning("Corrupt result JSON for task %s", row[0])
+
     return {
         "task_id": row[0],
         "agent_id": row[1],
         "command": row[2],
         "pool": row[3],
-        "context": json.loads(row[4]),
+        "context": ctx,  # type: ignore[typeddict-item]
         "status": TaskStatus(row[5]),
-        "result": _deserialize_result(row[6]) if row[6] else None,
+        "result": result,
         "created_at": row[8],
         "claimed_at": row[9],
         "completed_at": row[10],
@@ -183,7 +168,7 @@ class SQLiteTaskQueue:
         """
         db = await self._ensure_init()
         task_id = str(uuid.uuid4())
-        now = _now_iso()
+        now = now_iso()
         await db.execute(
             "INSERT INTO tasks"
             " (task_id, agent_id, command, pool, context, status, created_at)"
@@ -252,10 +237,13 @@ class SQLiteTaskQueue:
 
         result_raw, ctx_raw, _status = row
         if result_raw:
-            return _deserialize_result(result_raw)
+            try:
+                return deserialize_result(result_raw)
+            except (json.JSONDecodeError, KeyError):
+                _log.warning("Corrupt result JSON for task %s", task_id)
 
         # Task failed/cancelled without a result object.
-        ctx: AgentRunContext = json.loads(ctx_raw)
+        ctx = safe_parse_context(ctx_raw, source="sqlite._read_result")
         return AgentResult(
             success=False,
             output="",
@@ -266,8 +254,8 @@ class SQLiteTaskQueue:
                     metadata=None,
                 ),
             ),
-            trace_id=ctx["trace_id"],
-            run_id=ctx["run_id"],
+            trace_id=ctx["trace_id"] if ctx else "",
+            run_id=ctx["run_id"] if ctx else "",
         )
 
     # --- Consumer API ---
@@ -282,7 +270,7 @@ class SQLiteTaskQueue:
             A TaskRecord with status CLAIMED, or None if nothing available.
         """
         db = await self._ensure_init()
-        now = _now_iso()
+        now = now_iso()
         lease_expires = datetime.now(UTC).timestamp() + self._lease_ttl
         lease_expires_iso = datetime.fromtimestamp(lease_expires, tz=UTC).isoformat()
 
@@ -310,11 +298,11 @@ class SQLiteTaskQueue:
     async def complete(self, task_id: str, result: AgentResult) -> None:
         """Post a successful result for a claimed task."""
         db = await self._ensure_init()
-        now = _now_iso()
+        now = now_iso()
         async with db.execute(
             "UPDATE tasks SET status = ?, result = ?, completed_at = ? "
             "WHERE task_id = ?",
-            (TaskStatus.COMPLETED, _serialize_result(result), now, task_id),
+            (TaskStatus.COMPLETED, serialize_result(result), now, task_id),
         ) as cursor:
             if cursor.rowcount == 0:
                 msg = f"Unknown task_id: {task_id}"
@@ -337,7 +325,7 @@ class SQLiteTaskQueue:
             msg = f"Unknown task_id: {task_id}"
             raise KeyError(msg)
 
-        ctx: AgentRunContext = json.loads(row[0])
+        ctx = safe_parse_context(row[0], source="sqlite.fail")
         fail_result = AgentResult(
             success=False,
             output="",
@@ -348,14 +336,14 @@ class SQLiteTaskQueue:
                     metadata=None,
                 ),
             ),
-            trace_id=ctx["trace_id"],
-            run_id=ctx["run_id"],
+            trace_id=ctx["trace_id"] if ctx else "",
+            run_id=ctx["run_id"] if ctx else "",
         )
-        now = _now_iso()
+        now = now_iso()
         await db.execute(
             "UPDATE tasks SET status = ?, result = ?, error = ?, completed_at = ? "
             "WHERE task_id = ?",
-            (TaskStatus.FAILED, _serialize_result(fail_result), error, now, task_id),
+            (TaskStatus.FAILED, serialize_result(fail_result), error, now, task_id),
         )
         await db.commit()
         event = self._events.get(task_id)
@@ -369,7 +357,7 @@ class SQLiteTaskQueue:
         unblocks. If already completed/failed/cancelled, this is a no-op.
         """
         db = await self._ensure_init()
-        now = _now_iso()
+        now = now_iso()
         await db.execute(
             "UPDATE tasks SET status = ?, completed_at = ? "
             "WHERE task_id = ? AND status IN (?, ?)",
@@ -409,7 +397,7 @@ class SQLiteTaskQueue:
     async def _sweep_expired_leases(self) -> None:
         """Requeue claimed tasks whose lease has expired."""
         db = await self._ensure_init()
-        now = _now_iso()
+        now = now_iso()
         await db.execute(
             "UPDATE tasks SET status = ?, claimed_at = NULL, lease_expires_at = NULL "
             "WHERE status = ? AND lease_expires_at < ?",

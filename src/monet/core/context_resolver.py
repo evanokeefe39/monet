@@ -7,11 +7,14 @@ to full content on the execution side.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from monet.core.catalogue import get_catalogue
 
 __all__ = ["resolve_context"]
+
+_log = logging.getLogger(__name__)
 
 # MIME types that are safe to decode as UTF-8 text.
 _TEXT_PREFIXES: tuple[str, ...] = (
@@ -61,6 +64,11 @@ async def resolve_context(
             try:
                 raw, meta = await catalogue.read(art_id)
             except (KeyError, ValueError, FileNotFoundError):
+                _log.warning(
+                    "Failed to read artifact %s from catalogue; "
+                    "agent will receive incomplete context",
+                    art_id,
+                )
                 continue
             content_type = (meta.get("content_type") or "").lower()
             if any(content_type.startswith(p) for p in _TEXT_PREFIXES):

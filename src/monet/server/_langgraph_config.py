@@ -19,6 +19,7 @@ def default_config() -> dict[str, Any]:
     return {
         "dependencies": ["."],
         "graphs": {
+            "chat": "monet.server.default_graphs:build_chat_graph",
             "entry": "monet.server.default_graphs:build_entry_graph",
             "planning": "monet.server.default_graphs:build_planning_graph",
             "execution": "monet.server.default_graphs:build_execution_graph",
