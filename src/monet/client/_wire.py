@@ -16,16 +16,13 @@ if TYPE_CHECKING:
 
 # ── Graph ID constants (server contract, not caller concern) ────────
 
-_ENTRY_GRAPH = "entry"
-_PLANNING_GRAPH = "planning"
-_EXECUTION_GRAPH = "execution"
-
 TRACE_CARRIER_METADATA_KEY = "monet_trace_carrier"
 
 # ── Metadata keys for thread tagging ────────────────────────────────
 
 MONET_RUN_ID_KEY = "monet_run_id"
 MONET_GRAPH_KEY = "monet_graph"
+MONET_CHAT_NAME_KEY = "monet_chat_name"
 
 
 # ── Client factory ──────────────────────────────────────────────────
@@ -175,4 +172,11 @@ def execution_input(work_brief: dict[str, Any], run_id: str) -> dict[str, Any]:
         "wave_reflections": [],
         "completed_phases": [],
         "revision_count": 0,
+    }
+
+
+def chat_input(message: str) -> dict[str, Any]:
+    """Build the input state dict for the chat graph."""
+    return {
+        "messages": [{"role": "user", "content": message}],
     }

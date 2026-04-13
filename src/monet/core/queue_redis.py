@@ -9,13 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from monet.core._serialization import (
+    deserialize_result,
+    now_iso,
+    safe_parse_context,
+    serialize_result,
+)
 from monet.queue import TaskStatus
 from monet.signals import SignalType
-from monet.types import AgentResult, ArtifactPointer, Signal
+from monet.types import AgentResult, Signal
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -25,6 +32,8 @@ if TYPE_CHECKING:
 
 __all__ = ["RedisTaskQueue"]
 
+_log = logging.getLogger(__name__)
+
 # Default lease TTL in seconds.
 _DEFAULT_LEASE_TTL = 300
 
@@ -33,41 +42,6 @@ _SWEEPER_INTERVAL = 30.0
 
 # Polling interval for fallback mode.
 _POLL_INTERVAL = 0.5
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def _serialize_result(r: AgentResult) -> str:
-    return json.dumps(
-        {
-            "success": r.success,
-            "output": r.output,
-            "artifacts": [dict(a) for a in r.artifacts],
-            "signals": [dict(s) for s in r.signals],
-            "trace_id": r.trace_id,
-            "run_id": r.run_id,
-        }
-    )
-
-
-def _deserialize_result(raw: str) -> AgentResult:
-    d: dict[str, Any] = json.loads(raw)
-    return AgentResult(
-        success=d["success"],
-        output=d["output"],
-        artifacts=tuple(
-            ArtifactPointer(artifact_id=a["artifact_id"], url=a["url"])
-            for a in d.get("artifacts", ())
-        ),
-        signals=tuple(
-            Signal(type=s["type"], reason=s["reason"], metadata=s.get("metadata"))
-            for s in d.get("signals", ())
-        ),
-        trace_id=d.get("trace_id", ""),
-        run_id=d.get("run_id", ""),
-    )
 
 
 def _normalize_url(url: str) -> str:
@@ -159,7 +133,7 @@ class RedisTaskQueue:
         """
         client = await self._ensure_client()
         task_id = str(uuid.uuid4())
-        now = _now_iso()
+        now = now_iso()
 
         pipe = client.pipeline()
         pipe.hset(
@@ -284,11 +258,14 @@ class RedisTaskQueue:
 
         if result_raw:
             raw = result_raw.decode() if isinstance(result_raw, bytes) else result_raw
-            return _deserialize_result(raw)
+            try:
+                return deserialize_result(raw)
+            except (json.JSONDecodeError, KeyError):
+                _log.warning("Corrupt result JSON for task %s", task_id)
 
         # Task failed/cancelled without a result object.
         ctx_str = ctx_raw.decode() if isinstance(ctx_raw, bytes) else ctx_raw
-        ctx: AgentRunContext = json.loads(ctx_str)  # type: ignore[arg-type]
+        ctx = safe_parse_context(ctx_str, source="redis._read_result")
         return AgentResult(
             success=False,
             output="",
@@ -299,8 +276,8 @@ class RedisTaskQueue:
                     metadata=None,
                 ),
             ),
-            trace_id=ctx["trace_id"],
-            run_id=ctx["run_id"],
+            trace_id=ctx["trace_id"] if ctx else "",
+            run_id=ctx["run_id"] if ctx else "",
         )
 
     # --- Consumer API ---
@@ -320,7 +297,7 @@ class RedisTaskQueue:
             return None
 
         task_id = raw_id.decode() if isinstance(raw_id, bytes) else raw_id
-        now = _now_iso()
+        now = now_iso()
         lease_expires = datetime.now(UTC).timestamp() + self._lease_ttl
         lease_expires_iso = datetime.fromtimestamp(lease_expires, tz=UTC).isoformat()
 
@@ -338,7 +315,7 @@ class RedisTaskQueue:
     async def complete(self, task_id: str, result: AgentResult) -> None:
         """Post a successful result for a claimed task."""
         client = await self._ensure_client()
-        now = _now_iso()
+        now = now_iso()
 
         exists = await client.exists(self._task_key(task_id))
         if not exists:
@@ -350,7 +327,7 @@ class RedisTaskQueue:
             self._task_key(task_id),
             mapping={
                 "status": TaskStatus.COMPLETED,
-                "result": _serialize_result(result),
+                "result": serialize_result(result),
                 "completed_at": now,
             },
         )
@@ -367,7 +344,7 @@ class RedisTaskQueue:
             raise KeyError(msg)
 
         ctx_str = ctx_raw.decode() if isinstance(ctx_raw, bytes) else ctx_raw
-        ctx: AgentRunContext = json.loads(ctx_str)
+        ctx = safe_parse_context(ctx_str, source="redis.fail")
         fail_result = AgentResult(
             success=False,
             output="",
@@ -378,17 +355,17 @@ class RedisTaskQueue:
                     metadata=None,
                 ),
             ),
-            trace_id=ctx["trace_id"],
-            run_id=ctx["run_id"],
+            trace_id=ctx["trace_id"] if ctx else "",
+            run_id=ctx["run_id"] if ctx else "",
         )
 
-        now = _now_iso()
+        now = now_iso()
         pipe = client.pipeline()
         pipe.hset(
             self._task_key(task_id),
             mapping={
                 "status": TaskStatus.FAILED,
-                "result": _serialize_result(fail_result),
+                "result": serialize_result(fail_result),
                 "completed_at": now,
             },
         )
@@ -418,7 +395,7 @@ class RedisTaskQueue:
         ):
             return
 
-        now = _now_iso()
+        now = now_iso()
 
         # Remove from queue list if still pending.
         if status_str == TaskStatus.PENDING:
@@ -461,7 +438,7 @@ class RedisTaskQueue:
     async def _sweep_expired_leases(self) -> None:
         """Requeue claimed tasks whose lease has expired."""
         client = await self._ensure_client()
-        now = _now_iso()
+        now = now_iso()
 
         cursor: int | bytes = 0
         while True:
@@ -516,20 +493,33 @@ class RedisTaskQueue:
 
     # --- Internal helpers ---
 
-    async def _build_record(self, client: aioredis.Redis, task_id: str) -> TaskRecord:
-        """Build a TaskRecord from the Redis hash."""
+    async def _build_record(
+        self, client: aioredis.Redis, task_id: str
+    ) -> TaskRecord | None:
+        """Build a TaskRecord from the Redis hash.
+
+        Returns None if the hash is missing or contains corrupt data.
+        """
         data = await client.hgetall(self._task_key(task_id))
+        if not data:
+            _log.warning("Empty hash for task %s", task_id)
+            return None
 
         def _s(val: Any) -> str:
-            return val.decode() if isinstance(val, bytes) else val
+            return val.decode() if isinstance(val, bytes) else (val or "")
 
         result_raw = data.get(b"result") or data.get("result")
         result: AgentResult | None = None
         if result_raw:
-            result = _deserialize_result(_s(result_raw))
+            try:
+                result = deserialize_result(_s(result_raw))
+            except (json.JSONDecodeError, KeyError):
+                _log.warning("Corrupt result JSON for task %s", task_id)
 
         ctx_raw = data.get(b"context") or data.get("context")
-        ctx: AgentRunContext = json.loads(_s(ctx_raw))
+        ctx = safe_parse_context(_s(ctx_raw), source="redis._build_record")
+        if ctx is None:
+            ctx = {}
 
         claimed_at_raw = data.get(b"claimed_at") or data.get("claimed_at")
         claimed_at = _s(claimed_at_raw) if claimed_at_raw else None
@@ -537,12 +527,12 @@ class RedisTaskQueue:
         completed_at_raw = data.get(b"completed_at") or data.get("completed_at")
         completed_at = _s(completed_at_raw) if completed_at_raw else None
 
-        return {
+        return {  # type: ignore[return-value]
             "task_id": _s(data.get(b"task_id") or data.get("task_id")),
             "agent_id": _s(data.get(b"agent_id") or data.get("agent_id")),
             "command": _s(data.get(b"command") or data.get("command")),
             "pool": _s(data.get(b"pool") or data.get("pool")),
-            "context": ctx,
+            "context": ctx,  # type: ignore[typeddict-item]
             "status": TaskStatus(_s(data.get(b"status") or data.get("status"))),
             "result": result,
             "created_at": _s(data.get(b"created_at") or data.get("created_at")),

@@ -88,6 +88,44 @@ async def test_cli_custom_handler_overrides_default(tmp_path: Path) -> None:
     assert seen == [{"type": "progress", "status": "x"}]
 
 
+async def test_on_after_supplements_default(tmp_path: Path) -> None:
+    """on_after handlers run after the default, not instead of it."""
+    cmd = _write_emitter(
+        tmp_path,
+        [
+            {"type": "progress", "status": "working"},
+            {"type": "result", "output": "done"},
+        ],
+    )
+
+    after_seen: list[dict[str, object]] = []
+    result = (
+        await AgentStream.cli(cmd=cmd).on_after("progress", after_seen.append).run()
+    )
+    assert result == "done"
+    # After-handler ran (got the event).
+    assert len(after_seen) == 1
+    assert after_seen[0]["status"] == "working"
+
+
+async def test_on_after_error_does_not_crash_stream(tmp_path: Path) -> None:
+    """Errors in on_after handlers are logged, not propagated."""
+    cmd = _write_emitter(
+        tmp_path,
+        [
+            {"type": "progress", "status": "x"},
+            {"type": "result", "output": "ok"},
+        ],
+    )
+
+    def bad_handler(event: dict[str, object]) -> None:
+        raise RuntimeError("intentional failure")
+
+    result = await AgentStream.cli(cmd=cmd).on_after("progress", bad_handler).run()
+    # Stream completes despite handler failure.
+    assert result == "ok"
+
+
 async def test_cli_unknown_signal_type_raises(tmp_path: Path) -> None:
     cmd = _write_emitter(
         tmp_path,
@@ -104,6 +142,20 @@ async def test_cli_error_event_raises_semantic_error(tmp_path: Path) -> None:
     )
     with pytest.raises(SemanticError):
         await AgentStream.cli(cmd=cmd).run()
+
+
+async def test_cli_stdin_payload_delivered(tmp_path: Path) -> None:
+    """AgentStream.cli with stdin_payload writes JSON to subprocess stdin."""
+    script = tmp_path / "echo_stdin.py"
+    script.write_text(
+        "import json, sys\n"
+        "data = json.load(sys.stdin)\n"
+        "print(json.dumps({'type': 'result', 'output': data['task']}))\n"
+    )
+    cmd = [sys.executable, str(script)]
+    payload = {"task": "hello", "context": [], "command": "fast", "agent_id": "x"}
+    result = await AgentStream.cli(cmd, stdin_payload=payload).run()
+    assert result == "hello"
 
 
 def test_grpc_constructor_reserved() -> None:

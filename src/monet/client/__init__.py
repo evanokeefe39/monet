@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from monet.client._events import (
     AgentProgress,
+    ChatSummary,
     ExecutionInterrupt,
     PendingDecision,
     PlanApproved,
@@ -37,11 +38,10 @@ from monet.client._events import (
 )
 from monet.client._run_state import _RunState, _RunStore
 from monet.client._wire import (
-    _ENTRY_GRAPH,
-    _EXECUTION_GRAPH,
-    _PLANNING_GRAPH,
+    MONET_CHAT_NAME_KEY,
     MONET_GRAPH_KEY,
     MONET_RUN_ID_KEY,
+    chat_input,
     create_thread,
     entry_input,
     execution_input,
@@ -60,6 +60,7 @@ _log = logging.getLogger("monet.client")
 
 __all__ = [
     "AgentProgress",
+    "ChatSummary",
     "ExecutionInterrupt",
     "MonetClient",
     "PendingDecision",
@@ -107,9 +108,20 @@ class MonetClient:
     - **Results** — inspect completed runs and their artifacts
     """
 
-    def __init__(self, url: str = "http://localhost:2026") -> None:
+    def __init__(
+        self,
+        url: str = "http://localhost:2026",
+        *,
+        graph_ids: dict[str, str] | None = None,
+    ) -> None:
         self._client: LangGraphClient = make_client(url)
         self._store = _RunStore()
+        if graph_ids is not None:
+            self._graph_ids = graph_ids
+        else:
+            from monet._graph_config import DEFAULT_GRAPH_ROLES
+
+            self._graph_ids = DEFAULT_GRAPH_ROLES.copy()
 
     # ── Run lifecycle ───────────────────────────────────────────
 
@@ -144,7 +156,9 @@ class MonetClient:
             rs.phase = "entry"
             rs.entry_thread = await self._create_tagged_thread(rid, "entry")
 
-            await self._drain(rs.entry_thread, _ENTRY_GRAPH, entry_input(topic, rid))
+            await self._drain(
+                rs.entry_thread, self._graph_ids["entry"], entry_input(topic, rid)
+            )
             values, _ = await get_state_values(self._client, rs.entry_thread)
 
             triage = values.get("triage") or {}
@@ -166,7 +180,7 @@ class MonetClient:
 
             await self._drain(
                 rs.planning_thread,
-                _PLANNING_GRAPH,
+                self._graph_ids["planning"],
                 planning_input(topic, rid),
             )
             values, nxt = await get_state_values(self._client, rs.planning_thread)
@@ -176,7 +190,7 @@ class MonetClient:
                 if auto_approve:
                     await self._drain(
                         rs.planning_thread,
-                        _PLANNING_GRAPH,
+                        self._graph_ids["planning"],
                         command={"resume": {"approved": True}},
                     )
                     values, _ = await get_state_values(self._client, rs.planning_thread)
@@ -329,7 +343,7 @@ class MonetClient:
         thread = await self._find_thread(run_id, "planning")
         await self._drain(
             thread,
-            _PLANNING_GRAPH,
+            self._graph_ids["planning"],
             command={"resume": {"approved": True}},
         )
         values, _ = await get_state_values(self._client, thread)
@@ -364,7 +378,7 @@ class MonetClient:
         thread = await self._find_thread(run_id, "planning")
         await self._drain(
             thread,
-            _PLANNING_GRAPH,
+            self._graph_ids["planning"],
             command={"resume": {"approved": False, "feedback": feedback}},
         )
         values, nxt = await get_state_values(self._client, thread)
@@ -391,7 +405,7 @@ class MonetClient:
         thread = await self._find_thread(run_id, "planning")
         await self._drain(
             thread,
-            _PLANNING_GRAPH,
+            self._graph_ids["planning"],
             command={"resume": {"approved": False, "feedback": None}},
         )
         rs = self._store.get(run_id)
@@ -409,7 +423,7 @@ class MonetClient:
         thread = await self._find_thread(run_id, "execution")
         await self._drain(
             thread,
-            _EXECUTION_GRAPH,
+            self._graph_ids["execution"],
             command={"resume": {"action": "abort"}},
         )
         rs = self._store.get(run_id)
@@ -430,6 +444,132 @@ class MonetClient:
             for ptr in wr.get("artifacts") or []:
                 artifacts.append(ptr)
         return artifacts
+
+    # ── Chat ────────────────────────────────────────────────────
+
+    async def create_chat(self, *, name: str | None = None) -> str:
+        """Create a new chat thread and return its thread_id.
+
+        Args:
+            name: Optional human-readable name for the session.
+        """
+        metadata: dict[str, Any] = {MONET_GRAPH_KEY: "chat"}
+        if name:
+            metadata[MONET_CHAT_NAME_KEY] = name
+        return await create_thread(self._client, metadata=metadata)
+
+    async def list_chats(self, *, limit: int = 20) -> list[ChatSummary]:
+        """List recent chat sessions sorted by last activity."""
+        threads = await self._client.threads.search(
+            metadata={MONET_GRAPH_KEY: "chat"},
+            limit=limit,
+            sort_by="updated_at",
+            sort_order="desc",
+        )
+        summaries: list[ChatSummary] = []
+        for t in threads:
+            meta = t.get("metadata") or {}
+            tid = str(t.get("thread_id", ""))
+            name = str(meta.get(MONET_CHAT_NAME_KEY, ""))
+
+            # Count messages from thread state if available.
+            msg_count = 0
+            try:
+                values, _ = await get_state_values(self._client, tid)
+                messages = values.get("messages") or []
+                msg_count = len(messages)
+            except Exception:
+                pass  # Thread may not have state yet.
+
+            summaries.append(
+                ChatSummary(
+                    thread_id=tid,
+                    name=name,
+                    message_count=msg_count,
+                    created_at=str(t.get("created_at", "")),
+                    updated_at=str(t.get("updated_at", "")),
+                )
+            )
+        return summaries
+
+    async def send_message(self, thread_id: str, message: str) -> AsyncIterator[str]:
+        """Send a user message to a chat thread and yield response tokens.
+
+        Streams the chat graph response, yielding content strings as
+        they arrive. The full response is checkpointed in the thread.
+        """
+        input_data = chat_input(message)
+        async for mode, data in stream_run(
+            self._client,
+            thread_id,
+            self._graph_ids["chat"],
+            input=input_data,
+        ):
+            if mode == "error":
+                raise RuntimeError(f"server error: {data}")
+            # Extract assistant content from updates.
+            if mode == "updates" and isinstance(data, dict):
+                messages = data.get("messages") or data.get("respond", {}).get(
+                    "messages", []
+                )
+                if isinstance(messages, list):
+                    for msg in messages:
+                        if isinstance(msg, dict) and msg.get("role") == "assistant":
+                            content = msg.get("content", "")
+                            if content:
+                                yield content
+
+    async def send_context(self, thread_id: str, content: str) -> None:
+        """Append a context message to a chat thread.
+
+        Used to inject run summaries or attached results into the
+        conversation history.
+        """
+        input_data = {"messages": [{"role": "system", "content": content}]}
+        await self._drain(thread_id, self._graph_ids["chat"], input=input_data)
+
+    async def get_chat_history(self, thread_id: str) -> list[dict[str, Any]]:
+        """Fetch the message history from a chat thread."""
+        values, _ = await get_state_values(self._client, thread_id)
+        return values.get("messages") or []
+
+    async def rename_chat(self, thread_id: str, name: str) -> None:
+        """Update a chat thread's display name."""
+        await self._client.threads.update(
+            thread_id, metadata={MONET_CHAT_NAME_KEY: name}
+        )
+
+    async def get_most_recent_chat(self) -> str | None:
+        """Return the thread_id of the most recently active chat.
+
+        Returns ``None`` if no chat threads exist.
+        """
+        threads = await self._client.threads.search(
+            metadata={MONET_GRAPH_KEY: "chat"},
+            limit=1,
+            sort_by="updated_at",
+            sort_order="desc",
+        )
+        if not threads:
+            return None
+        return str(threads[0]["thread_id"])
+
+    # ── Graph discovery ──────────────────────────────────────────
+
+    async def list_graphs(self) -> list[str]:
+        """Return graph IDs available on the connected server.
+
+        Uses the LangGraph assistants API to discover registered graphs.
+        """
+        assistants = await self._client.assistants.search(limit=100)
+        graph_ids: list[str] = []
+        seen: set[str] = set()
+        for a in assistants:
+            gid = a.get("graph_id", "")
+            if gid and gid not in seen:
+                seen.add(gid)
+                graph_ids.append(gid)
+        return sorted(graph_ids)
 
     # ── Private helpers ─────────────────────────────────────────
 
@@ -513,7 +653,7 @@ class MonetClient:
         async for mode, data in stream_run(
             self._client,
             thread_id,
-            _EXECUTION_GRAPH,
+            self._graph_ids["execution"],
             input=input_data,
             command=command,
         ):
