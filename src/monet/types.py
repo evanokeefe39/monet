@@ -17,6 +17,7 @@ __all__ = [
     "ArtifactPointer",
     "Signal",
     "SignalType",
+    "find_artifact",
 ]
 
 # --- Signals (list-based accumulation model) ---
@@ -49,11 +50,26 @@ class AgentMeta(TypedDict):
 # --- Artifact pointer ---
 
 
-class ArtifactPointer(TypedDict):
-    """Reference to an artifact in the catalogue."""
-
+class _ArtifactPointerRequired(TypedDict):
     artifact_id: str
     url: str
+
+
+class ArtifactPointer(_ArtifactPointerRequired, total=False):
+    """Reference to an artifact in the catalogue.
+
+    key is an optional semantic tag. Set at write time, consumed
+    by find_artifact() at lookup time.
+    """
+
+    key: str
+
+
+def find_artifact(
+    artifacts: tuple[ArtifactPointer, ...], key: str
+) -> ArtifactPointer | None:
+    """Return the first artifact matching a semantic key, or None."""
+    return next((a for a in artifacts if a.get("key") == key), None)
 
 
 # --- Agent run context ---

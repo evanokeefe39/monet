@@ -9,6 +9,8 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from monet.types import ArtifactPointer, Signal
 
 
@@ -19,15 +21,33 @@ _signal_collector: ContextVar[list[Signal] | None] = ContextVar(
 )
 
 
+# ── Progress publisher — set by the worker before each invocation ─────────────
+# The worker wraps each task with a publisher that forwards into a bounded
+# asyncio.Queue drained asynchronously to task_queue.publish_progress(). This
+# lets emit_progress() (a sync call) hand events off without blocking the
+# agent on transport I/O.
+
+_progress_publisher: ContextVar[Callable[[dict[str, Any]], None] | None] = ContextVar(
+    "_progress_publisher", default=None
+)
+
+
 # ── SDK functions ──────────────────────────────────────────────────────────────
 
 
 def emit_progress(data: dict[str, Any]) -> None:
-    """Emit a progress event into the LangGraph stream.
+    """Emit a progress event.
 
-    No-op outside the LangGraph execution context.
-    Python 3.11+ required for correct async context propagation.
+    Resolution order:
+    1. If a worker-side publisher is set in ContextVar, call it.
+       The publisher forwards into a bounded queue drained by the worker.
+    2. Otherwise, fall back to the LangGraph stream writer (in-graph use).
+    3. Otherwise, no-op.
     """
+    publisher = _progress_publisher.get()
+    if publisher is not None:
+        publisher(data)
+        return
     try:
         from langgraph.config import get_stream_writer
 
@@ -58,6 +78,7 @@ async def write_artifact(
     confidence: float = 0.0,
     completeness: str = "complete",
     sensitivity_label: str = "internal",
+    key: str | None = None,
 ) -> ArtifactPointer:
     """Write content to the catalogue and register the pointer.
 
@@ -67,6 +88,9 @@ async def write_artifact(
     """
     from .catalogue import get_catalogue
 
+    kwargs: dict[str, str] = {}
+    if key is not None:
+        kwargs["key"] = key
     return await get_catalogue().write(
         content=content,
         content_type=content_type,
@@ -74,4 +98,5 @@ async def write_artifact(
         confidence=confidence,
         completeness=completeness,
         sensitivity_label=sensitivity_label,
+        **kwargs,
     )

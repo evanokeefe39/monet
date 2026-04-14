@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,8 +29,8 @@ def configure_lazy_worker(queue: TaskQueue) -> None:
     ``asyncio.create_task`` inside the first ``enqueue`` call, when the
     loop is guaranteed to be running.
     """
-    from monet.core.queue_worker import run_worker
     from monet.core.registry import default_registry
+    from monet.queue._worker import run_worker
 
     _worker_task: asyncio.Task[Any] | None = None
     _orig_enqueue = queue.enqueue
@@ -91,16 +92,26 @@ async def bootstrap(
         configure_tracing()
 
     # 2. Catalogue
-    from monet.catalogue import catalogue_from_env, configure_catalogue
+    # In monolith mode (default), the server configures the catalogue and
+    # the in-process worker inherits it. In distributed mode (set
+    # MONET_DISTRIBUTED=1), the server has no need to read or write
+    # artifacts — workers configure their own catalogue at startup.
+    distributed_mode = os.environ.get("MONET_DISTRIBUTED", "").lower() in (
+        "1",
+        "true",
+    )
+    if not distributed_mode:
+        from monet.catalogue import catalogue_from_env, configure_catalogue
 
-    root = Path(catalogue_root) if catalogue_root else None
-    service = catalogue_from_env(default_root=root)
-    configure_catalogue(service)
+        root = Path(catalogue_root) if catalogue_root else None
+        service = catalogue_from_env(default_root=root)
+        configure_catalogue(service)
 
     # 3. Manifest declarations (supplemental to @agent auto-declarations)
-    if agents:
-        from monet.core.manifest import default_manifest
+    from monet.agent_manifest import configure_agent_manifest
+    from monet.core.manifest import default_manifest
 
+    if agents:
         for cap in agents:
             default_manifest.declare(
                 cap["agent_id"],
@@ -109,9 +120,13 @@ async def bootstrap(
                 pool=cap.get("pool", "local"),
             )
 
+    # Monolith: configure manifest handle for in-process worker. Distributed
+    # workers configure_agent_manifest() independently in their startup.
+    configure_agent_manifest(default_manifest)
+
     # 4. Queue
     if queue is None:
-        from monet.core.queue_memory import InMemoryTaskQueue
+        from monet.queue.backends.memory import InMemoryTaskQueue
 
         queue = InMemoryTaskQueue()
 
@@ -124,8 +139,8 @@ async def bootstrap(
         configure_lazy_worker(queue)
         return None
 
-    from monet.core.queue_worker import run_worker
     from monet.core.registry import default_registry
+    from monet.queue._worker import run_worker
 
     worker_task: asyncio.Task[Any] = asyncio.create_task(
         run_worker(queue, default_registry)

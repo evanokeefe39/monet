@@ -8,6 +8,7 @@ from monet.types import (
     ArtifactPointer,
     Signal,
     SignalType,
+    find_artifact,
 )
 
 # --- Signal and SignalType ---
@@ -54,6 +55,55 @@ def test_artifact_pointer() -> None:
 def test_artifact_pointer_is_dict() -> None:
     p: ArtifactPointer = {"artifact_id": "x", "url": "y"}
     assert isinstance(p, dict)
+
+
+def test_artifact_pointer_with_key() -> None:
+    p: ArtifactPointer = {"artifact_id": "x", "url": "y", "key": "work_brief"}
+    assert p["key"] == "work_brief"
+
+
+def test_artifact_pointer_without_key() -> None:
+    p: ArtifactPointer = {"artifact_id": "x", "url": "y"}
+    assert "key" not in p
+
+
+# --- find_artifact ---
+
+
+def test_find_artifact_no_artifacts() -> None:
+    assert find_artifact((), "work_brief") is None
+
+
+def test_find_artifact_no_match() -> None:
+    ptrs: tuple[ArtifactPointer, ...] = (
+        ArtifactPointer(artifact_id="a1", url="u1", key="other"),
+    )
+    assert find_artifact(ptrs, "work_brief") is None
+
+
+def test_find_artifact_single_match() -> None:
+    ptrs: tuple[ArtifactPointer, ...] = (
+        ArtifactPointer(artifact_id="a1", url="u1", key="work_brief"),
+    )
+    result = find_artifact(ptrs, "work_brief")
+    assert result is not None
+    assert result["artifact_id"] == "a1"
+
+
+def test_find_artifact_first_match_wins() -> None:
+    ptrs: tuple[ArtifactPointer, ...] = (
+        ArtifactPointer(artifact_id="a1", url="u1", key="work_brief"),
+        ArtifactPointer(artifact_id="a2", url="u2", key="work_brief"),
+    )
+    result = find_artifact(ptrs, "work_brief")
+    assert result is not None
+    assert result["artifact_id"] == "a1"
+
+
+def test_find_artifact_without_key_field() -> None:
+    """Artifacts without a key field are skipped."""
+    ptrs: tuple[ArtifactPointer, ...] = (ArtifactPointer(artifact_id="a1", url="u1"),)
+    assert find_artifact(ptrs, "work_brief") is None
 
 
 # --- AgentRunContext (TypedDict) ---

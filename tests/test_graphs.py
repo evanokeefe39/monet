@@ -64,7 +64,19 @@ _TRIAGE = (
     '{"complexity": "complex", "suggested_agents": ["writer"],'
     ' "requires_planning": true}'
 )
+# New flat-DAG brief — matches WorkBrief Pydantic schema.
 _BRIEF = (
+    '{"goal": "Test goal",'
+    ' "nodes": ['
+    '{"id": "draft", "depends_on": [],'
+    ' "agent_id": "writer", "command": "deep",'
+    ' "task": "write a thing"}'
+    "],"
+    ' "is_sensitive": false}'
+)
+# Legacy wave-schema brief — still consumed directly by execution_graph
+# tests until Step 6 rewrites the execution graph.
+_LEGACY_WAVE_BRIEF = (
     '{"goal": "Test goal", "is_sensitive": false, "phases": ['
     '{"name": "Draft", "waves": [{"items": ['
     '{"agent_id": "writer", "command": "deep", "task": "write a thing"}'
@@ -98,7 +110,10 @@ async def test_planning_hitl_approve() -> None:
             Command(resume={"approved": True, "feedback": None}), config=config
         )
     assert result["plan_approved"] is True
-    assert result["work_brief"]["goal"] == "Test goal"
+    # Pointer-only state: the full brief lives in the catalogue, only
+    # pointer + routing skeleton are in LangGraph state.
+    assert result["work_brief_pointer"]["key"] == "work_brief"
+    assert result["routing_skeleton"]["goal"] == "Test goal"
 
 
 async def test_planning_hitl_reject_then_approve() -> None:
@@ -123,55 +138,65 @@ async def test_planning_hitl_reject_then_approve() -> None:
     assert result["plan_approved"] is True
 
 
-async def test_execution_graph_runs_all_waves() -> None:
-    with (
-        patch("monet.agents.writer._get_model", return_value=_mock("Some content")),
-        patch("monet.agents.qa._get_model", return_value=_mock(_QA)),
-    ):
-        import json as _json
+async def _write_brief_artifact(brief_json: str) -> dict[str, str]:
+    """Write a WorkBrief JSON to the in-memory catalogue and return its pointer.
 
-        brief = _json.loads(_BRIEF)
+    Tests that drive the execution graph directly need a pointer in state
+    even though the inject_plan_context worker hook is implemented in Step 7.
+    """
+    from monet import get_catalogue
+
+    pointer = await get_catalogue().write(
+        content=brief_json.encode(),
+        content_type="application/json",
+        summary="test brief",
+        confidence=1.0,
+        completeness="complete",
+        key="work_brief",
+    )
+    return dict(pointer)
+
+
+_BRIEF_SKELETON: dict[str, Any] = {
+    "goal": "Test goal",
+    "nodes": [
+        {
+            "id": "draft",
+            "depends_on": [],
+            "agent_id": "writer",
+            "command": "deep",
+        },
+    ],
+}
+
+
+async def test_execution_graph_runs_dag() -> None:
+    """Execution graph runs a simple flat DAG to completion."""
+    with patch("monet.agents.writer._get_model", return_value=_mock("Some content")):
+        pointer = await _write_brief_artifact(_BRIEF)
         graph = build_execution_graph().compile(checkpointer=MemorySaver())
         result = await graph.ainvoke(
             {
-                "work_brief": brief,
+                "work_brief_pointer": pointer,
+                "routing_skeleton": _BRIEF_SKELETON,
                 "trace_id": "t",
                 "run_id": "r",
-                "current_phase_index": 0,
-                "current_wave_index": 0,
-                "wave_results": [],
-                "wave_reflections": [],
-                "completed_phases": [],
-                "revision_count": 0,
             },
             config={"configurable": {"thread_id": "exec-1"}},  # type: ignore[arg-type]
         )
-    assert len(result["wave_results"]) == 1
-    assert len(result["wave_reflections"]) == 1
-    assert result["wave_reflections"][0]["verdict"] == "pass"
+    # Node ran, marked complete, no abort.
+    assert result.get("abort_reason") is None
+    assert "draft" in (result.get("completed_node_ids") or [])
+    assert len(result.get("wave_results") or []) == 1
+    assert result["wave_results"][0]["node_id"] == "draft"
+    assert result["wave_results"][0]["success"] is True
 
 
-async def test_execution_graph_retry_after_blocking_signal() -> None:
-    """Regression guard for the infinite interrupt loop.
-
-    When a wave attempt emits a blocking signal (e.g. NeedsHumanReview),
-    the graph interrupts at human_interrupt. A human-initiated retry
-    should rerun the wave from scratch, append fresh wave_results, and
-    — critically — collect_wave must only evaluate the *latest* attempt
-    per item_index. Without that filter, the stale blocking signal
-    from the first attempt persists in the append-only wave_results
-    list and re-triggers human_interrupt forever.
-    """
-    import json as _json
-
+async def test_execution_graph_blocking_signal_interrupts() -> None:
+    """A blocking signal from an agent triggers human_interrupt, resume retries."""
     from monet import agent as agent_decorator
     from monet.exceptions import NeedsHumanReview
 
-    brief = _json.loads(_BRIEF)
-
-    # Override writer/deep with a counter-driven agent: raise on the
-    # first call (→ NEEDS_HUMAN_REVIEW signal → blocking), succeed on
-    # the retry.
     call_count = {"n": 0}
 
     @agent_decorator(agent_id="writer", command="deep")
@@ -181,99 +206,53 @@ async def test_execution_graph_retry_after_blocking_signal() -> None:
             raise NeedsHumanReview(reason="confidence too low on first pass")
         return "Successful content on retry"
 
-    with patch("monet.agents.qa._get_model", return_value=_mock(_QA)):
-        graph = build_execution_graph().compile(checkpointer=MemorySaver())
-        config: RunnableConfig = {"configurable": {"thread_id": "exec-retry"}}
-        # First pass: wave hits NEEDS_HUMAN_REVIEW → interrupt.
-        await graph.ainvoke(
-            {
-                "work_brief": brief,
-                "trace_id": "t",
-                "run_id": "r",
-                "current_phase_index": 0,
-                "current_wave_index": 0,
-                "wave_results": [],
-                "wave_reflections": [],
-                "completed_phases": [],
-                "revision_count": 0,
-            },
-            config=config,
-        )
-        state = await graph.aget_state(config)
-        assert "human_interrupt" in state.next, (
-            "Expected graph to pause at human_interrupt after blocking signal"
-        )
+    pointer = await _write_brief_artifact(_BRIEF)
+    graph = build_execution_graph().compile(checkpointer=MemorySaver())
+    config: RunnableConfig = {"configurable": {"thread_id": "exec-retry"}}
 
-        # Retry: resume without abort_reason so route_after_interrupt
-        # sends the graph back to prepare_wave for a fresh attempt.
-        result = await graph.ainvoke(Command(resume={"action": "retry"}), config=config)
+    # First pass: hits NEEDS_HUMAN_REVIEW → interrupt.
+    await graph.ainvoke(
+        {
+            "work_brief_pointer": pointer,
+            "routing_skeleton": _BRIEF_SKELETON,
+            "trace_id": "t",
+            "run_id": "r",
+        },
+        config=config,
+    )
+    state = await graph.aget_state(config)
+    assert "human_interrupt" in state.next, (
+        "Expected graph to pause at human_interrupt after blocking signal"
+    )
 
-    # The graph must complete past the stale blocking attempt.
-    # Without the _latest_attempts filter, collect_wave would re-detect
-    # the stale NEEDS_HUMAN_REVIEW from attempt 1 and loop forever.
+    # Resume without abort → loops back to dispatch, retries the failed node.
+    result = await graph.ainvoke(Command(resume={"action": "retry"}), config=config)
     assert call_count["n"] == 2, "Writer should have run exactly twice"
     assert result.get("abort_reason") is None
-    # Both wave_result entries are still in the append-only list, but
-    # the graph advanced past them.
-    assert len(result["wave_results"]) == 2
-    # The latest wave_reflection should see the successful retry only.
-    assert any(
-        ref.get("verdict") == "pass" for ref in result.get("wave_reflections", [])
+    assert "draft" in (result.get("completed_node_ids") or [])
+
+
+async def test_execution_graph_aborts_on_node_failure() -> None:
+    """A non-blocking node failure aborts the run."""
+    from monet import agent as agent_decorator
+
+    @agent_decorator(agent_id="writer", command="deep")
+    async def boom(task: str) -> str:
+        raise RuntimeError("catastrophe")
+
+    pointer = await _write_brief_artifact(_BRIEF)
+    graph = build_execution_graph().compile(checkpointer=MemorySaver())
+    result = await graph.ainvoke(
+        {
+            "work_brief_pointer": pointer,
+            "routing_skeleton": _BRIEF_SKELETON,
+            "trace_id": "t",
+            "run_id": "r",
+        },
+        config={"configurable": {"thread_id": "exec-abort"}},  # type: ignore[arg-type]
     )
-
-
-async def test_wave_reflection_retries_on_qa_failure() -> None:
-    """QA infrastructure failure must produce verdict="fail", not silent pass.
-
-    When wave_reflection calls qa/fast and the QA invocation itself
-    fails (e.g. Groq 403), the reflection must record verdict="fail"
-    so the existing revision loop retries the wave. Previously,
-    wave_reflection defaulted to verdict="pass" on any non-output
-    result, silently shipping defects downstream. The fix adds an
-    explicit ``not result.success`` branch before the output-parsing
-    branches.
-    """
-    import json as _json
-
-    brief = _json.loads(_BRIEF)
-
-    # QA model: raise on the first call (simulating a provider 403),
-    # succeed on the second (simulating a transient recovery).
-    qa_model = AsyncMock()
-    qa_403 = Exception("Error code: 403 - {'error': {'message': 'Access denied'}}")
-    qa_ok = AIMessage(content=_QA)
-    qa_model.ainvoke = AsyncMock(side_effect=[qa_403, qa_ok])
-
-    with (
-        patch("monet.agents.writer._get_model", return_value=_mock("Some content")),
-        patch("monet.agents.qa._get_model", return_value=qa_model),
-    ):
-        graph = build_execution_graph().compile(checkpointer=MemorySaver())
-        result = await graph.ainvoke(
-            {
-                "work_brief": brief,
-                "trace_id": "t",
-                "run_id": "r",
-                "current_phase_index": 0,
-                "current_wave_index": 0,
-                "wave_results": [],
-                "wave_reflections": [],
-                "completed_phases": [],
-                "revision_count": 0,
-            },
-            config={"configurable": {"thread_id": "exec-qa-fail"}},  # type: ignore[arg-type]
-        )
-
-    reflections = result.get("wave_reflections", [])
-    # First reflection: QA failed → verdict must be "fail" (not "pass")
-    assert reflections[0]["verdict"] == "fail", (
-        f"Expected 'fail' on QA failure, got '{reflections[0]['verdict']}'"
-    )
-    assert "QA failed" in reflections[0]["notes"]
-    # Second reflection: QA recovered → verdict "pass"
-    assert reflections[1]["verdict"] == "pass"
-    # Run completed (the revision loop retried and succeeded).
-    assert len(result.get("completed_phases", [])) == 1
+    assert result.get("abort_reason") is not None
+    assert "draft" not in (result.get("completed_node_ids") or [])
 
 
 async def test_run_end_to_end() -> None:
@@ -323,21 +302,20 @@ async def test_run_end_to_end() -> None:
             config=planning_config,
         )
         assert planning_state.get("plan_approved") is True
+        assert planning_state.get("work_brief_pointer") is not None
+        assert planning_state.get("routing_skeleton") is not None
 
-        # Execution
+        # Execution — pointer-only, DAG traversal.
         execution = build_execution_graph().compile(checkpointer=checkpointer)
         exec_state = await execution.ainvoke(
             {
-                "work_brief": planning_state["work_brief"],
+                "work_brief_pointer": planning_state["work_brief_pointer"],
+                "routing_skeleton": planning_state["routing_skeleton"],
                 "trace_id": thread_id,
                 "run_id": thread_id,
-                "current_phase_index": 0,
-                "current_wave_index": 0,
-                "wave_results": [],
-                "wave_reflections": [],
-                "completed_phases": [],
-                "revision_count": 0,
             },
             config={"configurable": {"thread_id": f"{thread_id}-execution"}},
         )
+    assert exec_state.get("abort_reason") is None
+    assert "draft" in (exec_state.get("completed_node_ids") or [])
     assert len(exec_state["wave_results"]) == 1

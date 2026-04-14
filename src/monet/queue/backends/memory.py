@@ -8,15 +8,29 @@ No persistence, no external deps.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from monet.queue import TaskRecord, TaskStatus
 from monet.signals import SignalType
 from monet.types import AgentResult, AgentRunContext, Signal
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 __all__ = ["InMemoryTaskQueue"]
+
+_TERMINAL_STATUSES = (
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+)
+
+# Subscriber queue size. Drops on full — progress is best-effort.
+_SUBSCRIBER_QUEUE_MAX = 64
 
 
 class InMemoryTaskQueue:
@@ -34,6 +48,10 @@ class InMemoryTaskQueue:
         self._pool_queues: dict[str, asyncio.Queue[str]] = defaultdict(asyncio.Queue)
         self._completions: dict[str, asyncio.Event] = {}
         self._max_pending = max_pending or self.DEFAULT_MAX_PENDING
+        # Subscriber bookkeeping for progress events.
+        self._progress_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = (
+            defaultdict(set)
+        )
 
     @property
     def pending_count(self) -> int:
@@ -182,14 +200,51 @@ class InMemoryTaskQueue:
         record = self._tasks.get(task_id)
         if record is None:
             return
-        if record["status"] in (
-            TaskStatus.COMPLETED,
-            TaskStatus.FAILED,
-            TaskStatus.CANCELLED,
-        ):
+        if record["status"] in _TERMINAL_STATUSES:
             return
         record["status"] = TaskStatus.CANCELLED
         record["completed_at"] = datetime.now(UTC).isoformat()
         event = self._completions.get(task_id)
         if event:
             event.set()
+
+    # --- Progress streaming ---
+
+    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+        """Fan out an event to all subscribers of this task.
+
+        Drops on full subscriber queue — progress is best-effort.
+        """
+        for sub_q in self._progress_subscribers.get(task_id, set()):
+            # Subscriber is slow → drop rather than block.
+            with contextlib.suppress(asyncio.QueueFull):
+                sub_q.put_nowait(data)
+
+    async def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield progress events until the task reaches a terminal state."""
+        sub_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=_SUBSCRIBER_QUEUE_MAX
+        )
+        self._progress_subscribers[task_id].add(sub_q)
+        try:
+            while True:
+                record = self._tasks.get(task_id)
+                # Task cleaned up (poll_result consumed it) OR reached a
+                # terminal status — either way, drain and exit.
+                terminal = record is None or record["status"] in _TERMINAL_STATUSES
+                if terminal:
+                    # Let any final publish_progress calls resolve before
+                    # we drain — closes the publish-vs-status-check race.
+                    await asyncio.sleep(0)
+                    while not sub_q.empty():
+                        yield sub_q.get_nowait()
+                    return
+                try:
+                    data = await asyncio.wait_for(sub_q.get(), timeout=1.0)
+                    yield data
+                except TimeoutError:
+                    continue
+        finally:
+            self._progress_subscribers[task_id].discard(sub_q)
+            if not self._progress_subscribers[task_id]:
+                self._progress_subscribers.pop(task_id, None)

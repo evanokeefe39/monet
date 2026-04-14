@@ -44,7 +44,7 @@ def create_app(
     config = load_config(config_path)
 
     if queue is None:
-        from monet.core.queue_memory import InMemoryTaskQueue
+        from monet.queue.backends.memory import InMemoryTaskQueue
 
         queue = InMemoryTaskQueue()
 

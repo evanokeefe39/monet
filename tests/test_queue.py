@@ -6,10 +6,8 @@ import asyncio
 
 import pytest
 
-from monet.core.queue_memory import InMemoryTaskQueue
-from monet.core.queue_worker import run_worker
 from monet.core.registry import AgentRegistry
-from monet.queue import TaskStatus
+from monet.queue import InMemoryTaskQueue, TaskStatus, run_worker
 from monet.types import AgentResult, AgentRunContext, SignalType
 
 

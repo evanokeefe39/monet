@@ -1,3 +1,4 @@
+# mypy: disable-error-code="no-untyped-def,type-arg,arg-type,misc"
 """Tests for RedisTaskQueue.
 
 Skipped entirely if the ``redis`` package is not installed or if
@@ -60,7 +61,7 @@ async def redis_url():
 @pytest.fixture
 async def queue(redis_url: str):
     """Create a RedisTaskQueue with a unique prefix for test isolation."""
-    from monet.core.queue_redis import RedisTaskQueue
+    from monet.queue import RedisTaskQueue
 
     prefix = f"monet_test_{uuid.uuid4().hex[:8]}"
     q = RedisTaskQueue(redis_url, prefix=prefix, lease_ttl=5)
@@ -80,7 +81,7 @@ async def queue(redis_url: str):
 @pytest.fixture
 async def polling_queue(redis_url: str):
     """Create a RedisTaskQueue in polling mode."""
-    from monet.core.queue_redis import RedisTaskQueue
+    from monet.queue import RedisTaskQueue
 
     prefix = f"monet_test_{uuid.uuid4().hex[:8]}"
     q = RedisTaskQueue(redis_url, prefix=prefix, use_polling=True)
@@ -238,7 +239,7 @@ async def test_polling_mode(polling_queue) -> None:
 @pytest.mark.asyncio
 async def test_prefix_isolation(redis_url: str) -> None:
     """Two queues with different prefixes don't interfere."""
-    from monet.core.queue_redis import RedisTaskQueue
+    from monet.queue import RedisTaskQueue
 
     prefix_a = f"monet_test_{uuid.uuid4().hex[:8]}"
     prefix_b = f"monet_test_{uuid.uuid4().hex[:8]}"

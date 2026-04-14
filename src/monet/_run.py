@@ -105,30 +105,52 @@ async def run(
             yield RunFailed(run_id=rid, error="plan not approved")
             return
 
-        brief = planning_state.get("work_brief") or {}
+        pointer = planning_state.get("work_brief_pointer")
+        skeleton_raw = planning_state.get("routing_skeleton")
+        if pointer is None or skeleton_raw is None:
+            yield RunFailed(
+                run_id=rid,
+                error="plan approved but missing pointer or routing_skeleton",
+            )
+            return
+
+        from monet.orchestration._state import RoutingSkeleton
+
+        skeleton = RoutingSkeleton.model_validate(skeleton_raw)
         yield PlanApproved(run_id=rid)
+        # PlanReady: surface the flat node list as a single-phase summary
+        # so existing client renderers keep working. Step 8 may redesign
+        # this event.
         yield PlanReady(
             run_id=rid,
-            goal=brief.get("goal", ""),
-            phases=brief.get("phases") or [],
-            assumptions=brief.get("assumptions") or [],
+            goal=skeleton.goal,
+            phases=[
+                {
+                    "name": "Execution",
+                    "nodes": [
+                        {
+                            "id": n.id,
+                            "agent_id": n.agent_id,
+                            "command": n.command,
+                            "depends_on": list(n.depends_on),
+                        }
+                        for n in skeleton.nodes
+                    ],
+                }
+            ],
+            assumptions=[],
         )
 
-        # ── Execution ───────────────────────────────────────────
+        # ── Execution — pointer-only, DAG traversal ─────────────
         exec_state = (
             await build_execution_graph()
             .compile(checkpointer=ck)
             .ainvoke(  # type: ignore[call-overload]
                 {
-                    "work_brief": brief,
+                    "work_brief_pointer": pointer,
+                    "routing_skeleton": skeleton_raw,
                     "trace_id": rid,
                     "run_id": rid,
-                    "current_phase_index": 0,
-                    "current_wave_index": 0,
-                    "wave_results": [],
-                    "wave_reflections": [],
-                    "completed_phases": [],
-                    "revision_count": 0,
                 },
                 config={"configurable": {"thread_id": f"{rid}-exec"}},
             )
@@ -139,19 +161,16 @@ async def run(
             exec_state.get("wave_reflections") or []
         )
 
-        # Yield per-wave events
-        seen_waves: set[int] = set()
-        for wr in wave_results:
-            wi = wr.get("wave_index", 0)
-            if wi not in seen_waves:
-                seen_waves.add(wi)
-                batch = [r for r in wave_results if r.get("wave_index") == wi]
-                yield WaveComplete(
-                    run_id=rid,
-                    phase_index=wr.get("phase_index", 0),
-                    wave_index=wi,
-                    results=batch,
-                )
+        # Emit a single WaveComplete carrying all node results — the
+        # new execution graph doesn't batch by wave index, so collapse
+        # the stream into one event for client compatibility.
+        if wave_results:
+            yield WaveComplete(
+                run_id=rid,
+                phase_index=0,
+                wave_index=0,
+                results=wave_results,
+            )
 
         for ref in wave_reflections:
             yield ReflectionComplete(
@@ -159,6 +178,10 @@ async def run(
                 verdict=ref.get("verdict", ""),
                 notes=ref.get("notes", ""),
             )
+
+        if exec_state.get("abort_reason"):
+            yield RunFailed(run_id=rid, error=exec_state["abort_reason"])
+            return
 
         yield RunComplete(
             run_id=rid,

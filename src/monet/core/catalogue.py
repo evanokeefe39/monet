@@ -97,6 +97,10 @@ class CatalogueHandle:
             sensitivity_label=sensitivity_label,
             **kwargs,
         )
+        # Attach optional semantic key to the pointer.
+        key = kwargs.get("key")
+        if isinstance(key, str):
+            pointer["key"] = key
         collector = _artifact_collector.get()
         if collector is not None:
             collector.append(pointer)

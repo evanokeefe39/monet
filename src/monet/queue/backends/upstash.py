@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from monet.core._serialization import (
     deserialize_result,
@@ -352,3 +352,15 @@ class UpstashTaskQueue:
         # Remove from pool queue if still queued (best-effort).
         pool = data.get("pool", "local")
         await self._redis.lrem(self._queue_key(pool), 0, task_id)
+
+    # --- Progress streaming ---
+
+    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+        """No-op. Upstash serverless progress is a follow-on task."""
+        return
+
+    def subscribe_progress(self, task_id: str) -> Any:
+        raise NotImplementedError(
+            "subscribe_progress is not supported on UpstashTaskQueue. "
+            "Use InMemoryTaskQueue for progress streaming."
+        )

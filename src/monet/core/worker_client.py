@@ -12,7 +12,7 @@ is identical whether dispatching locally or remotely.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -253,3 +253,25 @@ class RemoteQueue:
 
     async def cancel(self, task_id: str) -> None:
         pass  # Server handles cancellation
+
+    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+        """POST a progress event to the server's progress endpoint.
+
+        Best-effort — failures are logged at debug and dropped so worker
+        execution continues.
+        """
+        try:
+            resp = await self._client._client.post(
+                f"/tasks/{task_id}/progress", json=data
+            )
+            resp.raise_for_status()
+        except Exception:
+            _log.debug("Failed to POST progress for task %s", task_id, exc_info=True)
+
+    def subscribe_progress(self, task_id: str) -> Any:
+        """Raise NotImplementedError — progress flows server-ward via POST."""
+        raise NotImplementedError(
+            "subscribe_progress is not supported on RemoteQueue. "
+            "Progress flows via POST /api/v1/tasks/{task_id}/progress "
+            "from the worker to the server."
+        )

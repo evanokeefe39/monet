@@ -7,6 +7,9 @@ knows about the queue.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import os
 import secrets
 import uuid
@@ -20,6 +23,8 @@ if TYPE_CHECKING:
 
 # Default timeout for queue poll (seconds). Override via MONET_AGENT_TIMEOUT.
 _DEFAULT_TIMEOUT = 600.0
+
+_log = logging.getLogger("monet.orchestration")
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
 
@@ -101,28 +106,23 @@ async def invoke_agent(
         "skills": skills or [],
     }
 
-    # Manifest guard: fail fast if agent is not declared
-    from monet.core.manifest import default_manifest
+    # Pool routing via the agent manifest handle. When the manifest is
+    # configured (monolith and production), an unknown agent is a fail-fast
+    # error — the orchestrator cannot route to an unknown pool. When the
+    # manifest is not configured (bare test harnesses), fall back to the
+    # "local" pool so in-process tests still work.
+    from monet.core.agent_manifest import get_agent_manifest
 
-    if not default_manifest.is_available(agent_id, command):
-        from monet.signals import SignalType
-        from monet.types import AgentResult, Signal
-
-        return AgentResult(
-            success=False,
-            output="",
-            signals=(
-                Signal(
-                    type=SignalType.CAPABILITY_UNAVAILABLE,
-                    reason=(
-                        f"Agent '{agent_id}/{command}' is not declared in the manifest"
-                    ),
-                    metadata={"agent_id": agent_id, "command": command},
-                ),
-            ),
-            trace_id=resolved_trace_id,
-            run_id=resolved_run_id,
-        )
+    manifest = get_agent_manifest()
+    pool = manifest.get_pool(agent_id, command)
+    if pool is None:
+        if manifest.is_configured():
+            msg = (
+                f"Agent '{agent_id}/{command}' not found in manifest. "
+                "Cannot determine pool."
+            )
+            raise ValueError(msg)
+        pool = "local"
 
     tracer = trace.get_tracer("monet.orchestration")
     with tracer.start_as_current_span(
@@ -133,14 +133,43 @@ async def invoke_agent(
             "monet.run_id": resolved_run_id,
         },
     ) as span:
-        pool = default_manifest.get_pool(agent_id, command) or "local"
         task_id = await _task_queue.enqueue(agent_id, command, ctx, pool=pool)
+        # Forward worker-side progress into the current LangGraph stream
+        # via emit_progress. Runs concurrently with poll_result; cleaned
+        # up whether we complete successfully or time out.
+        progress_task = asyncio.create_task(_forward_progress(_task_queue, task_id))
         try:
-            result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
-        except TimeoutError:
-            # Cancel the task so workers don't waste resources on it
-            await _task_queue.cancel(task_id)
-            raise
-        span.set_attribute("agent.success", result.success)
-        span.set_attribute("agent.signal_count", len(result.signals))
-        return result
+            try:
+                result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
+            except TimeoutError:
+                # Cancel the task so workers don't waste resources on it
+                await _task_queue.cancel(task_id)
+                raise
+            span.set_attribute("agent.success", result.success)
+            span.set_attribute("agent.signal_count", len(result.signals))
+            return result
+        finally:
+            progress_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await progress_task
+
+
+async def _forward_progress(queue: TaskQueue, task_id: str) -> None:
+    """Forward queue progress events to the current LangGraph stream.
+
+    Uses emit_progress so events land in LangGraph's stream writer (or
+    no-op if none is active). Suppresses NotImplementedError (remote
+    queues don't support subscription — they forward via POST) and logs
+    other errors at debug.
+    """
+    from monet.core.stubs import emit_progress
+
+    try:
+        async for event in queue.subscribe_progress(task_id):
+            emit_progress(event)
+    except NotImplementedError:
+        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.debug("Progress forwarding ended for task %s", task_id, exc_info=True)

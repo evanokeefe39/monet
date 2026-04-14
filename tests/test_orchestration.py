@@ -57,11 +57,17 @@ async def test_invoke_agent_local() -> None:
     assert "Test invoke" in result.output
 
 
-async def test_invoke_agent_missing_returns_capability_unavailable() -> None:
-    """Invoking an undeclared agent returns CapabilityUnavailable instantly."""
-    from monet.orchestration import invoke_agent
-    from monet.types import SignalType
+async def test_invoke_agent_missing_raises_when_manifest_configured() -> None:
+    """With a configured manifest, unknown agents fail fast with ValueError.
 
-    result = await invoke_agent("ghost", task="x")
-    assert result.success is False
-    assert result.has_signal(SignalType.CAPABILITY_UNAVAILABLE)
+    The previous CapabilityUnavailable signal guard was removed in Step 9
+    — pool routing now requires the agent to be known to the manifest.
+    Distributed workers handle discovery via requeue-with-backoff
+    (tracked as a follow-on task).
+    """
+    import pytest
+
+    from monet.orchestration import invoke_agent
+
+    with pytest.raises(ValueError, match="not found in manifest"):
+        await invoke_agent("ghost", task="x")

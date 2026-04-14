@@ -15,7 +15,7 @@ API_KEY = "test-secret-key"
 @pytest.fixture
 async def app() -> Any:
     """Create a test application with an in-memory queue."""
-    from monet.core.queue_memory import InMemoryTaskQueue
+    from monet.queue import InMemoryTaskQueue
     from monet.server import create_app
 
     application = create_app(queue=InMemoryTaskQueue())

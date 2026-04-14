@@ -19,7 +19,6 @@ from monet.core.tracing import attached_trace, extract_carrier_from_config
 from ._invoke import invoke_agent
 from ._result_parser import ParseFailure, parse_json_output
 from ._state import EntryState
-from ._validate import _assert_registered
 
 if TYPE_CHECKING:
     from monet.core.hooks import GraphHookRegistry
@@ -57,8 +56,6 @@ def build_entry_graph(
         hooks: Optional graph hook registry. Fires ``after_triage`` with
             the triage dict after classification.
     """
-    _assert_registered("planner", "fast")
-
     _triage_inner = triage_node
 
     async def _triage_with_hooks(

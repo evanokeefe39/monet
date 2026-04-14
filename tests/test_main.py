@@ -31,9 +31,9 @@ def test_python_m_monet_runs(tmp_path: Path) -> None:
                 return m
 
             triage = '{"complexity": "complex", "suggested_agents": [], "requires_planning": true}'
-            brief = ('{"goal": "g", "is_sensitive": false, "phases": ['
-                     '{"name": "Draft", "waves": [{"items": ['
-                     '{"agent_id": "writer", "command": "deep", "task": "x"}]}]}]}')
+            brief = ('{"goal": "g", "is_sensitive": false, "nodes": ['
+                     '{"id": "draft", "depends_on": [],'
+                     ' "agent_id": "writer", "command": "deep", "task": "x"}]}')
 
             import monet.agents.planner
             import monet.agents.writer

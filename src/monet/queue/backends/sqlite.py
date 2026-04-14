@@ -8,11 +8,13 @@ are automatically requeued by a background sweeper task.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
+from collections import defaultdict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite  # type: ignore[import-not-found]
 
@@ -27,10 +29,14 @@ from monet.signals import SignalType
 from monet.types import AgentResult, Signal
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from monet.queue import TaskRecord
     from monet.types import AgentRunContext
+
+
+_SUBSCRIBER_QUEUE_MAX = 64
 
 __all__ = ["SQLiteTaskQueue"]
 
@@ -116,6 +122,12 @@ class SQLiteTaskQueue:
         self._events: dict[str, asyncio.Event] = {}
         self._initialized = False
         self._sweeper_task: asyncio.Task[None] | None = None
+        # In-process progress subscribers — SQLite is typically a single-
+        # process deployment (or a monolith with shared memory). Cross-
+        # process progress is out of scope for this backend.
+        self._progress_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = (
+            defaultdict(set)
+        )
 
     async def initialize(self) -> None:
         """Create the database connection and schema.
@@ -404,3 +416,46 @@ class SQLiteTaskQueue:
             (TaskStatus.PENDING, TaskStatus.CLAIMED, now),
         )
         await db.commit()
+
+    # --- Progress streaming (in-process only) ---
+
+    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+        """Fan out to in-process subscribers. Drops on full."""
+        for sub_q in self._progress_subscribers.get(task_id, set()):
+            with contextlib.suppress(asyncio.QueueFull):
+                sub_q.put_nowait(data)
+
+    async def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield progress events until the task terminates."""
+        sub_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=_SUBSCRIBER_QUEUE_MAX
+        )
+        self._progress_subscribers[task_id].add(sub_q)
+        try:
+            while True:
+                # Poll status from the DB.
+                db = await self._ensure_init()
+                cursor = await db.execute(
+                    "SELECT status FROM tasks WHERE task_id = ?", (task_id,)
+                )
+                row = await cursor.fetchone()
+                await cursor.close()
+                terminal = row is not None and row[0] in (
+                    TaskStatus.COMPLETED,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELLED,
+                )
+                if terminal:
+                    await asyncio.sleep(0)
+                    while not sub_q.empty():
+                        yield sub_q.get_nowait()
+                    return
+                try:
+                    data = await asyncio.wait_for(sub_q.get(), timeout=1.0)
+                    yield data
+                except TimeoutError:
+                    continue
+        finally:
+            self._progress_subscribers[task_id].discard(sub_q)
+            if not self._progress_subscribers[task_id]:
+                self._progress_subscribers.pop(task_id, None)
