@@ -1,7 +1,7 @@
 [project]
-name = "monet-deployed"
+name = "monet-split-fleet"
 version = "0.0.0"
-description = "Railway deployment — monet server with managed Postgres + Langfuse."
+description = "Multi-pool worker fleet — one server, N workers per pool (S3)."
 requires-python = ">=3.12"
 dependencies = [
     "monet[examples]",

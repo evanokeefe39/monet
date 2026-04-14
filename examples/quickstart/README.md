@@ -63,5 +63,6 @@ asyncio.run(main())
 
 ## Next steps
 
-- [local](../local/) — Docker Compose with Postgres and Langfuse
-- [deployed](../deployed/) — Railway with managed infrastructure
+- [local](../local/) — Docker Compose with Postgres and Langfuse (S1)
+- [deployed](../deployed/) — server + worker on Railway / self-host (S2)
+- [split-fleet](../split-fleet/) — multiple worker pools (S3)

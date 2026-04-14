@@ -16,7 +16,7 @@ User runs `aegra serve` plus managed Postgres plus managed Redis on their own in
 
 Single `MONET_API_KEY` shared by workers and clients. `MonetClient(url=...)` from the user's app or CI.
 
-Target audience: `examples/deployed`.
+Target audience: `examples/deployed/server/` + `examples/deployed/worker/` (two deployable services sharing `MONET_API_KEY` + Redis).
 
 Key files: `src/monet/cli/_worker.py`, `src/monet/server/_auth.py`, `src/monet/queue/backends/redis.py`.
 
@@ -25,6 +25,8 @@ Key files: `src/monet/cli/_worker.py`, `src/monet/server/_auth.py`, `src/monet/q
 Same as S2 but N worker processes across regions or hardware classes, each claiming by `--pool` name declared in `monet.toml [pools]`. One logical server, several worker fleets.
 
 Push pools (Cloud Run, Lambda, Vercel Functions) are declared in config but the dispatcher is **not implemented** — see `CLAUDE.md ## Roadmap` Priority 2.
+
+Target audience: `examples/split-fleet/` (one server, two pools `fast` + `heavy`, shipped as both a Docker Compose stack and a Railway deployment).
 
 Key files: `src/monet/config/_schema.py` (pool parsing), `src/monet/orchestration/_invoke.py` (queue dispatch; push branch missing).
 
@@ -61,8 +63,8 @@ Trigger for reintroduction: a concrete need for library-only usage (notebook exa
 | Scenario | Server | Workers | Queue | Auth | Status |
 |---|---|---|---|---|---|
 | S1 local dev | `monet dev` (Docker) | In-server (`pool="local"`) | `memory` or `sqlite` | None | Supported |
-| S2 self-hosted prod | `aegra serve` | `monet worker --server-url` | `redis` or `upstash` | `MONET_API_KEY` | Supported |
-| S3 split fleet | `aegra serve` | N × `monet worker`, different `--pool` | `redis` or `upstash` | `MONET_API_KEY` | Supported except push pools |
+| S2 self-hosted prod | `aegra serve` | `monet worker --server-url` | `redis` or `upstash` | `MONET_API_KEY` | Supported — `examples/deployed/` |
+| S3 split fleet | `aegra serve` | N × `monet worker`, different `--pool` | `redis` or `upstash` | `MONET_API_KEY` | Supported except push pools — `examples/split-fleet/` |
 | S4 workers-only | — | `monet worker` (no `--server-url`) | `memory` | — | Test/library only |
 | S5 SaaS | Vendor-hosted Aegra | Customer-hosted `monet worker` | Shared `redis` / `upstash` | Needs pluggable auth + tenant ID | Queue plane ready, control plane pending (see Roadmap P1) |
 | S6 embedded | — | — | — | — | Removed (see Deferred) |

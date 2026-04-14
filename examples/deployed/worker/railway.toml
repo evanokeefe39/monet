@@ -1,0 +1,7 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "monet worker --server-url $MONET_SERVER_URL --pool local --path agents"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

@@ -1,0 +1,11 @@
+[project]
+name = "monet-deployed-server"
+version = "0.0.0"
+description = "Railway/self-host — monet server (aegra serve) with managed Postgres + Redis."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../../..", editable = true }

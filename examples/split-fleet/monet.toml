@@ -1,0 +1,14 @@
+# Split-fleet: two worker pools claim from the same server.
+#
+# Pool names are free-form — declaring them here is self-documentation,
+# not a requirement. The server-side queue accepts any pool name and
+# routes it to whichever worker claims that name.
+
+[pools.fast]
+type = "pull"
+
+[pools.heavy]
+type = "pull"
+
+[entrypoints.demo]
+graph = "demo"
