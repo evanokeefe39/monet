@@ -122,6 +122,38 @@ The refactor that removed `kind` from entrypoints and split `monet.pipelines.def
 - **In-process (no-server) programmatic driver**: `src/monet/_run.py` was deleted. It was the only path that ran the full pipeline in-process with a `MemorySaver` checkpointer — no server needed. Library callers now use `monet dev` + `MonetClient`, or shell to `aegra dev`. Trigger: a concrete need for server-less library usage (e.g. a notebook example, a CLI subcommand that wants to avoid Docker). If reintroduced, the driver should consume the default pipeline adapter rather than duplicating composition logic.
 - **Graph ↔ client interrupt wire-contract test against real graphs**: `tests/test_default_pipeline_events.py` covers the adapter's projection of interrupts via fake SDK chunks, but there is no test that builds the real `planning_graph` / `execution_graph` with a `MemorySaver`, drives them to an `interrupt(...)` call, and asserts that the client-side `Interrupt(tag, values, next_nodes)` parse matches the graph's actual kwargs. Trigger: any change to the `human_approval` / `human_interrupt` nodes' `interrupt(...)` payload shape, or the first time LangGraph's `state.next` semantics bite us for a parallel-branch interrupt. The test file would live at `tests/test_interrupt_wire_contract.py`.
 
+## Roadmap
+
+Forward-looking commitments. See `docs/architecture/roadmap.md` for the full shipped/planned ledger. Items here are prioritized and will be picked up as standalone plans.
+
+### Priority 1 — SaaS enabling primitives (no SaaS built here)
+
+The SaaS platform itself — user management, accounts, billing, usage limits, customer UI — will live in a **separate downstream repo that imports monet**. This repo's only job is to expose the primitives that downstream repo needs. Out of scope here: anything that requires a user model or a billing model. This repo will never grow a user model, billing logic, or customer-facing productization.
+
+Queue plane is already SaaS-compatible (all backends pull-only, no worker inbound). Control-plane extension points to add:
+
+- **Pluggable auth dependency** in `src/monet/server/_auth.py`: swap the `MONET_API_KEY` singleton for a FastAPI dependency the downstream repo can replace. Default stays single-key for self-hosted.
+- **Tenant ID as request-context primitive**: `TenantContext` propagated via `Depends`, opaque string, monet does not model what a tenant is.
+- **Tenant-scoped queries**: runs, threads, artifacts, pending decisions filter by `tenant_id` when present; unscoped when absent — `src/monet/server/_routes.py`, `src/monet/client/_wire.py`, `src/monet/artifacts/_service.py`.
+- **Credential passthrough on clients**: `MonetClient(url, api_key=...)` and `WorkerClient(api_key=...)` carry an opaque bearer; server decides how to validate.
+- **Server-side pool-claim validation** against tenant context — prevents cross-tenant task stealing on shared Redis/Upstash.
+
+### Priority 2 — Push pool dispatch (enables Cloud Run / Lambda / Vercel workers)
+
+Config schema already declares `type = "push"` in `[pools.<name>]` but `src/monet/orchestration/_invoke.py` silently enqueues for all pool types. Need:
+
+- Forwarding worker that claims push-pool tasks and POSTs to the pool's configured URL with auth.
+- Lease TTL + sweeper so crashed push tasks requeue.
+- Removes push pool from `## Unimplemented` once shipped.
+
+### Lower priority / triggered
+
+- **Pluggable pipeline adapters via `monet.toml`** — trigger: second adapter in-tree (see `## Deferred from client-decoupling refactor`).
+- **In-process driver reintroduction (`_run.py`)** — trigger: concrete need for library-only usage (e.g. notebook example). See `## Deferred`. `src/monet/__main__.py` was deleted with `_run.py`; if a driver returns, `python -m monet` can be routed through it.
+- **Graph ↔ client interrupt wire-contract test** — trigger: any change to `human_approval` / `human_interrupt` interrupt kwargs. See `## Deferred`.
+- **E2E integration tests** across deployment topologies — see `## Unimplemented`.
+- **Optional summarizer agent** — framework-inserted wave context condensation; see `docs/architecture/roadmap.md`.
+
 ## Refactor history
 
 - **Client decoupling** (current HEAD): `_events.py` split into graph-agnostic core + `monet.pipelines.default.events`. `MonetClient.run(graph_id, input)` replaces the pipeline-composition `run(topic)`. HITL methods removed from `MonetClient`; typed verbs live in `monet.pipelines.default._hitl` as wrappers over `client.resume(run_id, tag, payload)`. `_run.py` deleted. `Entrypoint.kind` removed. See `docs/guides/client.md` and `docs/api/client.md`.
