@@ -134,7 +134,8 @@ async def register_worker(
             cap.get("agent_id", ""),
             cap.get("command", ""),
             description=cap.get("description", ""),
-            pool=body.pool,
+            pool=cap.get("pool", body.pool),
+            worker_id=body.worker_id,
         )
     return WorkerRegisterResponse(deployment_id=deployment_id)
 

@@ -90,6 +90,16 @@ queue: TaskQueue = _create_queue(_config.queue)
 configure_queue(queue)
 configure_lazy_worker(queue)
 
+# Wire the agent manifest handle so `invoke_agent` in a graph can read
+# pool assignments populated by remote worker registration. Without
+# this, `get_agent_manifest()` returns a handle whose `is_configured()`
+# is False and `invoke_agent` falls back to pool="local", which breaks
+# pool-based routing for split-fleet deployments.
+from monet.agent_manifest import configure_agent_manifest  # noqa: E402
+from monet.core.manifest import default_manifest  # noqa: E402
+
+configure_agent_manifest(default_manifest)
+
 _log.info("monet server booted: %s", _config.redacted_summary())
 
 
