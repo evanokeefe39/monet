@@ -65,4 +65,5 @@ nav:
   - Architecture:
     - Design Principles: architecture/design-principles.md
     - Graph Topology: architecture/graph-topology.md
+    - Deployment Scenarios: architecture/deployment-scenarios.md
     - Roadmap: architecture/roadmap.md

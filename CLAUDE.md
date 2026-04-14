@@ -92,6 +92,17 @@ Key design principles: agents are opaque capability units with a uniform interfa
 - **Config-declared entrypoints**: `monet.toml [entrypoints.<name>]` with just `graph = "<id>"` declares which graphs `MonetClient.run` / `monet run --graph` can invoke. Default is `{"default": {"graph": "entry"}}`. Internal subgraphs (`planning`, `execution`) are intentionally un-invocable. Adding a new invocable graph is a config change, not a code change. The `kind` field was removed in the client-decoupling refactor — all invocable graphs are driven as single-graph streams via `MonetClient.run`; multi-graph compositions ship as adapter modules (see `monet.pipelines.default`).
 - **Client / pipeline split**: `MonetClient` is graph-agnostic — `run(graph_id, input)` streams core events, `resume(run_id, tag, payload)` dispatches to a paused interrupt with validation (`RunNotInterrupted` / `AlreadyResolved` / `AmbiguousInterrupt` / `InterruptTagMismatch`), `abort(run_id)` terminates. Pipeline-specific composition (entry → planning → execution with HITL) lives in `monet.pipelines.default.adapter.run(client, topic, ...)` as an adapter that uses the client's wire primitives directly. HITL verbs (`approve_plan`, etc.) are thin wrappers over `client.resume` with typed `DefaultInterruptTag` (`Literal["human_approval", "human_interrupt"]`) and `TypedDict` payloads.
 
+## Deployment scenarios
+
+Six shapes. Full descriptions, wiring, and matrix in `docs/architecture/deployment-scenarios.md`. Short form:
+
+- **S1 local all-in-one** — `monet dev` on a laptop, Docker-backed Postgres/Redis, `pool="local"` runs in-server. Tutorials and examples.
+- **S2 self-hosted production** — `aegra serve` + managed Postgres/Redis on user infra, `monet worker --server-url ...` processes, shared `MONET_API_KEY`. Single tenant. `examples/deployed`.
+- **S3 split fleet** — S2 with N worker pools across regions/hardware via `monet.toml [pools]`. Push pools declared but dispatcher unimplemented (see `## Roadmap` Priority 2).
+- **S4 workers-only** — `monet worker` with no server URL, `InMemoryTaskQueue`. Test/library only; no pipeline composition.
+- **S5 SaaS** — vendor-hosted orchestrator, customer-hosted workers. Queue plane already compatible; control-plane primitives (pluggable auth, tenant ID, credential passthrough) pending. Productization (accounts, billing, UI) lives in a separate downstream repo that imports `monet`. See `## Roadmap` Priority 1.
+- **S6 embedded / no-server** — removed with `_run.py` and `__main__.py`. Trigger to reintroduce: library-only use case. See `## Deferred from client-decoupling refactor`.
+
 ## Standard ports and example lifecycle
 
 Every example uses the same canonical local ports (defined in `src/monet/_constants.py`):
