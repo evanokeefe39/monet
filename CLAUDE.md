@@ -97,8 +97,8 @@ Key design principles: agents are opaque capability units with a uniform interfa
 Six shapes. Full descriptions, wiring, and matrix in `docs/architecture/deployment-scenarios.md`. Short form:
 
 - **S1 local all-in-one** — `monet dev` on a laptop, Docker-backed Postgres/Redis, `pool="local"` runs in-server. Tutorials and examples.
-- **S2 self-hosted production** — `aegra serve` + managed Postgres/Redis on user infra, `monet worker --server-url ...` processes, shared `MONET_API_KEY`. Single tenant. `examples/deployed`.
-- **S3 split fleet** — S2 with N worker pools across regions/hardware via `monet.toml [pools]`. Push pools declared but dispatcher unimplemented (see `## Roadmap` Priority 2).
+- **S2 self-hosted production** — `aegra serve` + managed Postgres/Redis on user infra, `monet worker --server-url ...` processes, shared `MONET_API_KEY`. Single tenant. `examples/deployed/server/` + `examples/deployed/worker/`.
+- **S3 split fleet** — S2 with N worker pools across regions/hardware via `monet.toml [pools]`. Push pools declared but dispatcher unimplemented (see `## Roadmap` Priority 2). `examples/split-fleet/` ships both compose and Railway variants.
 - **S4 workers-only** — `monet worker` with no server URL, `InMemoryTaskQueue`. Test/library only; no pipeline composition.
 - **S5 SaaS** — vendor-hosted orchestrator, customer-hosted workers. Queue plane already compatible; control-plane primitives (pluggable auth, tenant ID, credential passthrough) pending. Productization (accounts, billing, UI) lives in a separate downstream repo that imports `monet`. See `## Roadmap` Priority 1.
 - **S6 embedded / no-server** — removed with `_run.py` and `__main__.py`. Trigger to reintroduce: library-only use case. See `## Deferred from client-decoupling refactor`.
@@ -158,6 +158,10 @@ Config schema already declares `type = "push"` in `[pools.<name>]` but `src/mone
 - Forwarding worker that claims push-pool tasks and POSTs to the pool's configured URL with auth.
 - Lease TTL + sweeper so crashed push tasks requeue.
 - Removes push pool from `## Unimplemented` once shipped.
+
+### Open questions
+
+- **Custom graphs integrating with default pipeline** — unanswered. If a user ships their own graph via `aegra.json`, can it compose with the built-in `planning` → `execution` flow? Concrete case: inject a hard review gate after `execution` that, on reject, loops back into `planning` with revision context. Today `monet.pipelines.default.adapter` hardcodes the three-graph sequence and HITL tags (`human_approval`, `human_interrupt`). Unclear whether the extension story is (a) a new adapter in `monet.pipelines.<name>` that composes stock graphs plus user ones, (b) subgraph injection into `execution_graph` via `GraphHookRegistry`, or (c) a supervisor-level `after_execution` hook point that can route back to `planning`. Decide before promising users it works.
 
 ### Lower priority / triggered
 

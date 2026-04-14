@@ -116,6 +116,17 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = false
+# Example subdirs carry duplicate module names (server_graphs.py in both
+# compose/ and railway/ variants). Exclude from the type check; the
+# examples.* override already suppresses errors, but exclusion is needed
+# because module-name collisions abort discovery before that runs.
+exclude = [
+  "^examples/split-fleet/",
+  "^examples/deployed/(server|worker)/",
+  "^examples/custom-graph/",
+  "^examples/quickstart/",
+  "^examples/local/",
+]
 
 [[tool.mypy.overrides]]
 module = "examples.*"

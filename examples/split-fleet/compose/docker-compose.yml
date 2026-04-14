@@ -1,0 +1,73 @@
+services:
+  monet:
+    build:
+      context: ../../..
+      dockerfile: examples/split-fleet/compose/Dockerfile
+    image: monet-split-fleet:latest
+    ports:
+      - "2026:2026"
+    environment:
+      DATABASE_URI: postgresql://monet:monet@postgres:5432/monet
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: aegra serve --host 0.0.0.0 --port 2026
+
+  worker-fast:
+    image: monet-split-fleet:latest
+    environment:
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_SERVER_URL: http://monet:2026
+      MONET_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      monet:
+        condition: service_started
+    command: monet worker --server-url http://monet:2026 --pool fast --path agents
+
+  worker-heavy:
+    image: monet-split-fleet:latest
+    environment:
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_SERVER_URL: http://monet:2026
+      MONET_QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      monet:
+        condition: service_started
+    command: monet worker --server-url http://monet:2026 --pool heavy --path agents
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: monet
+      POSTGRES_PASSWORD: monet
+      POSTGRES_DB: monet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
