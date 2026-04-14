@@ -10,7 +10,7 @@ services:
       DATABASE_URI: postgresql://monet:monet@postgres:5432/monet
       MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
       MONET_QUEUE_BACKEND: redis
-      REDIS_URL: redis://redis:6379
+      REDIS_URI: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
@@ -24,7 +24,10 @@ services:
       MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
       MONET_SERVER_URL: http://monet:2026
       MONET_QUEUE_BACKEND: redis
-      REDIS_URL: redis://redis:6379
+      REDIS_URI: redis://redis:6379
+      # Demo agents do not call LLMs, but the worker boot-check requires
+      # at least one provider key. Any non-empty value passes.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-demo-placeholder}
     depends_on:
       monet:
         condition: service_started
@@ -36,7 +39,8 @@ services:
       MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
       MONET_SERVER_URL: http://monet:2026
       MONET_QUEUE_BACKEND: redis
-      REDIS_URL: redis://redis:6379
+      REDIS_URI: redis://redis:6379
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-demo-placeholder}
     depends_on:
       monet:
         condition: service_started
