@@ -22,7 +22,7 @@ from monet.cli._render import (
     render_run_table,
 )
 from monet.cli._setup import check_env
-from monet.config import MONET_SERVER_URL
+from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
 
 @click.command()
@@ -32,6 +32,12 @@ from monet.config import MONET_SERVER_URL
     envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
+@click.option(
+    "--api-key",
+    envvar=MONET_API_KEY,
+    default=None,
+    help="API key for server auth.",
+)
 @click.option("--new", "force_new", is_flag=True, help="Start a new conversation.")
 @click.option("--list", "list_sessions", is_flag=True, help="List saved conversations.")
 @click.option("--resume", "resume_id", default=None, help="Resume a specific thread.")
@@ -39,6 +45,7 @@ from monet.config import MONET_SERVER_URL
 @click.option("--graph", "graph_override", default=None, help="Chat graph ID.")
 def chat(
     url: str,
+    api_key: str | None,
     force_new: bool,
     list_sessions: bool,
     resume_id: str | None,
@@ -53,6 +60,7 @@ def chat(
         asyncio.run(
             _chat_main(
                 url,
+                api_key,
                 force_new,
                 list_sessions,
                 resume_id,
@@ -64,6 +72,7 @@ def chat(
 
 async def _chat_main(
     url: str,
+    api_key: str | None,
     force_new: bool,
     list_sessions: bool,
     resume_id: str | None,
@@ -77,7 +86,7 @@ async def _chat_main(
     if graph_override:
         graph_ids["chat"] = graph_override
 
-    client = MonetClient(url, graph_ids=graph_ids)
+    client = MonetClient(url, api_key=api_key, graph_ids=graph_ids)
 
     if list_sessions:
         chats = await client.list_chats()

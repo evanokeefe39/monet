@@ -40,19 +40,32 @@ MONET_CHAT_NAME_KEY = "monet_chat_name"
 # ── Client factory ──────────────────────────────────────────────────
 
 
-def make_client(url: str | None = None) -> LangGraphClient:
+def make_client(
+    url: str | None = None,
+    *,
+    api_key: str | None = None,
+) -> LangGraphClient:
     """Create a LangGraph SDK client pointed at *url*.
 
     When *url* is ``None``, defaults to the server URL resolved by
     :class:`monet.config.ClientConfig` (``MONET_SERVER_URL`` env var, or
-    ``http://localhost:{STANDARD_DEV_PORT}`` if unset).
+    ``http://localhost:{STANDARD_DEV_PORT}`` if unset). When *api_key* is
+    ``None``, falls back to ``MONET_API_KEY`` via :class:`ClientConfig`.
+
+    When a key is resolved (explicit or env), an ``Authorization: Bearer``
+    header is sent on every request so monet's server-side middleware and
+    custom routes can validate it. Unset keys cause no auth header to be
+    sent — correct for local dev with auth disabled.
     """
     from langgraph_sdk import get_client
 
     from monet.config import ClientConfig
 
-    resolved = url if url is not None else ClientConfig.load().server_url
-    return get_client(url=resolved)
+    cfg = ClientConfig.load()
+    resolved_url = url if url is not None else cfg.server_url
+    resolved_key = api_key if api_key is not None else cfg.api_key
+    headers = {"Authorization": f"Bearer {resolved_key}"} if resolved_key else None
+    return get_client(url=resolved_url, headers=headers)
 
 
 async def create_thread(

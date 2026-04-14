@@ -17,13 +17,13 @@ from monet.cli._render import (
     render_pending_table,
     render_run_table,
 )
-from monet.config import MONET_SERVER_URL
+from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
 
-def _make_client(url: str) -> MonetClient:
+def _make_client(url: str, api_key: str | None) -> MonetClient:
     from monet.client import MonetClient
 
-    return MonetClient(url)
+    return MonetClient(url, api_key=api_key)
 
 
 @click.group()
@@ -38,14 +38,20 @@ def runs() -> None:
     envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
+@click.option(
+    "--api-key",
+    envvar=MONET_API_KEY,
+    default=None,
+    help="API key for server auth.",
+)
 @click.option("--limit", default=20, help="Maximum runs to display.")
-def list_runs(url: str, limit: int) -> None:
+def list_runs(url: str, api_key: str | None, limit: int) -> None:
     """List recent runs with status, stages, and age."""
-    asyncio.run(_list_runs(url, limit))
+    asyncio.run(_list_runs(url, api_key, limit))
 
 
-async def _list_runs(url: str, limit: int) -> None:
-    client = _make_client(url)
+async def _list_runs(url: str, api_key: str | None, limit: int) -> None:
+    client = _make_client(url, api_key)
     summaries = await client.list_runs(limit=limit)
     render_run_table(summaries)
 
@@ -57,13 +63,19 @@ async def _list_runs(url: str, limit: int) -> None:
     envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
-def pending(url: str) -> None:
+@click.option(
+    "--api-key",
+    envvar=MONET_API_KEY,
+    default=None,
+    help="API key for server auth.",
+)
+def pending(url: str, api_key: str | None) -> None:
     """Show runs awaiting human decisions."""
-    asyncio.run(_pending(url))
+    asyncio.run(_pending(url, api_key))
 
 
-async def _pending(url: str) -> None:
-    client = _make_client(url)
+async def _pending(url: str, api_key: str | None) -> None:
+    client = _make_client(url, api_key)
     decisions = await client.list_pending()
     render_pending_table(decisions)
 
@@ -76,16 +88,22 @@ async def _pending(url: str) -> None:
     envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
-def inspect(run_id: str, url: str) -> None:
+@click.option(
+    "--api-key",
+    envvar=MONET_API_KEY,
+    default=None,
+    help="API key for server auth.",
+)
+def inspect(run_id: str, url: str, api_key: str | None) -> None:
     """Show full detail for a run: triage, plan, waves, artifacts."""
-    asyncio.run(_inspect(url, run_id))
+    asyncio.run(_inspect(url, api_key, run_id))
 
 
-async def _inspect(url: str, run_id: str) -> None:
+async def _inspect(url: str, api_key: str | None, run_id: str) -> None:
     from monet.pipelines.default import DefaultPipelineRunDetail
     from monet.pipelines.default.render import render_pipeline_run_detail
 
-    client = _make_client(url)
+    client = _make_client(url, api_key)
     detail = await client.get_run(run_id)
     # If the run's stages look like the default pipeline, render the typed view.
     if any(s in detail.completed_stages for s in ("entry", "planning", "execution")):
@@ -105,20 +123,26 @@ async def _inspect(url: str, run_id: str) -> None:
     envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
-def resume(run_id: str, url: str) -> None:
+@click.option(
+    "--api-key",
+    envvar=MONET_API_KEY,
+    default=None,
+    help="API key for server auth.",
+)
+def resume(run_id: str, url: str, api_key: str | None) -> None:
     """Resume an interrupted run.
 
     Detects the pending interrupt's tag, prompts for a decision, and
     dispatches the matching HITL verb.
     """
     try:
-        exit_code = asyncio.run(_resume(url, run_id))
+        exit_code = asyncio.run(_resume(url, api_key, run_id))
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     raise SystemExit(exit_code)
 
 
-async def _resume(url: str, run_id: str) -> int:
+async def _resume(url: str, api_key: str | None, run_id: str) -> int:
     from monet.pipelines.default import (
         abort_run,
         approve_plan,
@@ -127,7 +151,7 @@ async def _resume(url: str, run_id: str) -> int:
         revise_plan,
     )
 
-    client = _make_client(url)
+    client = _make_client(url, api_key)
     detail = await client.get_run(run_id)
 
     if detail.status != "interrupted" or detail.pending_interrupt is None:
