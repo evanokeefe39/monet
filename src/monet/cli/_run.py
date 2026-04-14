@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
+    from monet._graph_config import Entrypoint
     from monet.client import MonetClient
 
+from monet._constants import STANDARD_DEV_PORT
 from monet.cli._render import (
     prompt_execution_decision,
     prompt_plan_decision,
@@ -29,20 +31,42 @@ from monet.cli._setup import check_env
 _EXIT_SUCCESS = 0
 _EXIT_AGENT_ERROR = 1
 _EXIT_CONNECTION_ERROR = 2
+_EXIT_USAGE_ERROR = 3
 
 
-def _resolve_graph_ids(graph_override: str | None, command: str) -> dict[str, str]:
-    """Resolve graph IDs from monet.toml + env vars + CLI flag."""
+def _resolve_entrypoint(name: str | None) -> Entrypoint:
+    """Look up the ``monet run`` entrypoint by name (or 'default').
+
+    Raises ``click.UsageError`` if ``name`` is supplied but not declared
+    in ``monet.toml [entrypoints]``. Internal subgraphs like ``planning``
+    and ``execution`` are deliberately un-invocable this way.
+    """
+    from monet._graph_config import load_entrypoints
+
+    entrypoints = load_entrypoints()
+    key = name or "default"
+    ep = entrypoints.get(key)
+    if ep is None:
+        declared = ", ".join(sorted(entrypoints)) or "(none)"
+        msg = (
+            f"'{key}' is not a declared entrypoint. "
+            f"Add it to [entrypoints] in monet.toml. "
+            f"Declared: {declared}"
+        )
+        raise click.UsageError(msg)
+    return ep
+
+
+def _resolve_graph_ids(entry_graph: str) -> dict[str, str]:
+    """Build the role→graph_id mapping used by ``MonetClient`` for pipeline runs.
+
+    Starts from ``load_graph_roles()`` and overrides the ``entry`` role
+    with the entrypoint's configured graph.
+    """
     from monet._graph_config import load_graph_roles
 
     ids = load_graph_roles()
-
-    if graph_override:
-        if command == "run":
-            ids["entry"] = graph_override
-        elif command == "chat":
-            ids["chat"] = graph_override
-
+    ids["entry"] = entry_graph
     return ids
 
 
@@ -68,7 +92,7 @@ def _read_topic_from_stdin() -> str | None:
 @click.argument("topic", required=False)
 @click.option(
     "--url",
-    default="http://localhost:2026",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
     envvar="MONET_SERVER_URL",
     help="Aegra server URL.",
 )
@@ -87,21 +111,29 @@ def _read_topic_from_stdin() -> str | None:
 )
 @click.option(
     "--graph",
-    "graph_override",
+    "entrypoint_name",
     default=None,
-    help="Target a specific graph ID instead of the default pipeline.",
+    help=(
+        "Name of a declared entrypoint in monet.toml (e.g. 'review'). "
+        "Omit to use the default pipeline."
+    ),
 )
 def run(
     topic: str | None,
     url: str,
     auto_approve: bool,
     output_mode: str,
-    graph_override: str | None,
+    entrypoint_name: str | None,
 ) -> None:
-    """Run a topic through the monet orchestration pipeline.
+    """Run a topic through a declared entrypoint.
 
-    Connects to a running Aegra server, streams events, and handles
-    human decisions at plan approval and execution interrupt points.
+    With no ``--graph``, drives the default pipeline
+    (entry → planning → execution) with HITL plan approval.
+
+    With ``--graph <name>``, looks up ``[entrypoints.<name>]`` in
+    ``monet.toml`` and dispatches by its declared ``kind``. Internal
+    subgraphs like ``planning`` and ``execution`` are intentionally
+    not invocable this way.
 
     When piped, defaults to NDJSON event stream on stdout.
     Use --output text to force human-readable output.
@@ -120,13 +152,25 @@ def run(
     if mode == "json":
         auto_approve = True
 
-    # Resolve graph IDs from config + CLI override.
-    graph_ids = _resolve_graph_ids(graph_override, "run")
+    ep = _resolve_entrypoint(entrypoint_name)
 
     try:
-        exit_code = asyncio.run(
-            _interactive_run(resolved_topic, url, auto_approve, mode, graph_ids)
-        )
+        if ep["kind"] == "pipeline":
+            graph_ids = _resolve_graph_ids(ep["graph"])
+            exit_code = asyncio.run(
+                _interactive_run(resolved_topic, url, auto_approve, mode, graph_ids)
+            )
+        elif ep["kind"] == "single":
+            exit_code = asyncio.run(
+                _single_graph_run(resolved_topic, url, mode, ep["graph"])
+            )
+        else:  # "messages"
+            click.echo(
+                f"Entrypoint kind '{ep['kind']}' is not driven from `monet run`. "
+                "Use `monet chat` for chat-style graphs.",
+                err=True,
+            )
+            raise SystemExit(_EXIT_USAGE_ERROR)
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     except (ConnectionError, OSError) as exc:
@@ -134,6 +178,70 @@ def run(
         raise SystemExit(_EXIT_CONNECTION_ERROR) from exc
 
     raise SystemExit(exit_code)
+
+
+async def _single_graph_run(
+    topic: str,
+    url: str,
+    mode: str,
+    graph_id: str,
+) -> int:
+    """Drive one graph directly with ``{task, run_id, trace_id}`` input.
+
+    Streams the run via ``MonetClient.run_single`` and emits typed events
+    (triage_complete, run_complete, run_failed) in text or NDJSON mode.
+    """
+    from monet.client import MonetClient
+
+    preflight_error = await _preflight_server(url)
+    if preflight_error is not None:
+        click.echo(preflight_error, err=True)
+        return _EXIT_CONNECTION_ERROR
+
+    client = MonetClient(url)
+    run_id: str | None = None
+    try:
+        async for event in client.run_single(graph_id, topic):
+            if run_id is None and hasattr(event, "run_id"):
+                run_id = event.run_id
+                click.echo(f"Run {run_id}", err=True)
+            if mode == "json":
+                click.echo(serialize_event(event))
+            else:
+                render_event(event)
+            from monet.client._events import RunComplete, RunFailed
+
+            if isinstance(event, RunFailed):
+                return _EXIT_AGENT_ERROR
+            if isinstance(event, RunComplete):
+                return _EXIT_SUCCESS
+    except (ConnectionError, OSError) as exc:
+        click.echo(f"Connection error: {exc}", err=True)
+        return _EXIT_CONNECTION_ERROR
+    except Exception as exc:
+        click.echo(f"Unexpected error: {exc}", err=True)
+        return _EXIT_AGENT_ERROR
+
+    return _EXIT_SUCCESS
+
+
+async def _preflight_server(url: str) -> str | None:
+    """Probe ``url``'s /health endpoint. Return an error string on failure."""
+    import httpx
+
+    base = url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as probe:
+            resp = await probe.get(f"{base}/health")
+            if resp.status_code != 200:
+                return (
+                    f"Cannot reach monet server at {url} "
+                    f"(health returned {resp.status_code}). "
+                    "Is `monet dev` running?"
+                )
+    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+        return f"Cannot reach monet server at {url}. Is `monet dev` running?"
+    return None
 
 
 async def _interactive_run(
@@ -154,6 +262,11 @@ async def _interactive_run(
         RunComplete,
         RunFailed,
     )
+
+    preflight_error = await _preflight_server(url)
+    if preflight_error is not None:
+        click.echo(preflight_error, err=True)
+        return _EXIT_CONNECTION_ERROR
 
     try:
         client = MonetClient(url, graph_ids=graph_ids)

@@ -8,6 +8,8 @@ from typing import Any
 
 import click
 
+from monet._constants import STANDARD_DEV_PORT
+
 
 def _parse_capabilities(caps: Any) -> list[dict[str, str]]:
     """Normalize capabilities from a deployment record.
@@ -39,7 +41,7 @@ def _render_header(health: dict[str, Any]) -> None:
 @click.command()
 @click.option(
     "--url",
-    default="http://localhost:8000",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
     envvar="MONET_SERVER_URL",
     help="Orchestration server URL.",
 )

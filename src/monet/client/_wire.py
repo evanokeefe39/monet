@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
+    from monet.types import ArtifactPointer
+
 # ── Graph ID constants (server contract, not caller concern) ────────
 
 TRACE_CARRIER_METADATA_KEY = "monet_trace_carrier"
@@ -160,18 +162,26 @@ def planning_input(task: str, run_id: str) -> dict[str, Any]:
     }
 
 
-def execution_input(work_brief: dict[str, Any], run_id: str) -> dict[str, Any]:
-    """Build the initial state dict for the execution graph."""
+def execution_input(
+    work_brief_pointer: ArtifactPointer,
+    routing_skeleton: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    """Build the initial state dict for the execution graph.
+
+    ``work_brief_pointer`` is the catalogue pointer the planner wrote; it's
+    threaded to each agent invocation so the worker-side
+    ``inject_plan_context`` hook can resolve task content. ``routing_skeleton``
+    is the flat DAG (``{goal, nodes}``) that drives traversal.
+    """
     return {
-        "work_brief": work_brief,
-        "trace_id": f"trace-{run_id}",
-        "run_id": run_id,
-        "current_phase_index": 0,
-        "current_wave_index": 0,
+        "work_brief_pointer": work_brief_pointer,
+        "routing_skeleton": routing_skeleton,
+        "completed_node_ids": [],
         "wave_results": [],
         "wave_reflections": [],
-        "completed_phases": [],
-        "revision_count": 0,
+        "trace_id": f"trace-{run_id}",
+        "run_id": run_id,
     }
 
 

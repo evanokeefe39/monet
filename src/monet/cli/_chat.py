@@ -210,8 +210,8 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
             detail = await client.get_run(arg)
             # Build a summary of the run results.
             parts_list: list[str] = [f"Attached run {arg} (status: {detail.status})"]
-            if detail.work_brief:
-                goal = detail.work_brief.get("goal", "")
+            if detail.routing_skeleton:
+                goal = detail.routing_skeleton.get("goal", "")
                 if goal:
                     parts_list.append(f"Goal: {goal}")
             for wr in detail.wave_results:
@@ -314,8 +314,8 @@ async def _handle_inline_run(client: MonetClient, thread_id: str, task: str) -> 
                 summary_parts: list[str] = [
                     f"Completed run {run_id} (status: {detail.status})"
                 ]
-                if detail.work_brief:
-                    goal = detail.work_brief.get("goal", "")
+                if detail.routing_skeleton:
+                    goal = detail.routing_skeleton.get("goal", "")
                     if goal:
                         summary_parts.append(f"Goal: {goal}")
                 for wr in detail.wave_results[:5]:

@@ -1,0 +1,7 @@
+# Declare the review pipeline as an invocable entrypoint so
+# `monet run --graph review "topic"` drives it directly. The default
+# pipeline (entry → planning → execution) is always available as well.
+
+[entrypoints.review]
+graph = "review"
+kind = "single"
