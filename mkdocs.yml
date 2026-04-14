@@ -49,6 +49,7 @@ nav:
     - Artifact Store: guides/artifacts.md
     - Orchestration: guides/orchestration.md
     - Distribution Mode: guides/distribution.md
+    - Deploy to Production: guides/deploy-production.md
     - Client SDK: guides/client.md
     - Server & Transport: guides/server.md
     - Observability: guides/observability.md
@@ -66,4 +67,5 @@ nav:
     - Design Principles: architecture/design-principles.md
     - Graph Topology: architecture/graph-topology.md
     - Deployment Scenarios: architecture/deployment-scenarios.md
+    - Memory Service (design): architecture/memory-service.md
     - Roadmap: architecture/roadmap.md

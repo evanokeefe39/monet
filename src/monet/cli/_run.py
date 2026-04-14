@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 from monet._constants import STANDARD_DEV_PORT
 from monet.cli._render import render_event, serialize_event
 from monet.cli._setup import check_env
-from monet.config import MONET_SERVER_URL
+from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
 _EXIT_SUCCESS = 0
 _EXIT_AGENT_ERROR = 1
@@ -72,6 +72,12 @@ def _read_topic_from_stdin() -> str | None:
     help="Aegra server URL.",
 )
 @click.option(
+    "--api-key",
+    envvar=MONET_API_KEY,
+    default=None,
+    help="API key for server auth.",
+)
+@click.option(
     "--auto-approve",
     is_flag=True,
     default=False,
@@ -96,6 +102,7 @@ def _read_topic_from_stdin() -> str | None:
 def run(
     topic: str | None,
     url: str,
+    api_key: str | None,
     auto_approve: bool,
     output_mode: str,
     entrypoint_name: str | None,
@@ -129,11 +136,11 @@ def run(
     try:
         if is_default:
             exit_code = asyncio.run(
-                _default_pipeline_run(resolved_topic, url, auto_approve, mode)
+                _default_pipeline_run(resolved_topic, url, api_key, auto_approve, mode)
             )
         else:
             exit_code = asyncio.run(
-                _single_graph_run(resolved_topic, url, mode, ep["graph"])
+                _single_graph_run(resolved_topic, url, api_key, mode, ep["graph"])
             )
     except KeyboardInterrupt:
         raise SystemExit(130) from None
@@ -147,6 +154,7 @@ def run(
 async def _single_graph_run(
     topic: str,
     url: str,
+    api_key: str | None,
     mode: str,
     graph_id: str,
 ) -> int:
@@ -154,12 +162,12 @@ async def _single_graph_run(
     from monet.client import MonetClient, RunComplete, RunFailed
     from monet.client._wire import task_input
 
-    preflight_error = await _preflight_server(url)
+    preflight_error = await _preflight_server(url, api_key)
     if preflight_error is not None:
         click.echo(preflight_error, err=True)
         return _EXIT_CONNECTION_ERROR
 
-    client = MonetClient(url)
+    client = MonetClient(url, api_key=api_key)
     run_id: str | None = None
     try:
         async for event in client.run(graph_id, task_input(topic, "")):
@@ -184,8 +192,13 @@ async def _single_graph_run(
     return _EXIT_SUCCESS
 
 
-async def _preflight_server(url: str) -> str | None:
-    """Probe *url*'s ``/health`` endpoint. Return an error string on failure."""
+async def _preflight_server(url: str, api_key: str | None = None) -> str | None:
+    """Probe *url*'s ``/health`` endpoint. Return an error string on failure.
+
+    When *api_key* is provided, also probe an authenticated endpoint so a
+    misconfigured key surfaces a clear message instead of an opaque
+    ``langgraph_sdk`` failure mid-stream.
+    """
     import httpx
 
     base = url.rstrip("/")
@@ -198,6 +211,17 @@ async def _preflight_server(url: str) -> str | None:
                     f"(health returned {resp.status_code}). "
                     "Is `monet dev` running?"
                 )
+            if api_key:
+                headers = {"Authorization": f"Bearer {api_key}"}
+                auth_resp = await probe.get(
+                    f"{base}/api/v1/deployments", headers=headers
+                )
+                if auth_resp.status_code in (401, 403):
+                    return (
+                        f"Authentication failed against {url} "
+                        f"({auth_resp.status_code}). "
+                        "Check MONET_API_KEY (or pass --api-key)."
+                    )
     except (httpx.ConnectError, httpx.TimeoutException, OSError):
         return f"Cannot reach monet server at {url}. Is `monet dev` running?"
     return None
@@ -206,6 +230,7 @@ async def _preflight_server(url: str) -> str | None:
 async def _default_pipeline_run(
     topic: str,
     url: str,
+    api_key: str | None,
     auto_approve: bool,
     mode: str,
 ) -> int:
@@ -226,13 +251,13 @@ async def _default_pipeline_run(
     )
     from monet.pipelines.default.render import render_pipeline_event
 
-    preflight_error = await _preflight_server(url)
+    preflight_error = await _preflight_server(url, api_key)
     if preflight_error is not None:
         click.echo(preflight_error, err=True)
         return _EXIT_CONNECTION_ERROR
 
     try:
-        client = MonetClient(url)
+        client = MonetClient(url, api_key=api_key)
     except (ConnectionError, OSError) as exc:
         click.echo(f"Connection error: {exc}", err=True)
         return _EXIT_CONNECTION_ERROR
