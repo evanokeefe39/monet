@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,13 +21,14 @@ import click
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from monet._constants import STANDARD_DEV_PORT, state_file
 from monet.cli._setup import check_env
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.option(
     "--port",
-    default=2026,
+    default=STANDARD_DEV_PORT,
     type=int,
     help="Port for the Aegra dev server.",
 )
@@ -42,7 +45,13 @@ from monet.cli._setup import check_env
     default=False,
     help="Show raw Aegra server output instead of monet's curated log.",
 )
-def dev(port: int, config_path: str | None, verbose: bool) -> None:
+@click.pass_context
+def dev(
+    ctx: click.Context,
+    port: int,
+    config_path: str | None,
+    verbose: bool,
+) -> None:
     """Start the Aegra dev server with monet's default graphs.
 
     Generates an Aegra config from monet's built-in graphs (entry,
@@ -50,8 +59,14 @@ def dev(port: int, config_path: str | None, verbose: bool) -> None:
     or ``langgraph.json`` exists in the current directory, its graphs
     are merged on top of the defaults.
 
+    Before starting, any previously running example's docker stack is
+    torn down (volumes preserved), so the standard ports are free.
+
     Requires ``aegra-cli`` to be installed.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
     from monet.server._langgraph_config import (
         default_config,
         merge_config,
@@ -94,6 +109,14 @@ def dev(port: int, config_path: str | None, verbose: bool) -> None:
 
         resolved_config = write_config(config, cwd)
 
+    # Before aegra starts the current example's stack, tear down any
+    # previously-active example stack so the standard ports (5432, 6379)
+    # are free. Only one example may run at a time.
+    current_compose = _current_compose_path(resolved_config)
+    if current_compose is not None:
+        _teardown_previous(current_compose)
+        _record_active_example(current_compose)
+
     cmd = ["aegra", "dev", "--config", str(resolved_config), "--port", str(port)]
 
     if verbose:
@@ -102,6 +125,142 @@ def dev(port: int, config_path: str | None, verbose: bool) -> None:
 
     click.echo(f"Starting dev server on port {port}...")
     sys.exit(_run_curated(cmd, port))
+
+
+@dev.command("down")
+def dev_down() -> None:
+    """Tear down the most recently started example's docker stack.
+
+    Reads ``~/.monet/state.json`` for the last compose file and stops
+    its declared ``container_name`` services. Volumes are preserved; re-
+    entering the example keeps its Postgres data.
+    """
+    compose = _read_active_example()
+    if compose is None:
+        click.echo("No active monet example recorded in ~/.monet/state.json.")
+        return
+    if not compose.exists():
+        click.echo(f"Recorded compose file no longer exists: {compose}")
+        _clear_active_example()
+        return
+
+    click.echo(f"Tearing down: {compose}")
+    if _stop_compose_containers(compose):
+        _clear_active_example()
+    else:
+        click.echo("  (no running containers found — clearing active example pointer)")
+        _clear_active_example()
+
+
+# ── state tracking + teardown ───────────────────────────────────────
+
+
+def _current_compose_path(aegra_config: Path) -> Path | None:
+    """Return the compose file a given aegra.json implies, if any.
+
+    Aegra's convention is ``<config-parent>/.monet/docker-compose.yml``
+    OR — when the aegra.json is itself inside ``.monet/`` — its sibling.
+    Returns ``None`` when no compose file is found.
+    """
+    candidates = [
+        aegra_config.parent / "docker-compose.yml",
+        aegra_config.parent.parent / "docker-compose.yml",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c.resolve()
+    return None
+
+
+def _read_active_example() -> Path | None:
+    """Return the compose path of the currently active example, if any."""
+    sf = state_file()
+    if not sf.exists():
+        return None
+    try:
+        data = json.loads(sf.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    compose = data.get("active_compose")
+    if not compose:
+        return None
+    return Path(compose)
+
+
+def _record_active_example(compose: Path) -> None:
+    """Persist ``compose`` as the active example for later teardown."""
+    sf = state_file()
+    payload: dict[str, str] = {"active_compose": str(compose)}
+    with contextlib.suppress(OSError):
+        sf.write_text(json.dumps(payload, indent=2))
+
+
+def _clear_active_example() -> None:
+    """Forget the active example pointer."""
+    sf = state_file()
+    with contextlib.suppress(OSError):
+        sf.write_text(json.dumps({}))
+
+
+def _teardown_previous(current: Path) -> None:
+    """If a different example was last active, stop its containers.
+
+    Parses ``container_name:`` entries from the previous compose file and
+    ``docker stop`` + ``docker rm`` each one. Avoids ``docker compose down``
+    because the compose file may reference env files that were not committed
+    and ``compose down`` refuses to parse without them. Volumes are not
+    touched, so re-entering the previous example retains its Postgres data.
+    """
+    previous = _read_active_example()
+    if previous is None or previous.resolve() == current.resolve():
+        return
+    if not previous.exists():
+        _clear_active_example()
+        return
+    click.echo(f"Tearing down previous example: {previous}")
+    _stop_compose_containers(previous)
+
+
+# Regex for container_name lines. Matches quoted and bare values.
+_CONTAINER_NAME_RE = re.compile(
+    r"""^\s*container_name:\s*['"]?([A-Za-z0-9_.-]+)['"]?\s*$""",
+    re.MULTILINE,
+)
+
+
+def _stop_compose_containers(compose: Path) -> bool:
+    """Stop and remove each ``container_name`` declared in ``compose``.
+
+    Returns True if at least one container was stopped, False if there was
+    nothing running to stop (silent success either way — we use this from
+    both the explicit ``dev down`` command and the implicit teardown in
+    ``dev``).
+    """
+    try:
+        text = compose.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    names = _CONTAINER_NAME_RE.findall(text)
+    stopped = 0
+    for name in names:
+        # docker stop is idempotent-ish: returns non-zero when the
+        # container doesn't exist, which we intentionally swallow. rm -f
+        # then removes the stopped container so a subsequent compose up
+        # can recreate it with fresh env vars.
+        stop = subprocess.run(
+            ["docker", "stop", name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if stop.returncode == 0:
+            stopped += 1
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                check=False,
+                capture_output=True,
+            )
+    return stopped > 0
 
 
 def _run_curated(cmd: list[str], port: int) -> int:
@@ -215,7 +374,30 @@ _DROP_SUBSTRINGS: tuple[str, ...] = (
     "Starting LangGraph dev server",
     "Starting Aegra",
     "Opening Studio",
-    "INFO:",
+    # Only suppress uvicorn-style HTTP access info lines (very noisy, little
+    # signal). We intentionally do NOT drop plain "INFO:" — agent and
+    # planner logs are emitted at INFO level and hiding them silently
+    # masks defects like planner_error.
+    "INFO:     127.0.0.1",
+    "INFO:     Started server",
+    "INFO:     Waiting for",
+    "INFO:     Application startup",
+    "INFO:     Shutting down",
+    "[uvicorn.error]",
+    "[alembic.runtime.migration]",
+    "[app.access_logs]",
+    "[google_genai.models]",
+)
+
+# Substrings that MUST pass through even if a broader rule would drop the
+# line. Anything agent-originated or explicitly error-tagged shows up
+# verbatim so real failures are visible to the user.
+_KEEP_SUBSTRINGS: tuple[str, ...] = (
+    "monet.agent",
+    "planner_error",
+    "ERROR",
+    "Traceback",
+    "RuntimeError",
 )
 
 # Box-drawing characters used in ASCII welcome banners. Lines made up
@@ -228,6 +410,9 @@ def _should_drop(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return True
+    # Keep-list trumps drop-list: real errors and agent logs always pass.
+    if any(sub in line for sub in _KEEP_SUBSTRINGS):
+        return False
     if any(sub in line for sub in _DROP_SUBSTRINGS):
         return True
     # ASCII banner lines: all non-space chars are box-drawing glyphs.

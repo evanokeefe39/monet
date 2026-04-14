@@ -56,6 +56,8 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
+    from monet.types import ArtifactPointer
+
 _log = logging.getLogger("monet.client")
 
 __all__ = [
@@ -197,25 +199,38 @@ class MonetClient:
                     yield PlanApproved(run_id=rid)
                 else:
                     rs.status = "interrupted"
-                    brief = values.get("work_brief") or {}
-                    yield PlanInterrupt(run_id=rid, brief=brief)
+                    skeleton = values.get("routing_skeleton") or {}
+                    yield PlanInterrupt(
+                        run_id=rid,
+                        goal=skeleton.get("goal", ""),
+                        nodes=skeleton.get("nodes") or [],
+                    )
                     return
 
             if not values.get("plan_approved"):
                 rs.status = "failed"
-                yield RunFailed(run_id=rid, error="plan not approved")
+                error = values.get("planner_error") or "plan not approved"
+                yield RunFailed(run_id=rid, error=error)
                 return
 
-            brief = values.get("work_brief") or {}
+            pointer = values.get("work_brief_pointer")
+            skeleton = values.get("routing_skeleton") or {}
+            if not pointer or not skeleton:
+                rs.status = "failed"
+                error = values.get("planner_error") or (
+                    "planner did not return work_brief_pointer/routing_skeleton"
+                )
+                yield RunFailed(run_id=rid, error=error)
+                return
+
             yield PlanReady(
                 run_id=rid,
-                goal=brief.get("goal", ""),
-                phases=brief.get("phases") or [],
-                assumptions=brief.get("assumptions") or [],
+                goal=skeleton.get("goal", ""),
+                nodes=skeleton.get("nodes") or [],
             )
 
             # ── Execution ───────────────────────────────────────
-            async for event in self._run_execution(rs, brief, topic):
+            async for event in self._run_execution(rs, pointer, skeleton):
                 yield event
 
         except Exception as exc:
@@ -255,7 +270,8 @@ class MonetClient:
     async def get_run(self, run_id: str) -> RunDetail:
         """Get full state of a run by inspecting all its threads."""
         triage: dict[str, Any] = {}
-        work_brief: dict[str, Any] = {}
+        routing_skeleton: dict[str, Any] = {}
+        work_brief_pointer: Any = None
         wave_results: list[dict[str, Any]] = []
         wave_reflections: list[dict[str, Any]] = []
         status = "unknown"
@@ -275,7 +291,8 @@ class MonetClient:
                 triage = values.get("triage") or {}
             elif graph == "planning":
                 phase = "planning"
-                work_brief = values.get("work_brief") or {}
+                routing_skeleton = values.get("routing_skeleton") or {}
+                work_brief_pointer = values.get("work_brief_pointer")
             elif graph == "execution":
                 phase = "execution"
                 wave_results = values.get("wave_results") or []
@@ -293,7 +310,8 @@ class MonetClient:
             status=status,
             phase=phase,
             triage=triage,
-            work_brief=work_brief,
+            routing_skeleton=routing_skeleton,
+            work_brief_pointer=work_brief_pointer,
             wave_results=wave_results,
             wave_reflections=wave_reflections,
         )
@@ -350,23 +368,30 @@ class MonetClient:
         yield PlanApproved(run_id=run_id)
 
         if not values.get("plan_approved"):
-            yield RunFailed(run_id=run_id, error="plan not approved after resume")
+            error = values.get("planner_error") or "plan not approved after resume"
+            yield RunFailed(run_id=run_id, error=error)
             return
 
-        brief = values.get("work_brief") or {}
+        pointer = values.get("work_brief_pointer")
+        skeleton = values.get("routing_skeleton") or {}
+        if not pointer or not skeleton:
+            error = values.get("planner_error") or (
+                "planner did not return work_brief_pointer/routing_skeleton"
+            )
+            yield RunFailed(run_id=run_id, error=error)
+            return
+
         yield PlanReady(
             run_id=run_id,
-            goal=brief.get("goal", ""),
-            phases=brief.get("phases") or [],
-            assumptions=brief.get("assumptions") or [],
+            goal=skeleton.get("goal", ""),
+            nodes=skeleton.get("nodes") or [],
         )
 
         rs = self._store.get(run_id) or _RunState(run_id=run_id)
         rs.planning_thread = thread
         self._store.put(rs)
 
-        task = values.get("task", "")
-        async for event in self._run_execution(rs, brief, task):
+        async for event in self._run_execution(rs, pointer, skeleton):
             yield event
 
     async def revise_plan(self, run_id: str, feedback: str) -> AsyncIterator[RunEvent]:
@@ -384,21 +409,25 @@ class MonetClient:
         values, nxt = await get_state_values(self._client, thread)
 
         if "human_approval" in nxt:
-            brief = values.get("work_brief") or {}
-            yield PlanInterrupt(run_id=run_id, brief=brief)
+            skeleton = values.get("routing_skeleton") or {}
+            yield PlanInterrupt(
+                run_id=run_id,
+                goal=skeleton.get("goal", ""),
+                nodes=skeleton.get("nodes") or [],
+            )
             return
 
         if values.get("plan_approved"):
-            brief = values.get("work_brief") or {}
+            skeleton = values.get("routing_skeleton") or {}
             yield PlanApproved(run_id=run_id)
             yield PlanReady(
                 run_id=run_id,
-                goal=brief.get("goal", ""),
-                phases=brief.get("phases") or [],
-                assumptions=brief.get("assumptions") or [],
+                goal=skeleton.get("goal", ""),
+                nodes=skeleton.get("nodes") or [],
             )
         else:
-            yield RunFailed(run_id=run_id, error="plan rejected after revision")
+            error = values.get("planner_error") or "plan rejected after revision"
+            yield RunFailed(run_id=run_id, error=error)
 
     async def reject_plan(self, run_id: str) -> None:
         """Reject a plan and terminate the run."""
@@ -429,6 +458,57 @@ class MonetClient:
         rs = self._store.get(run_id)
         if rs:
             rs.status = "failed"
+
+    # ── Single-graph entrypoint ─────────────────────────────────
+
+    async def run_single(
+        self,
+        graph_id: str,
+        topic: str,
+        *,
+        run_id: str | None = None,
+    ) -> AsyncIterator[RunEvent]:
+        """Drive a single graph directly with ``{task, run_id, trace_id}``.
+
+        Unlike :meth:`run`, this does not compose entry → planning →
+        execution. The graph is expected to accept the same keys that
+        ``entry_input`` produces and return a final state. Yields
+        ``TriageComplete`` if ``values["triage"]`` is present, plus
+        ``RunComplete`` / ``RunFailed`` based on the stream outcome.
+
+        This is the dispatch path for ``[entrypoints.<name>]`` configs
+        with ``kind = "single"``.
+        """
+        rid = run_id or secrets.token_hex(4)
+        thread = await self._create_tagged_thread(rid, graph_id)
+
+        try:
+            async for mode, data in stream_run(
+                self._client,
+                thread,
+                graph_id,
+                input=entry_input(topic, rid),
+            ):
+                if mode == "error":
+                    yield RunFailed(run_id=rid, error=str(data))
+                    return
+                if mode == "custom" and isinstance(data, dict):
+                    progress = _build_agent_progress(rid, data)
+                    if progress is not None:
+                        yield progress
+
+            values, _ = await get_state_values(self._client, thread)
+            triage = values.get("triage") or {}
+            if triage:
+                yield TriageComplete(
+                    run_id=rid,
+                    complexity=triage.get("complexity", "unknown"),
+                    suggested_agents=triage.get("suggested_agents") or [],
+                )
+            yield RunComplete(run_id=rid)
+        except Exception as exc:
+            _log.exception("Single-graph run %s failed", rid)
+            yield RunFailed(run_id=rid, error=str(exc))
 
     # ── Results ─────────────────────────────────────────────────
 
@@ -620,15 +700,18 @@ class MonetClient:
     async def _run_execution(
         self,
         rs: _RunState,
-        brief: dict[str, Any],
-        topic: str,
+        pointer: ArtifactPointer,
+        skeleton: dict[str, Any],
     ) -> AsyncIterator[RunEvent]:
         """Create an execution thread and stream it, yielding events."""
         rs.status = "executing"
         rs.phase = "execution"
         rs.execution_thread = await self._create_tagged_thread(rs.run_id, "execution")
         async for event in self._stream_execution(
-            rs.run_id, rs.execution_thread, brief=brief
+            rs.run_id,
+            rs.execution_thread,
+            pointer=pointer,
+            skeleton=skeleton,
         ):
             yield event
 
@@ -637,19 +720,28 @@ class MonetClient:
         run_id: str,
         thread_id: str,
         *,
-        brief: dict[str, Any] | None = None,
+        pointer: ArtifactPointer | None = None,
+        skeleton: dict[str, Any] | None = None,
         resume: bool = False,
     ) -> AsyncIterator[RunEvent]:
         """Stream an execution graph run and yield typed events."""
         if resume:
-            input_data = None
+            input_data: dict[str, Any] | None = None
             command = {"resume": {"action": None}}
         else:
-            input_data = execution_input(brief or {}, run_id)
+            if pointer is None or not skeleton:
+                yield RunFailed(
+                    run_id=run_id,
+                    error=(
+                        "execution requires work_brief_pointer and routing_skeleton; "
+                        "planner produced neither"
+                    ),
+                )
+                return
+            input_data = execution_input(pointer, skeleton, run_id)
             command = None
 
         # Collect streaming events
-        last_wave_index = -1
         async for mode, data in stream_run(
             self._client,
             thread_id,
@@ -665,24 +757,51 @@ class MonetClient:
                 if progress is not None:
                     yield progress
 
-        # Post-stream: inspect final state
+        # Post-stream: inspect final state.
         values, nxt = await get_state_values(self._client, thread_id)
         wave_results = values.get("wave_results") or []
         wave_reflections = values.get("wave_reflections") or []
+        # Prefer the skeleton from state on resume (input `skeleton` is None
+        # there); fall back to the caller-supplied one otherwise.
+        skeleton_for_waves = values.get("routing_skeleton") or skeleton or {}
 
-        # Yield wave completions and reflections
-        for wr in wave_results:
-            wi = wr.get("wave_index", 0)
-            if wi > last_wave_index:
-                # Collect all results for this wave
-                wave_batch = [r for r in wave_results if r.get("wave_index") == wi]
+        # Group wave_results into dispatch batches. The flat-DAG executor
+        # emits wave_results strictly in batch order (initialise -> dispatch
+        # -> agent_node xN -> collect_batch -> dispatch -> ...). Each new
+        # batch starts after the prior batch's completed nodes are observed.
+        if wave_results:
+            completed_set: set[str] = set()
+            batch: list[dict[str, Any]] = []
+            wave_index = 0
+            for wr in wave_results:
+                deps = {
+                    d
+                    for node in (skeleton_for_waves.get("nodes") or [])
+                    if node.get("id") == wr.get("node_id")
+                    for d in (node.get("depends_on") or [])
+                }
+                if batch and deps and not deps.issubset(completed_set):
+                    # This result's deps weren't in the completed set when
+                    # the prior batch flushed → it belongs to a later wave.
+                    yield WaveComplete(
+                        run_id=run_id,
+                        wave_index=wave_index,
+                        node_ids=[r.get("node_id", "") for r in batch],
+                        results=batch,
+                    )
+                    for r in batch:
+                        if r.get("success"):
+                            completed_set.add(r.get("node_id", ""))
+                    batch = []
+                    wave_index += 1
+                batch.append(wr)
+            if batch:
                 yield WaveComplete(
                     run_id=run_id,
-                    phase_index=wr.get("phase_index", 0),
-                    wave_index=wi,
-                    results=wave_batch,
+                    wave_index=wave_index,
+                    node_ids=[r.get("node_id", "") for r in batch],
+                    results=batch,
                 )
-                last_wave_index = wi
 
         for ref in wave_reflections:
             yield ReflectionComplete(
@@ -696,11 +815,16 @@ class MonetClient:
             rs = self._store.get(run_id)
             if rs:
                 rs.status = "interrupted"
+            skeleton_state = values.get("routing_skeleton") or {}
+            all_node_ids = [
+                n.get("id", "") for n in (skeleton_state.get("nodes") or [])
+            ]
+            completed = set(values.get("completed_node_ids") or [])
+            pending = [nid for nid in all_node_ids if nid and nid not in completed]
             yield ExecutionInterrupt(
                 run_id=run_id,
                 reason=values.get("abort_reason") or "execution paused",
-                phase_index=values.get("current_phase_index", 0),
-                wave_index=values.get("current_wave_index", 0),
+                pending_node_ids=pending,
             )
             return
 

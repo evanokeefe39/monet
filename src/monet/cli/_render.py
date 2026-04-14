@@ -28,6 +28,18 @@ from monet.client._events import (
 )
 
 
+def _format_node_line(node: dict[str, Any]) -> str:
+    """One-line summary of a routing-skeleton node: ``id: agent/cmd ← deps``."""
+    nid = node.get("id", "?")
+    agent = node.get("agent_id", "?")
+    command = node.get("command", "?")
+    deps = node.get("depends_on") or []
+    base = f"  {nid}: {agent}/{command}"
+    if deps:
+        base += f" ← {', '.join(deps)}"
+    return base
+
+
 def render_event(event: RunEvent) -> None:
     """Pretty-print a run event to the terminal."""
     if isinstance(event, TriageComplete):
@@ -37,25 +49,18 @@ def render_event(event: RunEvent) -> None:
 
     elif isinstance(event, PlanReady):
         click.secho(f"Plan: {event.goal}", fg="green")
-        for i, phase in enumerate(event.phases, 1):
-            label = phase.get("label") or phase.get("name") or f"Phase {i}"
-            click.echo(f"  {i}. {label}")
-        if event.assumptions:
-            click.secho("  Assumptions:", dim=True)
-            for a in event.assumptions:
-                click.secho(f"    - {a}", dim=True)
+        for node in event.nodes:
+            click.echo(_format_node_line(node))
 
     elif isinstance(event, PlanApproved):
         click.secho("Plan approved", fg="green")
 
     elif isinstance(event, PlanInterrupt):
         click.secho("Plan awaiting approval:", fg="yellow", bold=True)
-        brief = event.brief
-        if brief.get("goal"):
-            click.echo(f"  Goal: {brief['goal']}")
-        for i, phase in enumerate(brief.get("phases") or [], 1):
-            label = phase.get("label") or phase.get("name") or f"Phase {i}"
-            click.echo(f"  {i}. {label}")
+        if event.goal:
+            click.echo(f"  Goal: {event.goal}")
+        for node in event.nodes:
+            click.echo(_format_node_line(node))
 
     elif isinstance(event, AgentProgress):
         click.secho(f"  [{event.agent_id}] {event.status}", dim=True)
@@ -76,7 +81,8 @@ def render_event(event: RunEvent) -> None:
 
     elif isinstance(event, ExecutionInterrupt):
         click.secho(f"Execution paused: {event.reason}", fg="yellow", bold=True)
-        click.echo(f"  Phase {event.phase_index}, Wave {event.wave_index}")
+        if event.pending_node_ids:
+            click.echo(f"  Pending: {', '.join(event.pending_node_ids)}")
 
     elif isinstance(event, RunComplete):
         click.secho("Done.", fg="green", bold=True)
@@ -218,15 +224,14 @@ def render_run_detail(detail: RunDetail) -> None:
         if agents:
             click.echo(f"  Agents: {', '.join(agents)}")
 
-    if detail.work_brief:
+    if detail.routing_skeleton:
         click.echo()
         click.secho("Plan", bold=True)
-        goal = detail.work_brief.get("goal", "")
+        goal = detail.routing_skeleton.get("goal", "")
         if goal:
             click.echo(f"  Goal: {goal}")
-        for i, phase in enumerate(detail.work_brief.get("phases") or [], 1):
-            label = phase.get("label") or phase.get("name") or f"Phase {i}"
-            click.echo(f"  {i}. {label}")
+        for node in detail.routing_skeleton.get("nodes") or []:
+            click.echo(_format_node_line(node))
 
     if detail.wave_results:
         click.echo()

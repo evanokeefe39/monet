@@ -118,27 +118,18 @@ async def run(
 
         skeleton = RoutingSkeleton.model_validate(skeleton_raw)
         yield PlanApproved(run_id=rid)
-        # PlanReady: surface the flat node list as a single-phase summary
-        # so existing client renderers keep working. Step 8 may redesign
-        # this event.
         yield PlanReady(
             run_id=rid,
             goal=skeleton.goal,
-            phases=[
+            nodes=[
                 {
-                    "name": "Execution",
-                    "nodes": [
-                        {
-                            "id": n.id,
-                            "agent_id": n.agent_id,
-                            "command": n.command,
-                            "depends_on": list(n.depends_on),
-                        }
-                        for n in skeleton.nodes
-                    ],
+                    "id": n.id,
+                    "agent_id": n.agent_id,
+                    "command": n.command,
+                    "depends_on": list(n.depends_on),
                 }
+                for n in skeleton.nodes
             ],
-            assumptions=[],
         )
 
         # ── Execution — pointer-only, DAG traversal ─────────────
@@ -167,8 +158,8 @@ async def run(
         if wave_results:
             yield WaveComplete(
                 run_id=rid,
-                phase_index=0,
                 wave_index=0,
+                node_ids=[str(r.get("node_id", "")) for r in wave_results],
                 results=wave_results,
             )
 

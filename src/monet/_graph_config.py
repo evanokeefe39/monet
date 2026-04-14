@@ -1,8 +1,16 @@
-"""Graph role mapping from monet.toml + environment variables.
+"""Graph role mapping and entrypoint declarations from monet.toml.
 
-Maps logical graph roles to server-registered graph IDs. The mapping
-is a plain ``dict[str, str]`` — extensible by config alone. Self-hosting
-users add arbitrary keys to ``monet.toml [graphs]`` without code changes.
+Two configs live in ``monet.toml``:
+
+``[graphs]`` — logical role to graph ID mapping. Roles:
+``entry``, ``planning``, ``execution``, ``chat`` (defaults); plus any
+user-added role names for custom graphs.
+
+``[entrypoints.<name>]`` — which graphs ``monet run`` may invoke and
+how. Each declares ``graph = "<graph-id>"`` and
+``kind = "pipeline" | "single" | "messages"``. Graphs NOT listed here
+cannot be driven from ``monet run`` — making internal subgraphs
+(``planning``, ``execution``) private by default.
 """
 
 from __future__ import annotations
@@ -10,8 +18,16 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from typing import Literal, TypedDict
 
-__all__ = ["DEFAULT_GRAPH_ROLES", "load_graph_roles"]
+__all__ = [
+    "DEFAULT_ENTRYPOINTS",
+    "DEFAULT_GRAPH_ROLES",
+    "Entrypoint",
+    "EntrypointKind",
+    "load_entrypoints",
+    "load_graph_roles",
+]
 
 # Single source of truth for default graph IDs.
 # Matches the IDs in aegra.json.
@@ -20,6 +36,36 @@ DEFAULT_GRAPH_ROLES: dict[str, str] = {
     "planning": "planning",
     "execution": "execution",
     "chat": "chat",
+}
+
+
+EntrypointKind = Literal["pipeline", "single", "messages"]
+
+
+class Entrypoint(TypedDict):
+    """How ``monet run --graph <name>`` should drive a graph.
+
+    ``graph``: the server-registered graph ID (often matches ``<name>``).
+    ``kind``:
+      - ``pipeline`` — the default three-graph flow (entry → planning →
+        execution) with HITL plan approval. Only meaningful when
+        ``graph == "entry"``.
+      - ``single`` — drive the named graph once with
+        ``{task, run_id, trace_id}`` input and stream its final state.
+      - ``messages`` — chat-style ``{messages: [...]}`` input. Reserved
+        for future chat-like entrypoints; ``monet chat`` keeps its own
+        dedicated command.
+    """
+
+    graph: str
+    kind: EntrypointKind
+
+
+# Default entrypoints. ``planning`` and ``execution`` are deliberately
+# absent — they are internal subgraphs of the pipeline, not things a user
+# can call directly.
+DEFAULT_ENTRYPOINTS: dict[str, Entrypoint] = {
+    "default": {"graph": "entry", "kind": "pipeline"},
 }
 
 
@@ -66,3 +112,39 @@ def load_graph_roles(path: Path | None = None) -> dict[str, str]:
             roles[role] = env_val
 
     return roles
+
+
+def load_entrypoints(path: Path | None = None) -> dict[str, Entrypoint]:
+    """Load entrypoints from ``monet.toml [entrypoints.<name>]`` sections.
+
+    Starts from :data:`DEFAULT_ENTRYPOINTS` and merges any entrypoints
+    declared in ``monet.toml``. Raises ``ValueError`` if an entrypoint
+    has a missing or unknown ``kind``.
+    """
+    if path is None:
+        path = Path.cwd() / "monet.toml"
+
+    entrypoints: dict[str, Entrypoint] = dict(DEFAULT_ENTRYPOINTS)
+
+    if path.exists():
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+        section = raw.get("entrypoints", {})
+        if isinstance(section, dict):
+            for name, spec in section.items():
+                if not isinstance(spec, dict):
+                    continue
+                graph = spec.get("graph")
+                kind = spec.get("kind")
+                if not isinstance(graph, str) or not graph:
+                    msg = f"[entrypoints.{name}]: 'graph' must be a non-empty string"
+                    raise ValueError(msg)
+                if kind not in ("pipeline", "single", "messages"):
+                    msg = (
+                        f"[entrypoints.{name}]: 'kind' must be one of "
+                        "'pipeline', 'single', 'messages'"
+                    )
+                    raise ValueError(msg)
+                entrypoints[name] = {"graph": graph, "kind": kind}
+
+    return entrypoints
