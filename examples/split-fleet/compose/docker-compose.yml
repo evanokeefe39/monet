@@ -7,7 +7,7 @@ services:
     ports:
       - "2026:2026"
     environment:
-      DATABASE_URI: postgresql://monet:monet@postgres:5432/monet
+      DATABASE_URL: postgresql://monet:monet@postgres:5432/monet
       MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
       MONET_QUEUE_BACKEND: redis
       REDIS_URI: redis://redis:6379

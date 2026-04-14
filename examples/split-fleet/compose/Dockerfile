@@ -48,7 +48,13 @@ COPY examples/split-fleet/monet.toml /app/monet.toml
 COPY examples/split-fleet/compose/aegra.json /app/aegra.json
 COPY examples/split-fleet/compose/server_graphs.py /app/server_graphs.py
 
-ENV PATH="/app/.venv/bin:$PATH"
+# Artifact store writes under cwd at runtime — make a dir writable by
+# the non-root app user so ``configure_artifacts`` can create files on
+# first use.
+RUN mkdir -p /app/.artifacts && chown -R app:app /app/.artifacts
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    MONET_ARTIFACTS_DIR=/app/.artifacts
 
 EXPOSE 2026
 
