@@ -77,7 +77,7 @@ worker_task = await bootstrap(
 Agents declare their pool via the `@agent` decorator:
 
 ```python
-@agent("researcher", pool="local")     # runs in-process
+@agent("researcher", pool="local")     # runs in the local pool (worker in same process as server)
 @agent("transcriber", pool="default")  # remote worker
 @agent("pipeline", pool="cloud")       # forwarded to Cloud Run/ECS
 ```
