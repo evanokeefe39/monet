@@ -49,13 +49,16 @@ class NodeItem(TypedDict):
 
     The worker-side ``inject_plan_context`` hook resolves the full task
     content from ``work_brief_pointer`` + ``node_id`` before the agent
-    runs.
+    runs. ``upstream_results`` carries lightweight pointers to each
+    ``depends_on`` node's output so the agent can see what upstream
+    produced — the agent resolves artifact content via ``resolve_context``.
     """
 
     node_id: str
     agent_id: str
     command: str
     work_brief_pointer: ArtifactPointer
+    upstream_results: list[dict[str, Any]]
     trace_id: str
     run_id: str
     trace_carrier: dict[str, str]
@@ -122,6 +125,9 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
 
     pointer = state["work_brief_pointer"]
     trace_carrier = dict(state.get("trace_carrier") or {})
+    wave_results = state.get("wave_results") or []
+    results_by_id = {r["node_id"]: r for r in wave_results}
+    deps_by_id = {n.id: list(n.depends_on) for n in skeleton.nodes}
     return [
         Send(
             "agent_node",
@@ -130,6 +136,7 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
                 agent_id=node.agent_id,
                 command=node.command,
                 work_brief_pointer=pointer,
+                upstream_results=_upstream_entries(node.id, deps_by_id, results_by_id),
                 trace_id=state.get("trace_id", ""),
                 run_id=state.get("run_id", ""),
                 trace_carrier=trace_carrier,
@@ -137,6 +144,52 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
         )
         for node in ready
     ]
+
+
+def _upstream_entries(
+    node_id: str,
+    deps_by_id: dict[str, list[str]],
+    results_by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build upstream-result entries for every transitive ancestor of ``node_id``.
+
+    Each entry carries artifact pointers so ``resolve_context`` can fetch
+    full content on the worker side. Transitive ancestors are included so
+    that, e.g., a publisher that depends only on QA still sees the
+    draft-producing writer's artifact.
+
+    Ordered root-first (topological) so agent prompts read naturally.
+    """
+    ancestors: list[str] = []
+    seen: set[str] = set()
+    stack = list(deps_by_id.get(node_id, []))
+    while stack:
+        current = stack.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        ancestors.append(current)
+        stack.extend(deps_by_id.get(current, []))
+    ancestors.reverse()  # root-first
+
+    entries: list[dict[str, Any]] = []
+    for ancestor_id in ancestors:
+        result = results_by_id.get(ancestor_id)
+        if result is None:
+            continue
+        output = result.get("output") or ""
+        summary = output[:200] if isinstance(output, str) else ""
+        entries.append(
+            {
+                "type": "upstream_result",
+                "node_id": result.get("node_id", ancestor_id),
+                "agent_id": result.get("agent_id", ""),
+                "command": result.get("command", ""),
+                "summary": summary,
+                "artifacts": result.get("artifacts") or [],
+            }
+        )
+    return entries
 
 
 async def agent_node(item: NodeItem) -> dict[str, Any]:
@@ -156,7 +209,8 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
                     "type": "plan_item",
                     "work_brief_pointer": item["work_brief_pointer"],
                     "node_id": item["node_id"],
-                }
+                },
+                *item.get("upstream_results", []),
             ],
             trace_id=item.get("trace_id", ""),
             run_id=item.get("run_id", ""),

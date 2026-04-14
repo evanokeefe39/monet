@@ -73,8 +73,7 @@ _VALID_BRIEF = (
     '{"id": "draft", "depends_on": [],'
     ' "agent_id": "writer", "command": "deep",'
     ' "task": "write a thing"}'
-    "],"
-    ' "is_sensitive": false}'
+    "]}"
 )
 
 
@@ -120,8 +119,7 @@ async def test_planner_node_invalid_dag_routes_to_failed(_reset: Any) -> None:
         ' "nodes": ['
         '{"id": "a", "depends_on": ["missing"],'
         ' "agent_id": "writer", "command": "deep", "task": "x"}'
-        "],"
-        ' "is_sensitive": false}'
+        "]}"
     )
     with patch("monet.agents.planner._get_model", return_value=_mock(bad)):
         graph = build_planning_graph().compile(checkpointer=MemorySaver())

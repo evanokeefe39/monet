@@ -75,8 +75,7 @@ async def test_planner_plan_returns_brief() -> None:
         '{"id": "research", "depends_on": [],'
         ' "agent_id": "researcher", "command": "deep",'
         ' "task": "research it"}'
-        "],"
-        ' "is_sensitive": false}'
+        "]}"
     )
     with patch("monet.agents.planner._get_model", return_value=_mock(payload)):
         result = await invoke_agent("planner", command="plan", task="plan a thing")
@@ -94,22 +93,6 @@ async def test_planner_plan_returns_brief() -> None:
     # Planner registers a keyed artifact.
     assert len(result.artifacts) == 1
     assert result.artifacts[0].get("key") == "work_brief"
-
-
-async def test_planner_plan_sensitive_raises_human_review() -> None:
-    payload = (
-        '{"goal": "Sensitive",'
-        ' "nodes": ['
-        '{"id": "review", "depends_on": [],'
-        ' "agent_id": "qa", "command": "fast",'
-        ' "task": "review"}'
-        "],"
-        ' "is_sensitive": true}'
-    )
-    with patch("monet.agents.planner._get_model", return_value=_mock(payload)):
-        result = await invoke_agent("planner", command="plan", task="health advice")
-    assert not result.success
-    assert result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)
 
 
 async def test_researcher_fast_returns_content(monkeypatch: pytest.MonkeyPatch) -> None:

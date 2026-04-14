@@ -71,13 +71,12 @@ _BRIEF = (
     '{"id": "draft", "depends_on": [],'
     ' "agent_id": "writer", "command": "deep",'
     ' "task": "write a thing"}'
-    "],"
-    ' "is_sensitive": false}'
+    "]}"
 )
 # Legacy wave-schema brief — still consumed directly by execution_graph
 # tests until Step 6 rewrites the execution graph.
 _LEGACY_WAVE_BRIEF = (
-    '{"goal": "Test goal", "is_sensitive": false, "phases": ['
+    '{"goal": "Test goal", "phases": ['
     '{"name": "Draft", "waves": [{"items": ['
     '{"agent_id": "writer", "command": "deep", "task": "write a thing"}'
     "]}]}]}"

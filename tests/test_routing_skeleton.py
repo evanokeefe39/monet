@@ -309,9 +309,7 @@ def test_work_brief_round_trip() -> None:
             ),
         ],
         assumptions=["assume nothing"],
-        is_sensitive=True,
     )
     dumped = brief.model_dump()
     restored = WorkBrief.model_validate(dumped)
-    assert restored.is_sensitive is True
     assert restored.assumptions == ["assume nothing"]

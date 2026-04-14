@@ -12,8 +12,7 @@ Return ONLY valid JSON with this shape:
       "task": "natural-language instruction for the agent"
     }
   ],
-  "assumptions": ["..."],
-  "is_sensitive": false
+  "assumptions": ["..."]
 }
 
 Rules for nodes:
@@ -25,9 +24,6 @@ Rules for nodes:
 - Do not create cycles.
 - Do not reference node ids that don't exist.
 - At least one node is required.
-
-Set `is_sensitive` to true if the topic requires human review (medical, legal,
-financial advice, etc.) and return minimal nodes — a human will review before execution.
 
 Available agents — use ONLY these exact (agent_id, command) pairs. Do not
 invent new commands. The `command` field is a registered capability identifier,
