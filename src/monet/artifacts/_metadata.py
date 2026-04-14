@@ -6,7 +6,7 @@ from typing import Any, TypedDict
 
 
 class ArtifactMetadata(TypedDict):
-    """Metadata sidecar for a catalogue artifact."""
+    """Metadata sidecar for a stored artifact."""
 
     artifact_id: str
     content_type: str

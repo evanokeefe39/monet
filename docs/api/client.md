@@ -6,10 +6,15 @@
 from monet.client import MonetClient
 
 class MonetClient:
-    def __init__(self, url: str = "http://localhost:2026") -> None
+    def __init__(
+        self,
+        url: str = "http://localhost:2026",
+        *,
+        graph_ids: dict[str, str] | None = None,
+    ) -> None
 ```
 
-High-level typed async client for interacting with a monet server. Manages the three-graph topology (entry, planning, execution) and translates LangGraph state into typed events.
+Graph-agnostic async client. Drives any graph declared in `monet.toml [entrypoints]`, streams typed core events, and exposes generic HITL resume/abort. Pipeline-specific composition (entry → planning → execution with HITL) lives in [`monet.pipelines.default`](#default-pipeline).
 
 ### Run lifecycle
 
@@ -17,14 +22,16 @@ High-level typed async client for interacting with a monet server. Manages the t
 
 ```python
 async def run(
-    topic: str,
+    graph_id: str,
+    input: dict[str, Any] | str | None = None,
     *,
     run_id: str | None = None,
-    auto_approve: bool = False,
 ) -> AsyncIterator[RunEvent]
 ```
 
-Start a run and stream typed events. If `auto_approve=True`, planning interrupts are automatically approved. Execution interrupts always pause.
+Drive one declared graph and stream typed core events. If `input` is a string, it is wrapped by `task_input()`. Raises `GraphNotInvocable` if `graph_id` is not declared in `[entrypoints]`.
+
+Yields: `RunStarted`, then zero-or-more `NodeUpdate` / `AgentProgress` / `SignalEmitted`, then either `Interrupt` (paused) or `RunComplete` / `RunFailed`.
 
 #### `list_runs`
 
@@ -32,7 +39,7 @@ Start a run and stream typed events. If `auto_approve=True`, planning interrupts
 async def list_runs(*, limit: int = 20) -> list[RunSummary]
 ```
 
-List recent runs with status. Queries server threads tagged as monet entry threads.
+List recent runs, grouped by `monet_run_id` metadata across threads.
 
 #### `get_run`
 
@@ -40,67 +47,42 @@ List recent runs with status. Queries server threads tagged as monet entry threa
 async def get_run(run_id: str) -> RunDetail
 ```
 
-Get full run state by inspecting all threads (entry, planning, execution).
+Merge all threads for *run_id* into a generic `RunDetail`. Pipeline-specific typed views project from this — e.g. `DefaultPipelineRunDetail.from_run_detail(detail)`.
 
-### HITL decisions
+### HITL
 
-#### `approve_plan`
-
-```python
-async def approve_plan(run_id: str) -> AsyncIterator[RunEvent]
-```
-
-Approve a pending plan and continue into execution. Yields remaining run events.
-
-#### `revise_plan`
+#### `resume`
 
 ```python
-async def revise_plan(run_id: str, feedback: str) -> AsyncIterator[RunEvent]
+async def resume(
+    run_id: str,
+    tag: str,
+    payload: dict[str, Any],
+) -> None
 ```
 
-Send plan back for revision with feedback. May yield another `PlanInterrupt`.
+Resume a paused interrupt. Validates the run is paused at *tag* before dispatching.
 
-#### `reject_plan`
+Raises:
+
+| Exception | When |
+|---|---|
+| `RunNotInterrupted` | No interrupted thread for `run_id` |
+| `AlreadyResolved` | Run already moved past the interrupt |
+| `AmbiguousInterrupt` | Multiple pending nodes |
+| `InterruptTagMismatch` | `tag` does not match the current interrupt |
+
+All inherit from `MonetClientError`.
+
+#### `abort`
 
 ```python
-async def reject_plan(run_id: str) -> None
+async def abort(run_id: str) -> None
 ```
 
-Reject a plan and terminate the run.
+Abort a paused run with a canonical `{"action": "abort"}` resume payload.
 
-#### `retry_wave`
-
-```python
-async def retry_wave(run_id: str) -> AsyncIterator[RunEvent]
-```
-
-Retry the current wave after an execution interrupt.
-
-#### `abort_run`
-
-```python
-async def abort_run(run_id: str) -> None
-```
-
-Abort a run during an execution interrupt.
-
-### Results
-
-#### `get_results`
-
-```python
-async def get_results(run_id: str) -> RunDetail
-```
-
-Alias for `get_run()`. Returns wave results and reflections.
-
-#### `get_artifacts`
-
-```python
-async def get_artifacts(run_id: str) -> list[dict[str, Any]]
-```
-
-Get all artifact pointers from a run's wave results.
+### Queries
 
 #### `list_pending`
 
@@ -108,44 +90,157 @@ Get all artifact pointers from a run's wave results.
 async def list_pending() -> list[PendingDecision]
 ```
 
-List runs currently waiting for human input.
+List runs waiting for human input. `decision_type` is the raw interrupt tag (graph node name that called `interrupt()`).
+
+#### `list_graphs`
+
+```python
+async def list_graphs() -> list[str]
+```
+
+Return graph IDs available on the connected server.
+
+### Chat
+
+Chat graph methods (`create_chat`, `list_chats`, `send_message`, `send_context`, `get_chat_history`, `rename_chat`, `get_most_recent_chat`) resolve the chat graph via `monet.toml [graphs]` role mapping (defaults to `chat`).
 
 ---
 
-## `run`
+## Default pipeline
+
+The default multi-graph pipeline (entry → planning → execution with HITL plan approval) is an adapter that composes `MonetClient` calls.
 
 ```python
-from monet import run
+from monet.pipelines.default import run as run_default
 
 async def run(
+    client: MonetClient,
     topic: str,
     *,
     run_id: str | None = None,
-    enable_tracing: bool = False,
-) -> AsyncIterator[RunEvent]
+    auto_approve: bool = False,
+) -> AsyncIterator[DefaultPipelineEvent | RunComplete | RunFailed]
 ```
 
-In-process run without a server. Plans are auto-approved. Yields the same `RunEvent` types as `MonetClient.run()`.
+### Typed HITL verbs
+
+All wrap `client.resume(...)` with typed `DefaultInterruptTag` + `TypedDict` payload:
+
+```python
+from monet.pipelines.default import (
+    approve_plan,   # resume "human_approval" with {"approved": True}
+    revise_plan,    # resume "human_approval" with {"approved": False, "feedback": ...}
+    reject_plan,    # resume "human_approval" with {"approved": False, "feedback": None}
+    retry_wave,     # resume "human_interrupt" with {"action": None}
+    abort_run,      # resume "human_interrupt" with {"action": "abort"}
+)
+```
+
+### Typed RunDetail view
+
+```python
+from monet.pipelines.default import DefaultPipelineRunDetail
+
+view = DefaultPipelineRunDetail.from_run_detail(detail)
+view.triage
+view.routing_skeleton
+view.work_brief_pointer
+view.wave_results
+view.wave_reflections
+```
 
 ---
 
-## Event types
+## Core event types
 
-All events are frozen dataclasses with a `run_id: str` field.
+All events are `@dataclass(frozen=True)` with a `run_id: str` field.
 
 ```python
 from monet.client import (
     RunEvent,
+    RunStarted,
+    NodeUpdate,
+    AgentProgress,
+    SignalEmitted,
+    Interrupt,
+    RunComplete,
+    RunFailed,
+)
+```
+
+### `RunStarted`
+
+| Field | Type | Description |
+|---|---|---|
+| `graph_id` | `str` | Graph being driven |
+| `thread_id` | `str` | Server-side thread |
+
+### `NodeUpdate`
+
+| Field | Type | Description |
+|---|---|---|
+| `node` | `str` | Node that wrote the delta |
+| `update` | `dict[str, Any]` | State delta |
+
+### `AgentProgress`
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` | `str` | Agent reporting progress |
+| `status` | `str` | Progress status |
+| `reasons` | `str` | Optional explanation |
+
+### `SignalEmitted`
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` | `str` | Agent emitting the signal |
+| `signal_type` | `str` | Signal kind (see `monet.signals`) |
+| `payload` | `dict[str, Any]` | Signal fields |
+
+### `Interrupt`
+
+| Field | Type | Description |
+|---|---|---|
+| `tag` | `str` | Interrupt node name |
+| `values` | `dict[str, Any]` | kwargs passed to `interrupt()` |
+| `next_nodes` | `list[str]` | `state.next` |
+
+### `RunComplete`
+
+| Field | Type | Description |
+|---|---|---|
+| `final_values` | `dict[str, Any]` | Final state snapshot |
+
+### `RunFailed`
+
+| Field | Type | Description |
+|---|---|---|
+| `error` | `str` | Error message |
+
+### `RunEvent`
+
+```python
+RunEvent = (
+    RunStarted | NodeUpdate | AgentProgress | SignalEmitted
+    | Interrupt | RunComplete | RunFailed
+)
+```
+
+---
+
+## Default-pipeline event types
+
+```python
+from monet.pipelines.default import (
+    DefaultPipelineEvent,
     TriageComplete,
     PlanReady,
     PlanApproved,
     PlanInterrupt,
-    AgentProgress,
     WaveComplete,
     ReflectionComplete,
     ExecutionInterrupt,
-    RunComplete,
-    RunFailed,
 )
 ```
 
@@ -153,96 +248,49 @@ from monet.client import (
 
 | Field | Type | Description |
 |---|---|---|
-| `run_id` | `str` | Run identifier |
-| `complexity` | `str` | `"simple"`, `"bounded"`, or `"complex"` |
-| `suggested_agents` | `list[str]` | Agents suggested by triage |
+| `complexity` | `str` | `"simple"`, `"bounded"`, `"complex"` |
+| `suggested_agents` | `list[str]` | Triage-suggested agents |
 
 ### `PlanReady`
 
 | Field | Type | Description |
 |---|---|---|
-| `run_id` | `str` | Run identifier |
-| `goal` | `str` | Plan goal statement |
-| `phases` | `list[dict]` | Execution phases |
-| `assumptions` | `list[str]` | Planning assumptions |
-
-### `PlanApproved`
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | `str` | Run identifier |
+| `goal` | `str` | Plan goal |
+| `nodes` | `list[dict]` | Routing skeleton nodes |
 
 ### `PlanInterrupt`
 
 | Field | Type | Description |
 |---|---|---|
-| `run_id` | `str` | Run identifier |
-| `brief` | `dict` | Work brief awaiting approval |
+| `work_brief_pointer` | `ArtifactPointer` | Pointer to the planner's work brief |
+| `routing_skeleton` | `dict` | `{goal, nodes}` |
 
-Use `approve_plan()`, `revise_plan()`, or `reject_plan()` to continue.
-
-### `AgentProgress`
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | `str` | Run identifier |
-| `agent_id` | `str` | Agent reporting progress |
-| `status` | `str` | Progress status message |
+Continue via `approve_plan`, `revise_plan`, or `reject_plan`.
 
 ### `WaveComplete`
 
 | Field | Type | Description |
 |---|---|---|
-| `run_id` | `str` | Run identifier |
-| `phase_index` | `int` | Phase number |
-| `wave_index` | `int` | Wave number within phase |
-| `results` | `list[dict]` | Agent results from this wave |
+| `wave_index` | `int` | Monotonic counter |
+| `node_ids` | `list[str]` | Skeleton node ids in this batch |
+| `results` | `list[dict]` | Agent results |
 
 ### `ReflectionComplete`
 
 | Field | Type | Description |
 |---|---|---|
-| `run_id` | `str` | Run identifier |
-| `verdict` | `str` | QA verdict (`"pass"`, `"retry"`, etc.) |
+| `verdict` | `str` | QA verdict |
 | `notes` | `str` | QA notes |
 
 ### `ExecutionInterrupt`
 
 | Field | Type | Description |
 |---|---|---|
-| `run_id` | `str` | Run identifier |
 | `reason` | `str` | Why execution paused |
-| `phase_index` | `int` | Current phase |
-| `wave_index` | `int` | Current wave |
+| `last_result` | `dict` | Last wave result |
+| `pending_node_ids` | `list[str]` | Unfinished skeleton nodes |
 
-Use `retry_wave()` or `abort_run()` to continue.
-
-### `RunComplete`
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | `str` | Run identifier |
-| `wave_results` | `list[dict]` | All wave results |
-| `wave_reflections` | `list[dict]` | All QA reflections |
-
-### `RunFailed`
-
-| Field | Type | Description |
-|---|---|---|
-| `run_id` | `str` | Run identifier |
-| `error` | `str` | Error message |
-
-### `RunEvent`
-
-Union type of all event types:
-
-```python
-RunEvent = (
-    TriageComplete | PlanReady | PlanApproved | PlanInterrupt
-    | AgentProgress | WaveComplete | ReflectionComplete
-    | ExecutionInterrupt | RunComplete | RunFailed
-)
-```
+Continue via `retry_wave` or `abort_run`.
 
 ---
 
@@ -254,7 +302,7 @@ RunEvent = (
 |---|---|---|
 | `run_id` | `str` | Run identifier |
 | `status` | `str` | Current status |
-| `phase` | `str` | Current phase |
+| `completed_stages` | `list[str]` | Per-graph stages observed |
 | `created_at` | `str` | ISO 8601 timestamp |
 
 ### `RunDetail`
@@ -263,17 +311,32 @@ RunEvent = (
 |---|---|---|
 | `run_id` | `str` | Run identifier |
 | `status` | `str` | Current status |
-| `phase` | `str` | Current phase |
-| `triage` | `dict` | Triage output |
-| `work_brief` | `dict` | Planning output |
-| `wave_results` | `list[dict]` | Execution results |
-| `wave_reflections` | `list[dict]` | QA reflections |
+| `completed_stages` | `list[str]` | Per-graph stages observed |
+| `values` | `dict[str, Any]` | Merged state from all threads |
+| `pending_interrupt` | `Interrupt \| None` | Current pause |
 
 ### `PendingDecision`
 
 | Field | Type | Description |
 |---|---|---|
 | `run_id` | `str` | Run identifier |
-| `decision_type` | `str` | `"plan_approval"` or `"execution_review"` |
-| `summary` | `str` | Human-readable summary |
-| `detail` | `dict` | Decision context |
+| `decision_type` | `str` | Raw interrupt tag (graph node name) |
+| `summary` | `str` | Optional human-readable summary |
+| `detail` | `dict` | Optional context |
+
+---
+
+## Exceptions
+
+```python
+from monet.client import (
+    MonetClientError,
+    RunNotInterrupted,
+    AlreadyResolved,
+    AmbiguousInterrupt,
+    InterruptTagMismatch,
+    GraphNotInvocable,
+)
+```
+
+All inherit from `MonetClientError`. They are caller errors, not graph errors — graph-level failures surface as `RunFailed` events.

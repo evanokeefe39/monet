@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from monet import agent, emit_progress, get_catalogue, resolve_context
+from monet import agent, emit_progress, get_artifacts, resolve_context
 
 from .._prompts import extract_text, make_env
 
@@ -41,7 +41,7 @@ async def publisher_publish(
     response = await model.ainvoke([{"role": "user", "content": prompt}])
     content = extract_text(response)
 
-    await get_catalogue().write(
+    await get_artifacts().write(
         content=content.encode(),
         content_type="text/markdown",
         summary=content[:200],

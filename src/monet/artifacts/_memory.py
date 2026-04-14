@@ -1,16 +1,16 @@
-"""In-memory catalogue client for unit tests only. Not for production."""
+"""In-memory artifact client for unit tests only. Not for production."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
 
-from monet.catalogue._metadata import ArtifactMetadata
+from monet.artifacts._metadata import ArtifactMetadata
 from monet.types import ArtifactPointer
 
 
-class InMemoryCatalogueClient:
-    """Dict-backed catalogue for tests. No I/O, no database."""
+class InMemoryArtifactClient:
+    """Dict-backed artifact store for tests. No I/O, no database."""
 
     def __init__(self) -> None:
         self._store: dict[str, tuple[bytes, ArtifactMetadata]] = {}

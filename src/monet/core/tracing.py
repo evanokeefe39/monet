@@ -7,12 +7,9 @@ No backend-specific code. Configure via standard OTEL_* environment variables.
 from __future__ import annotations
 
 import atexit
-import base64
-import os
 import threading
 import warnings
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from opentelemetry import context as _ot_context
@@ -25,8 +22,11 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
+from monet.config import ObservabilityConfig
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
+    from pathlib import Path
 
     from langchain_core.runnables import RunnableConfig
 
@@ -110,78 +110,31 @@ RUN_ROOT_SPAN_NAME = "monet.run"
 EXECUTION_ROOT_SPAN_NAME = "monet.execution"
 
 
-def _apply_langsmith_shortcut() -> None:
-    """LangSmith shortcut: LANGSMITH_API_KEY (+ optional LANGSMITH_PROJECT)."""
-    key = os.environ.get("LANGSMITH_API_KEY")
-    if not key:
-        return
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = (
-            "https://api.smith.langchain.com/otel/v1/traces"
-        )
-    if not os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"):
-        headers = f"x-api-key={key}"
-        project = os.environ.get("LANGSMITH_PROJECT")
-        if project:
-            headers += f",Langsmith-Project={project}"
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = headers
-
-
-def _apply_honeycomb_shortcut() -> None:
-    """Honeycomb shortcut: HONEYCOMB_API_KEY (+ optional HONEYCOMB_DATASET)."""
-    key = os.environ.get("HONEYCOMB_API_KEY")
-    if not key:
-        return
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://api.honeycomb.io"
-    if not os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"):
-        headers = f"x-honeycomb-team={key}"
-        dataset = os.environ.get("HONEYCOMB_DATASET")
-        if dataset:
-            headers += f",x-honeycomb-dataset={dataset}"
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = headers
-
-
-def _apply_langfuse_shortcut() -> None:
-    """If LANGFUSE_PUBLIC_KEY/SECRET_KEY are set and OTEL_EXPORTER_OTLP_ENDPOINT
-    is not, derive the OTLP endpoint and Basic auth header from them.
-
-    Convenience for the local docker-compose stack. Explicit OTEL_* vars always
-    take precedence — this only fills in gaps.
-    """
-    pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
-    sk = os.environ.get("LANGFUSE_SECRET_KEY")
-    if not (pk and sk):
-        return
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        host = os.environ.get("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"{host}/api/public/otel"
-    if not os.environ.get("OTEL_EXPORTER_OTLP_HEADERS"):
-        token = base64.b64encode(f"{pk}:{sk}".encode()).decode()
-        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {token}"
-
-
 def configure_tracing(
-    endpoint: str | None = None,
-    service_name: str = "monet",
+    config: ObservabilityConfig | None = None,
 ) -> None:
     """Configure OTel tracing. Idempotent — safe to call multiple times.
 
-    Reads ``OTEL_EXPORTER_OTLP_ENDPOINT`` and ``OTEL_SERVICE_NAME`` from the
-    environment. When ``MONET_TRACE_FILE`` is set, additionally attaches a
-    JSONL file exporter for local debugging. The file exporter runs in
-    addition to any OTLP exporter, not as a replacement.
+    Pass an :class:`~monet.config.ObservabilityConfig` to override where
+    endpoint, headers, service name, and the optional debug trace file
+    come from. When ``None``, loads from the environment via
+    :meth:`ObservabilityConfig.load`.
+
+    The OTLP endpoint and headers are passed directly to
+    :class:`OTLPSpanExporter` as constructor kwargs; this function does
+    not write to ``os.environ``. Previous releases populated
+    ``OTEL_EXPORTER_OTLP_*`` env vars as a side effect — that behaviour
+    is gone because it leaked between server / worker / test processes
+    running in the same interpreter.
     """
     global _provider, _exporter_attached, _file_exporter_attached
 
-    _apply_langfuse_shortcut()
-    _apply_langsmith_shortcut()
-    _apply_honeycomb_shortcut()
+    cfg = config if config is not None else ObservabilityConfig.load()
 
     if _provider is None:
         resource = Resource.create(
             {
-                SERVICE_NAME: os.environ.get("OTEL_SERVICE_NAME", service_name),
+                SERVICE_NAME: cfg.service_name,
                 "monet.version": "0.1.0",
             }
         )
@@ -189,7 +142,7 @@ def configure_tracing(
         trace.set_tracer_provider(_provider)
         atexit.register(_provider.shutdown)
 
-    ep = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    ep, _ = cfg.otlp_endpoint_and_headers()
     if ep and not _exporter_attached:
         try:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[import-not-found]
@@ -197,20 +150,20 @@ def configure_tracing(
             )
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-            _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+            exporter = OTLPSpanExporter(endpoint=ep, headers=cfg.otlp_headers_dict())
+            _provider.add_span_processor(BatchSpanProcessor(exporter))
             _exporter_attached = True
         except ImportError:
             warnings.warn(
-                "OTEL_EXPORTER_OTLP_ENDPOINT is set but "
+                "Tracing endpoint is configured but "
                 "opentelemetry-exporter-otlp-proto-http is not installed. "
                 "Traces will not be exported.",
                 stacklevel=2,
             )
 
-    file_path = os.environ.get("MONET_TRACE_FILE")
-    if file_path and not _file_exporter_attached:
+    if cfg.trace_file is not None and not _file_exporter_attached:
         _provider.add_span_processor(
-            SimpleSpanProcessor(_JsonLinesFileExporter(Path(file_path)))
+            SimpleSpanProcessor(_JsonLinesFileExporter(cfg.trace_file))
         )
         _file_exporter_attached = True
 

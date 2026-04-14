@@ -6,25 +6,25 @@ Two configs live in ``monet.toml``:
 ``entry``, ``planning``, ``execution``, ``chat`` (defaults); plus any
 user-added role names for custom graphs.
 
-``[entrypoints.<name>]`` — which graphs ``monet run`` may invoke and
-how. Each declares ``graph = "<graph-id>"`` and
-``kind = "pipeline" | "single" | "messages"``. Graphs NOT listed here
-cannot be driven from ``monet run`` — making internal subgraphs
-(``planning``, ``execution``) private by default.
+``[entrypoints.<name>]`` — which graphs ``monet run`` may invoke. Each
+declares ``graph = "<graph-id>"``. Graphs NOT listed here cannot be
+driven from ``monet run`` — making internal subgraphs (``planning``,
+``execution``) private by default.
 """
 
 from __future__ import annotations
 
-import os
-import tomllib
-from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, TypedDict
+
+from monet.config import default_config_path, graph_role_env, read_str, read_toml
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 __all__ = [
     "DEFAULT_ENTRYPOINTS",
     "DEFAULT_GRAPH_ROLES",
     "Entrypoint",
-    "EntrypointKind",
     "load_entrypoints",
     "load_graph_roles",
 ]
@@ -39,33 +39,20 @@ DEFAULT_GRAPH_ROLES: dict[str, str] = {
 }
 
 
-EntrypointKind = Literal["pipeline", "single", "messages"]
-
-
 class Entrypoint(TypedDict):
-    """How ``monet run --graph <name>`` should drive a graph.
+    """An allow-list entry declaring that ``graph`` is invocable via ``monet run``.
 
     ``graph``: the server-registered graph ID (often matches ``<name>``).
-    ``kind``:
-      - ``pipeline`` — the default three-graph flow (entry → planning →
-        execution) with HITL plan approval. Only meaningful when
-        ``graph == "entry"``.
-      - ``single`` — drive the named graph once with
-        ``{task, run_id, trace_id}`` input and stream its final state.
-      - ``messages`` — chat-style ``{messages: [...]}`` input. Reserved
-        for future chat-like entrypoints; ``monet chat`` keeps its own
-        dedicated command.
     """
 
     graph: str
-    kind: EntrypointKind
 
 
 # Default entrypoints. ``planning`` and ``execution`` are deliberately
-# absent — they are internal subgraphs of the pipeline, not things a user
-# can call directly.
+# absent — they are internal subgraphs of the default pipeline, not
+# things a user can call directly.
 DEFAULT_ENTRYPOINTS: dict[str, Entrypoint] = {
-    "default": {"graph": "entry", "kind": "pipeline"},
+    "default": {"graph": "entry"},
 }
 
 
@@ -90,24 +77,21 @@ def load_graph_roles(path: Path | None = None) -> dict[str, str]:
     Returns:
         Mapping of role name to graph ID.
     """
-    if path is None:
-        path = Path.cwd() / "monet.toml"
+    resolved = path if path is not None else default_config_path()
 
     roles = DEFAULT_GRAPH_ROLES.copy()
 
     # Merge all keys from monet.toml [graphs] — including user-defined ones.
-    if path.exists():
-        with open(path, "rb") as f:
-            raw = tomllib.load(f)
-        graphs_section = raw.get("graphs", {})
-        if isinstance(graphs_section, dict):
-            for k, v in graphs_section.items():
-                if isinstance(v, str) and v:
-                    roles[k] = v
+    raw = read_toml(resolved)
+    graphs_section = raw.get("graphs", {})
+    if isinstance(graphs_section, dict):
+        for k, v in graphs_section.items():
+            if isinstance(v, str) and v:
+                roles[k] = v
 
     # Env var overrides for every known key.
     for role in list(roles):
-        env_val = os.environ.get(f"MONET_GRAPH_{role.upper()}", "")
+        env_val = read_str(graph_role_env(role))
         if env_val:
             roles[role] = env_val
 
@@ -119,32 +103,22 @@ def load_entrypoints(path: Path | None = None) -> dict[str, Entrypoint]:
 
     Starts from :data:`DEFAULT_ENTRYPOINTS` and merges any entrypoints
     declared in ``monet.toml``. Raises ``ValueError`` if an entrypoint
-    has a missing or unknown ``kind``.
+    has a missing ``graph`` field.
     """
-    if path is None:
-        path = Path.cwd() / "monet.toml"
+    resolved = path if path is not None else default_config_path()
 
     entrypoints: dict[str, Entrypoint] = dict(DEFAULT_ENTRYPOINTS)
 
-    if path.exists():
-        with open(path, "rb") as f:
-            raw = tomllib.load(f)
-        section = raw.get("entrypoints", {})
-        if isinstance(section, dict):
-            for name, spec in section.items():
-                if not isinstance(spec, dict):
-                    continue
-                graph = spec.get("graph")
-                kind = spec.get("kind")
-                if not isinstance(graph, str) or not graph:
-                    msg = f"[entrypoints.{name}]: 'graph' must be a non-empty string"
-                    raise ValueError(msg)
-                if kind not in ("pipeline", "single", "messages"):
-                    msg = (
-                        f"[entrypoints.{name}]: 'kind' must be one of "
-                        "'pipeline', 'single', 'messages'"
-                    )
-                    raise ValueError(msg)
-                entrypoints[name] = {"graph": graph, "kind": kind}
+    raw = read_toml(resolved)
+    section = raw.get("entrypoints", {})
+    if isinstance(section, dict):
+        for name, spec in section.items():
+            if not isinstance(spec, dict):
+                continue
+            graph = spec.get("graph")
+            if not isinstance(graph, str) or not graph:
+                msg = f"[entrypoints.{name}]: 'graph' must be a non-empty string"
+                raise ValueError(msg)
+            entrypoints[name] = {"graph": graph}
 
     return entrypoints

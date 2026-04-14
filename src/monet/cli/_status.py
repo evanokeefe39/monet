@@ -9,6 +9,7 @@ from typing import Any
 import click
 
 from monet._constants import STANDARD_DEV_PORT
+from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
 
 def _parse_capabilities(caps: Any) -> list[dict[str, str]]:
@@ -42,12 +43,12 @@ def _render_header(health: dict[str, Any]) -> None:
 @click.option(
     "--url",
     default=f"http://localhost:{STANDARD_DEV_PORT}",
-    envvar="MONET_SERVER_URL",
+    envvar=MONET_SERVER_URL,
     help="Orchestration server URL.",
 )
 @click.option(
     "--api-key",
-    envvar="MONET_API_KEY",
+    envvar=MONET_API_KEY,
     default=None,
     help="API key for server auth.",
 )

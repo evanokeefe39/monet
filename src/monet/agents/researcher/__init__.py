@@ -25,7 +25,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from monet import agent, emit_progress, get_catalogue, get_run_logger
+from monet import agent, emit_progress, get_artifacts, get_run_logger
 from monet.exceptions import EscalationRequired
 
 from .._prompts import extract_text, make_env
@@ -220,7 +220,7 @@ async def researcher_fast(
         max_results=3,
     )
 
-    await get_catalogue().write(
+    await get_artifacts().write(
         content=content.encode(),
         content_type="text/markdown",
         summary=content[:200],
@@ -244,8 +244,8 @@ async def researcher_deep(
         max_results=10,
     )
 
-    emit_progress({"status": "writing to catalogue", "agent": "researcher"})
-    await get_catalogue().write(
+    emit_progress({"status": "writing artifact", "agent": "researcher"})
+    await get_artifacts().write(
         content=content.encode(),
         content_type="text/markdown",
         summary=content[:200],

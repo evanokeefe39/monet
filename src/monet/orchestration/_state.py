@@ -121,7 +121,7 @@ class RoutingSkeleton(BaseModel):
 class WorkBriefNode(BaseModel):
     """Full execution specification for a single agent invocation.
 
-    Mirrors RoutingNode with task content added. The catalogue
+    Mirrors RoutingNode with task content added. The stored
     artifact is a serialised WorkBrief. Workers resolve it via
     the inject_plan_context hook.
     """
@@ -134,7 +134,7 @@ class WorkBriefNode(BaseModel):
 
 
 class WorkBrief(BaseModel):
-    """Full execution plan. Written to catalogue by planner.
+    """Full execution plan. Written to artifact store by planner.
 
     Never read by orchestrator. Resolved on worker side by
     inject_plan_context hook.
@@ -270,7 +270,7 @@ class WaveResult(TypedDict):
 
     ``output`` and ``artifacts`` are distinct fields. ``output`` is the
     inline result (string or structured dict). ``artifacts`` lists the
-    catalogue pointers written by the agent. The orchestrator reads
+    artifact pointers written by the agent. The orchestrator reads
     them as separate concerns — no fallback between them.
     """
 

@@ -14,6 +14,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from monet._constants import STANDARD_REDIS_PORT
 from monet.core._serialization import (
     deserialize_result,
     now_iso,
@@ -42,6 +43,8 @@ _SWEEPER_INTERVAL = 30.0
 
 # Polling interval for fallback mode.
 _POLL_INTERVAL = 0.5
+
+_DEFAULT_URL = f"redis://localhost:{STANDARD_REDIS_PORT}"
 
 
 def _normalize_url(url: str) -> str:
@@ -75,7 +78,7 @@ class RedisTaskQueue:
 
     def __init__(
         self,
-        url: str = "redis://localhost:6379",
+        url: str = _DEFAULT_URL,
         *,
         lease_ttl: int = _DEFAULT_LEASE_TTL,
         prefix: str = "monet",

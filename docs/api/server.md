@@ -37,7 +37,7 @@ from monet.server import bootstrap
 
 async def bootstrap(
     *,
-    catalogue_root: str | Path | None = None,
+    artifacts_root: str | Path | None = None,
     enable_tracing: bool = True,
     agents: list[AgentCapability] | None = None,
     queue: TaskQueue | None = None,
@@ -45,11 +45,11 @@ async def bootstrap(
 ) -> asyncio.Task[None] | None
 ```
 
-One-call server initialization. Configures tracing, catalogue, manifest, queue, and worker in order.
+One-call server initialization. Configures tracing, artifact store, manifest, queue, and worker in order.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `catalogue_root` | `None` | Catalogue directory. Falls back to `MONET_CATALOGUE_DIR`, then `.catalogue` |
+| `artifacts_root` | `None` | Artifact Store directory. Falls back to `MONET_ARTIFACTS_DIR`, then `.artifacts` |
 | `enable_tracing` | `True` | Configure OpenTelemetry tracing |
 | `agents` | `None` | Additional capabilities to declare in manifest |
 | `queue` | `None` | Task queue. Defaults to `InMemoryTaskQueue` |

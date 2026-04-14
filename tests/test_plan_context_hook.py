@@ -7,17 +7,17 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from monet import get_catalogue
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet import get_artifacts
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.hooks.plan_context import inject_plan_context
 from monet.orchestration._state import WorkBrief, WorkBriefNode
 
 
 @pytest.fixture
-def _catalogue() -> Any:
-    configure_catalogue(InMemoryCatalogueClient())
+def _artifacts() -> Any:
+    configure_artifacts(InMemoryArtifactClient())
     yield
-    configure_catalogue(None)
+    configure_artifacts(None)
 
 
 def _ctx(context: list[dict[str, Any]], task: str = "") -> dict[str, Any]:
@@ -37,7 +37,7 @@ def _meta(agent_id: str = "writer", command: str = "deep") -> dict[str, str]:
 
 
 async def _write_brief(brief: WorkBrief) -> dict[str, str]:
-    pointer = await get_catalogue().write(
+    pointer = await get_artifacts().write(
         content=brief.model_dump_json().encode(),
         content_type="application/json",
         summary="test brief",
@@ -49,7 +49,7 @@ async def _write_brief(brief: WorkBrief) -> dict[str, str]:
     return {str(k): str(v) for k, v in pointer.items()}
 
 
-async def test_hook_injects_task_from_node(_catalogue: Any) -> None:
+async def test_hook_injects_task_from_node(_artifacts: Any) -> None:
     brief = WorkBrief(
         goal="Write a report",
         nodes=[
@@ -73,13 +73,13 @@ async def test_hook_injects_task_from_node(_catalogue: Any) -> None:
     assert not any(e.get("type") == "plan_item" for e in result["context"])
 
 
-async def test_hook_no_op_without_plan_item(_catalogue: Any) -> None:
+async def test_hook_no_op_without_plan_item(_artifacts: Any) -> None:
     ctx = _ctx([{"type": "note", "content": "just a note"}], task="original task")
     result = await inject_plan_context(ctx, _meta())  # type: ignore[arg-type]
     assert result is ctx
 
 
-async def test_hook_unknown_node_raises(_catalogue: Any) -> None:
+async def test_hook_unknown_node_raises(_artifacts: Any) -> None:
     brief = WorkBrief(
         goal="Test",
         nodes=[
@@ -96,9 +96,9 @@ async def test_hook_unknown_node_raises(_catalogue: Any) -> None:
         await inject_plan_context(ctx, _meta())  # type: ignore[arg-type]
 
 
-async def test_hook_invalid_artifact_raises(_catalogue: Any) -> None:
+async def test_hook_invalid_artifact_raises(_artifacts: Any) -> None:
     # Write malformed JSON that can't validate as WorkBrief.
-    pointer = await get_catalogue().write(
+    pointer = await get_artifacts().write(
         content=b'{"goal": "x"}',  # missing nodes field
         content_type="application/json",
         summary="bad",
@@ -119,7 +119,7 @@ async def test_hook_invalid_artifact_raises(_catalogue: Any) -> None:
         await inject_plan_context(ctx, _meta())  # type: ignore[arg-type]
 
 
-async def test_hook_preserves_other_context(_catalogue: Any) -> None:
+async def test_hook_preserves_other_context(_artifacts: Any) -> None:
     brief = WorkBrief(
         goal="Goal",
         nodes=[

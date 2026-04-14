@@ -20,7 +20,7 @@ from langgraph.types import Command
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
 
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry  # internal: registry_scope fixture
 from monet.orchestration import (
@@ -32,7 +32,7 @@ from monet.orchestration import (
 
 @pytest.fixture(autouse=True)
 def _reset() -> Any:
-    configure_catalogue(InMemoryCatalogueClient())
+    configure_artifacts(InMemoryArtifactClient())
     with default_registry.registry_scope(), default_manifest.manifest_scope():
         import importlib
 
@@ -51,7 +51,7 @@ def _reset() -> Any:
         ):
             importlib.reload(mod)
         yield
-    configure_catalogue(None)
+    configure_artifacts(None)
 
 
 def _mock(content: str) -> AsyncMock:
@@ -110,7 +110,7 @@ async def test_planning_hitl_approve() -> None:
             Command(resume={"approved": True, "feedback": None}), config=config
         )
     assert result["plan_approved"] is True
-    # Pointer-only state: the full brief lives in the catalogue, only
+    # Pointer-only state: the full brief lives in the artifact store, only
     # pointer + routing skeleton are in LangGraph state.
     assert result["work_brief_pointer"]["key"] == "work_brief"
     assert result["routing_skeleton"]["goal"] == "Test goal"
@@ -139,14 +139,14 @@ async def test_planning_hitl_reject_then_approve() -> None:
 
 
 async def _write_brief_artifact(brief_json: str) -> dict[str, str]:
-    """Write a WorkBrief JSON to the in-memory catalogue and return its pointer.
+    """Write a WorkBrief JSON to the in-memory artifact store and return its pointer.
 
     Tests that drive the execution graph directly need a pointer in state
     even though the inject_plan_context worker hook is implemented in Step 7.
     """
-    from monet import get_catalogue
+    from monet import get_artifacts
 
-    pointer = await get_catalogue().write(
+    pointer = await get_artifacts().write(
         content=brief_json.encode(),
         content_type="application/json",
         summary="test brief",

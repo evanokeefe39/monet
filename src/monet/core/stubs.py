@@ -80,18 +80,18 @@ async def write_artifact(
     sensitivity_label: str = "internal",
     key: str | None = None,
 ) -> ArtifactPointer:
-    """Write content to the catalogue and register the pointer.
+    """Write content to the artifact store and register the pointer.
 
-    Convenience alias for ``await get_catalogue().write(...)``. Completes
+    Convenience alias for ``await get_artifacts().write(...)``. Completes
     the ambient trio (emit_progress, emit_signal, write_artifact). The
     pointer is appended to ``AgentResult.artifacts`` automatically.
     """
-    from .catalogue import get_catalogue
+    from .artifacts import get_artifacts
 
     kwargs: dict[str, str] = {}
     if key is not None:
         kwargs["key"] = key
-    return await get_catalogue().write(
+    return await get_artifacts().write(
         content=content,
         content_type=content_type,
         summary=summary,

@@ -1,6 +1,8 @@
 # Client SDK
 
-The `MonetClient` provides a typed async interface for interacting with a running monet server. It handles run lifecycle, event streaming, and HITL (Human-In-The-Loop) decisions.
+`MonetClient` is a graph-agnostic async client for a running monet server. It drives any graph declared in `monet.toml [entrypoints]`, streams typed core events, and exposes generic HITL resume/abort.
+
+Pipeline-specific composition (the default `entry → planning → execution` flow) lives in `monet.pipelines.default` as an *adapter* that consumes core events and yields typed domain events.
 
 ## Setup
 
@@ -10,83 +12,116 @@ from monet.client import MonetClient
 client = MonetClient(url="http://localhost:2026")
 ```
 
-The default URL points to an Aegra server started with `monet dev`. For a production deployment, use its URL instead.
+The default URL points to an Aegra server started with `monet dev`.
 
-## Starting a run
+## Running the default pipeline
 
 ```python
 import asyncio
 from monet.client import MonetClient
+from monet.pipelines.default import run as run_default
 
 async def main():
     client = MonetClient()
-
-    async for event in client.run("Research quantum computing trends"):
+    async for event in run_default(client, "Research quantum computing trends"):
         print(type(event).__name__, event)
 
 asyncio.run(main())
 ```
 
-`run()` returns an async iterator of typed events. The run progresses through triage, planning, and execution, yielding events at each stage.
+With `auto_approve=True`, plan approval interrupts resolve automatically. Execution interrupts always pause.
 
-### Auto-approval
+## Running a single graph
 
 ```python
-async for event in client.run("Write a blog post", auto_approve=True):
+async for event in client.run("my-graph", {"task": "...", "run_id": "abc"}):
     print(event)
 ```
 
-With `auto_approve=True`, planning interrupts are automatically approved. Execution interrupts always pause regardless of this setting.
+`MonetClient.run()` drives any declared entrypoint and yields *core* events only. Pass either a state dict as input, or a topic string which is wrapped by `task_input()`.
 
 ## Event types
 
-Events are frozen dataclasses. The full set:
+### Core events (from `monet.client`)
 
-| Event | Stage | Fields | Description |
-|---|---|---|---|
-| `TriageComplete` | Entry | `complexity`, `suggested_agents` | Triage classified the request |
-| `PlanReady` | Planning | `goal`, `phases`, `assumptions` | Work brief generated |
-| `PlanApproved` | Planning | — | Plan was approved |
-| `PlanInterrupt` | Planning | `brief` | Awaiting human decision |
-| `AgentProgress` | Execution | `agent_id`, `status` | Real-time agent progress |
-| `WaveComplete` | Execution | `phase_index`, `wave_index`, `results` | Execution wave finished |
-| `ReflectionComplete` | Execution | `verdict`, `notes` | QA reflection result |
-| `ExecutionInterrupt` | Execution | `reason`, `phase_index`, `wave_index` | Execution paused |
-| `RunComplete` | Done | `wave_results`, `wave_reflections` | Run finished successfully |
-| `RunFailed` | Done | `error` | Run failed |
+All events are frozen dataclasses carrying a `run_id`.
 
-All events carry a `run_id` field.
+| Event | Source | Fields |
+|---|---|---|
+| `RunStarted` | thread + run creation | `graph_id`, `thread_id` |
+| `NodeUpdate` | langgraph `updates` stream | `node`, `update` |
+| `AgentProgress` | `emit_progress` custom writer | `agent_id`, `status`, `reasons` |
+| `SignalEmitted` | `emit_signal` custom writer | `agent_id`, `signal_type`, `payload` |
+| `Interrupt` | langgraph `interrupt()` | `tag`, `values`, `next_nodes` |
+| `RunComplete` | run terminated OK | `final_values` |
+| `RunFailed` | run errored | `error` |
+
+### Default-pipeline events (from `monet.pipelines.default`)
+
+Yielded by `run_default(...)` in addition to `RunComplete` / `RunFailed`.
+
+| Event | Fields |
+|---|---|
+| `TriageComplete` | `complexity`, `suggested_agents` |
+| `PlanReady` | `goal`, `nodes` |
+| `PlanApproved` | — |
+| `PlanInterrupt` | `work_brief_pointer`, `routing_skeleton` |
+| `WaveComplete` | `wave_index`, `node_ids`, `results` |
+| `ReflectionComplete` | `verdict`, `notes` |
+| `ExecutionInterrupt` | `reason`, `last_result`, `pending_node_ids` |
 
 ## HITL decisions
 
-When the run yields a `PlanInterrupt`, three actions are available:
+### Default pipeline (typed verbs)
+
+The default pipeline's HITL verbs wrap `client.resume(...)` with typed tags and TypedDict payloads:
 
 ```python
-async for event in client.run("Analyze market trends"):
+from monet.pipelines.default import (
+    abort_run,
+    approve_plan,
+    reject_plan,
+    retry_wave,
+    revise_plan,
+    run as run_default,
+)
+from monet.pipelines.default import ExecutionInterrupt, PlanInterrupt
+
+async for event in run_default(client, "Analyze market trends"):
     if isinstance(event, PlanInterrupt):
-        # Option 1: approve
-        async for e in client.approve_plan(event.run_id):
-            print(e)
+        await approve_plan(client, event.run_id)
+        # Or: await revise_plan(client, event.run_id, "Add competitive analysis")
+        # Or: await reject_plan(client, event.run_id)
+        break
 
-        # Option 2: revise
-        async for e in client.revise_plan(event.run_id, "Add competitive analysis"):
-            print(e)
-
-        # Option 3: reject
-        await client.reject_plan(event.run_id)
+    if isinstance(event, ExecutionInterrupt):
+        await retry_wave(client, event.run_id)
+        # Or: await abort_run(client, event.run_id)
+        break
 ```
 
-When the run yields an `ExecutionInterrupt`:
+### Generic resume (any graph)
 
 ```python
-    if isinstance(event, ExecutionInterrupt):
-        # Retry the current wave
-        async for e in client.retry_wave(event.run_id):
-            print(e)
+from monet.client import Interrupt
 
-        # Or abort the run
-        await client.abort_run(event.run_id)
+async for event in client.run("my-graph", input=...):
+    if isinstance(event, Interrupt):
+        await client.resume(event.run_id, event.tag, payload={"approved": True})
+        break
 ```
+
+`resume()` validates that the thread is actually paused at `tag` before dispatching. It raises:
+
+| Exception | When |
+|---|---|
+| `RunNotInterrupted` | No interrupted thread found for `run_id` |
+| `AlreadyResolved` | Run already moved past the interrupt (retry guard) |
+| `AmbiguousInterrupt` | Multiple pending nodes — caller must disambiguate |
+| `InterruptTagMismatch` | `tag` does not match the current interrupt node |
+| `GraphNotInvocable` | Graph ID not declared in `[entrypoints]` |
+
+All inherit from `MonetClientError`.
 
 ## Querying runs
 
@@ -95,63 +130,58 @@ When the run yields an `ExecutionInterrupt`:
 ```python
 runs = await client.list_runs(limit=10)
 for run in runs:
-    print(f"{run.run_id}: {run.status} ({run.phase})")
+    print(f"{run.run_id}: {run.status} ({run.completed_stages})")
 ```
 
-Returns a list of `RunSummary` with `run_id`, `status`, `phase`, and `created_at`.
+Returns `list[RunSummary]` with `run_id`, `status`, `completed_stages`, and `created_at`.
 
 ### Get run details
 
 ```python
 detail = await client.get_run(run_id)
-print(detail.triage)
-print(detail.work_brief)
-print(detail.wave_results)
+print(detail.status)
+print(detail.completed_stages)
+print(detail.values)            # merged state from all threads
+print(detail.pending_interrupt) # Interrupt | None
 ```
 
-Returns a `RunDetail` with full state: triage output, work brief, wave results, and wave reflections.
-
-### Get artifacts
+`RunDetail` is a generic view over any run. For default-pipeline runs, the typed projection gives you typed fields:
 
 ```python
-artifacts = await client.get_artifacts(run_id)
-for a in artifacts:
-    print(a["artifact_id"], a["url"])
-```
+from monet.pipelines.default import DefaultPipelineRunDetail
 
-Collects all artifact pointers from a run's wave results.
+view = DefaultPipelineRunDetail.from_run_detail(detail)
+print(view.triage, view.routing_skeleton, view.wave_results, view.wave_reflections)
+```
 
 ### List pending decisions
 
 ```python
 pending = await client.list_pending()
 for p in pending:
-    print(f"{p.run_id}: {p.decision_type} - {p.summary}")
+    print(f"{p.run_id}: {p.decision_type}")
 ```
 
-Returns runs waiting for human input. Each `PendingDecision` has `run_id`, `decision_type` (`"plan_approval"` or `"execution_review"`), `summary`, and `detail`.
+`decision_type` is the raw interrupt tag (the graph node name that called `interrupt()`). Pipeline adapters supply friendlier summaries.
 
-## In-process alternative
+## Entrypoints
 
-For local development or testing without a server, use the in-process `run()` function:
+Only graphs declared in `monet.toml [entrypoints.<name>]` can be driven via `MonetClient.run()`. Internal subgraphs of the default pipeline (`planning`, `execution`) are intentionally not declared.
 
-```python
-from monet import run
-
-async def main():
-    async for event in run("Research quantum computing"):
-        print(event)
+```toml
+[entrypoints.default]
+graph = "entry"
 ```
 
-This runs the full pipeline locally with auto-approved plans. It yields the same `RunEvent` types as `MonetClient`. No server setup required.
+Custom graphs ship with their own entrypoint:
 
-```python
-async for event in run("My topic", run_id="custom-id", enable_tracing=True):
-    ...
+```toml
+[entrypoints.review]
+graph = "review"
 ```
 
-| Parameter | Default | Description |
-|---|---|---|
-| `topic` | required | User request |
-| `run_id` | auto-generated | Run identifier |
-| `enable_tracing` | `False` | Configure OpenTelemetry tracing |
+Attempting `client.run("planning", ...)` raises `GraphNotInvocable`.
+
+## In-process driver
+
+The in-process `MemorySaver` driver has been removed. Use `monet dev` to start a local server and drive through `MonetClient`, or invoke `aegra dev` directly.

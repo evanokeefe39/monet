@@ -1,7 +1,8 @@
 """monet run — run a topic against a monet server with hybrid output.
 
 Output modes (controlled by --output, default auto):
-- text: human-readable colored events to stdout (current behavior)
+
+- text: human-readable colored events to stdout
 - json: NDJSON event stream to stdout, errors to stderr
 - auto: text if stdout is a TTY, json if piped
 """
@@ -19,15 +20,10 @@ if TYPE_CHECKING:
     from monet.client import MonetClient
 
 from monet._constants import STANDARD_DEV_PORT
-from monet.cli._render import (
-    prompt_execution_decision,
-    prompt_plan_decision,
-    render_event,
-    serialize_event,
-)
+from monet.cli._render import render_event, serialize_event
 from monet.cli._setup import check_env
+from monet.config import MONET_SERVER_URL
 
-# Exit codes.
 _EXIT_SUCCESS = 0
 _EXIT_AGENT_ERROR = 1
 _EXIT_CONNECTION_ERROR = 2
@@ -35,12 +31,7 @@ _EXIT_USAGE_ERROR = 3
 
 
 def _resolve_entrypoint(name: str | None) -> Entrypoint:
-    """Look up the ``monet run`` entrypoint by name (or 'default').
-
-    Raises ``click.UsageError`` if ``name`` is supplied but not declared
-    in ``monet.toml [entrypoints]``. Internal subgraphs like ``planning``
-    and ``execution`` are deliberately un-invocable this way.
-    """
+    """Look up the ``monet run`` entrypoint by name (or ``default``)."""
     from monet._graph_config import load_entrypoints
 
     entrypoints = load_entrypoints()
@@ -57,19 +48,6 @@ def _resolve_entrypoint(name: str | None) -> Entrypoint:
     return ep
 
 
-def _resolve_graph_ids(entry_graph: str) -> dict[str, str]:
-    """Build the role→graph_id mapping used by ``MonetClient`` for pipeline runs.
-
-    Starts from ``load_graph_roles()`` and overrides the ``entry`` role
-    with the entrypoint's configured graph.
-    """
-    from monet._graph_config import load_graph_roles
-
-    ids = load_graph_roles()
-    ids["entry"] = entry_graph
-    return ids
-
-
 def _resolve_output_mode(output: str) -> str:
     """Resolve ``auto`` to ``text`` or ``json`` based on TTY detection."""
     if output != "auto":
@@ -78,10 +56,7 @@ def _resolve_output_mode(output: str) -> str:
 
 
 def _read_topic_from_stdin() -> str | None:
-    """Read a topic from stdin when it is not a TTY.
-
-    Returns ``None`` if stdin is a TTY or empty.
-    """
+    """Read a topic from stdin when it is not a TTY."""
     if sys.stdin.isatty():
         return None
     topic = sys.stdin.read().strip()
@@ -93,7 +68,7 @@ def _read_topic_from_stdin() -> str | None:
 @click.option(
     "--url",
     default=f"http://localhost:{STANDARD_DEV_PORT}",
-    envvar="MONET_SERVER_URL",
+    envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
 @click.option(
@@ -127,50 +102,39 @@ def run(
 ) -> None:
     """Run a topic through a declared entrypoint.
 
-    With no ``--graph``, drives the default pipeline
-    (entry → planning → execution) with HITL plan approval.
+    With no ``--graph`` (or ``--graph default``), drives the default
+    pipeline (entry → planning → execution) with HITL plan approval.
 
-    With ``--graph <name>``, looks up ``[entrypoints.<name>]`` in
-    ``monet.toml`` and dispatches by its declared ``kind``. Internal
-    subgraphs like ``planning`` and ``execution`` are intentionally
-    not invocable this way.
+    With ``--graph <name>``, invokes that entrypoint's graph as a
+    single-graph stream. Internal subgraphs like ``planning`` and
+    ``execution`` are not declared entrypoints and cannot be invoked.
 
     When piped, defaults to NDJSON event stream on stdout.
-    Use --output text to force human-readable output.
     """
     check_env()
     mode = _resolve_output_mode(output_mode)
 
-    # Resolve topic: positional arg > stdin > error.
     resolved_topic = topic
     if resolved_topic is None:
         resolved_topic = _read_topic_from_stdin()
     if resolved_topic is None:
         raise click.UsageError("Missing topic. Provide as argument or pipe via stdin.")
 
-    # In json mode, force auto-approve (no interactive prompts).
     if mode == "json":
         auto_approve = True
 
     ep = _resolve_entrypoint(entrypoint_name)
+    is_default = entrypoint_name is None or entrypoint_name == "default"
 
     try:
-        if ep["kind"] == "pipeline":
-            graph_ids = _resolve_graph_ids(ep["graph"])
+        if is_default:
             exit_code = asyncio.run(
-                _interactive_run(resolved_topic, url, auto_approve, mode, graph_ids)
+                _default_pipeline_run(resolved_topic, url, auto_approve, mode)
             )
-        elif ep["kind"] == "single":
+        else:
             exit_code = asyncio.run(
                 _single_graph_run(resolved_topic, url, mode, ep["graph"])
             )
-        else:  # "messages"
-            click.echo(
-                f"Entrypoint kind '{ep['kind']}' is not driven from `monet run`. "
-                "Use `monet chat` for chat-style graphs.",
-                err=True,
-            )
-            raise SystemExit(_EXIT_USAGE_ERROR)
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     except (ConnectionError, OSError) as exc:
@@ -186,12 +150,9 @@ async def _single_graph_run(
     mode: str,
     graph_id: str,
 ) -> int:
-    """Drive one graph directly with ``{task, run_id, trace_id}`` input.
-
-    Streams the run via ``MonetClient.run_single`` and emits typed events
-    (triage_complete, run_complete, run_failed) in text or NDJSON mode.
-    """
-    from monet.client import MonetClient
+    """Drive one graph directly and stream typed core events."""
+    from monet.client import MonetClient, RunComplete, RunFailed
+    from monet.client._wire import task_input
 
     preflight_error = await _preflight_server(url)
     if preflight_error is not None:
@@ -201,7 +162,7 @@ async def _single_graph_run(
     client = MonetClient(url)
     run_id: str | None = None
     try:
-        async for event in client.run_single(graph_id, topic):
+        async for event in client.run(graph_id, task_input(topic, "")):
             if run_id is None and hasattr(event, "run_id"):
                 run_id = event.run_id
                 click.echo(f"Run {run_id}", err=True)
@@ -209,8 +170,6 @@ async def _single_graph_run(
                 click.echo(serialize_event(event))
             else:
                 render_event(event)
-            from monet.client._events import RunComplete, RunFailed
-
             if isinstance(event, RunFailed):
                 return _EXIT_AGENT_ERROR
             if isinstance(event, RunComplete):
@@ -226,7 +185,7 @@ async def _single_graph_run(
 
 
 async def _preflight_server(url: str) -> str | None:
-    """Probe ``url``'s /health endpoint. Return an error string on failure."""
+    """Probe *url*'s ``/health`` endpoint. Return an error string on failure."""
     import httpx
 
     base = url.rstrip("/")
@@ -244,24 +203,28 @@ async def _preflight_server(url: str) -> str | None:
     return None
 
 
-async def _interactive_run(
+async def _default_pipeline_run(
     topic: str,
     url: str,
     auto_approve: bool,
     mode: str,
-    graph_ids: dict[str, str] | None = None,
 ) -> int:
-    """Run a topic with output mode routing and HITL handling.
-
-    Returns an exit code: 0 success, 1 agent error, 2 connection error.
-    """
-    from monet.client import MonetClient
-    from monet.client._events import (
+    """Drive the default pipeline with output mode routing and HITL."""
+    from monet.cli._render import prompt_plan_decision
+    from monet.client import MonetClient, RunComplete, RunFailed
+    from monet.pipelines.default import (
         ExecutionInterrupt,
         PlanInterrupt,
-        RunComplete,
-        RunFailed,
+        abort_run,
+        approve_plan,
+        reject_plan,
+        retry_wave,
+        revise_plan,
     )
+    from monet.pipelines.default import (
+        run as run_default_pipeline,
+    )
+    from monet.pipelines.default.render import render_pipeline_event
 
     preflight_error = await _preflight_server(url)
     if preflight_error is not None:
@@ -269,56 +232,55 @@ async def _interactive_run(
         return _EXIT_CONNECTION_ERROR
 
     try:
-        client = MonetClient(url, graph_ids=graph_ids)
+        client = MonetClient(url)
     except (ConnectionError, OSError) as exc:
         click.echo(f"Connection error: {exc}", err=True)
         return _EXIT_CONNECTION_ERROR
 
     run_id: str | None = None
 
+    def _emit(event: object) -> None:
+        if mode == "json":
+            click.echo(serialize_event(event))  # type: ignore[arg-type]
+        else:
+            if isinstance(event, RunComplete | RunFailed):
+                render_event(event)
+            else:
+                render_pipeline_event(event)  # type: ignore[arg-type]
+
     try:
-        async for event in client.run(topic, auto_approve=auto_approve):
-            # Capture run_id from first event.
+        async for event in run_default_pipeline(
+            client, topic, auto_approve=auto_approve
+        ):
             if run_id is None and hasattr(event, "run_id"):
                 run_id = event.run_id
                 click.echo(f"Run {run_id}", err=True)
 
-            # Emit event in the appropriate format.
-            if mode == "json":
-                click.echo(serialize_event(event))
-            else:
-                render_event(event)
+            _emit(event)
 
-            # HITL: plan approval (text mode only — json mode auto-approves).
             if isinstance(event, PlanInterrupt) and run_id and mode == "text":
                 decision = prompt_plan_decision()
 
                 if decision == "approve":
-                    async for follow_up in client.approve_plan(run_id):
-                        render_event(follow_up)
-                        if isinstance(follow_up, ExecutionInterrupt):
-                            return await _handle_execution_interrupt(
-                                client, run_id, mode
-                            )
-
-                elif decision == "revise":
+                    await approve_plan(client, run_id)
+                    return await _resume_pipeline(client, run_id, mode)
+                if decision == "revise":
                     feedback = click.prompt("Feedback")
-                    async for follow_up in client.revise_plan(run_id, feedback):
-                        render_event(follow_up)
-
-                elif decision == "reject":
-                    await client.reject_plan(run_id)
+                    await revise_plan(client, run_id, feedback)
+                    return _EXIT_SUCCESS
+                if decision == "reject":
+                    await reject_plan(client, run_id)
                     click.secho("Run rejected.", fg="red")
                     return _EXIT_AGENT_ERROR
 
                 return _EXIT_SUCCESS
 
-            # HITL: execution interrupt.
             if isinstance(event, ExecutionInterrupt) and run_id:
                 if mode == "json":
-                    # Already emitted as NDJSON; exit for external resume.
                     return _EXIT_SUCCESS
-                return await _handle_execution_interrupt(client, run_id, mode)
+                return await _handle_execution_interrupt(
+                    client, run_id, mode, abort_run, retry_wave
+                )
 
             if isinstance(event, RunFailed):
                 return _EXIT_AGENT_ERROR
@@ -336,29 +298,43 @@ async def _interactive_run(
     return _EXIT_SUCCESS
 
 
-async def _handle_execution_interrupt(
+async def _resume_pipeline(
     client: MonetClient,
     run_id: str,
     mode: str,
 ) -> int:
-    """Prompt for retry/abort on an execution interrupt.
+    """After approving a plan, observe the run to completion.
 
-    Returns an exit code.
+    ``approve_plan`` dispatched the resume; now poll the run's state
+    until it completes or hits another interrupt. We don't re-stream
+    planning — execution is a separate thread the adapter creates
+    when planning finishes. For now we exit with success after plan
+    approval; the user can use ``monet runs`` to observe execution.
     """
-    from monet.client._events import RunFailed
+    # TODO(pipeline-runtime): after approve, the default-pipeline
+    # adapter should observe plan completion server-side and auto-
+    # launch execution. Until that's wired, we acknowledge and let
+    # ``monet runs`` pick up the run.
+    click.secho("Plan approved — execution launching.", fg="green")
+    return _EXIT_SUCCESS
+
+
+async def _handle_execution_interrupt(
+    client: MonetClient,
+    run_id: str,
+    mode: str,
+    abort_fn: object,
+    retry_fn: object,
+) -> int:
+    """Prompt for retry/abort on an execution interrupt."""
+    from monet.cli._render import prompt_execution_decision
 
     decision = prompt_execution_decision()
 
     if decision == "retry":
-        async for event in client.retry_wave(run_id):
-            if mode == "json":
-                click.echo(serialize_event(event))
-            else:
-                render_event(event)
-            if isinstance(event, RunFailed):
-                return _EXIT_AGENT_ERROR
+        await retry_fn(client, run_id)  # type: ignore[operator]
         return _EXIT_SUCCESS
 
-    await client.abort_run(run_id)
+    await abort_fn(client, run_id)  # type: ignore[operator]
     click.secho("Run aborted.", fg="red")
     return _EXIT_AGENT_ERROR

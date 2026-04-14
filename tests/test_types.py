@@ -46,10 +46,10 @@ def test_signal_with_metadata() -> None:
 def test_artifact_pointer() -> None:
     p: ArtifactPointer = {
         "artifact_id": "abc-123",
-        "url": "http://catalogue/abc-123",
+        "url": "http://artifact store/abc-123",
     }
     assert p["artifact_id"] == "abc-123"
-    assert p["url"] == "http://catalogue/abc-123"
+    assert p["url"] == "http://artifact store/abc-123"
 
 
 def test_artifact_pointer_is_dict() -> None:

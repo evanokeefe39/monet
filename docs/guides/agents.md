@@ -19,7 +19,7 @@ async def researcher_fast(task: str) -> str:
 
 @researcher(command="deep")
 async def researcher_deep(task: str, context: list) -> str:
-    """Exhaustive research producing catalogue artifacts."""
+    """Exhaustive research producing artifact store artifacts."""
     return await deep_research(task, context)
 ```
 
@@ -54,7 +54,7 @@ A parameter name not in this set raises `TypeError` at decoration time.
 Commands are plain strings. Two conventional names carry implied calling conventions:
 
 - `"fast"` — bounded effort, returns an inline result. Default when no command is specified.
-- `"deep"` — long-running, typically writes catalogue artifacts.
+- `"deep"` — long-running, typically writes artifact store artifacts.
 
 Domain-specific commands have no implied convention. The same `agent_id` with different `command` values registers distinct capabilities of the same agent.
 
@@ -62,7 +62,7 @@ Domain-specific commands have no implied convention. The same `agent_id` with di
 
 `@agent` functions can return:
 
-- **A string** — becomes `AgentResult.output`. If it exceeds `DEFAULT_CONTENT_LIMIT` (4000 bytes) and a catalogue backend is configured, the full content is automatically offloaded as an artifact and `output` becomes a 200-character inline summary.
+- **A string** — becomes `AgentResult.output`. If it exceeds `DEFAULT_CONTENT_LIMIT` (4000 bytes) and a artifact store backend is configured, the full content is automatically offloaded as an artifact and `output` becomes a 200-character inline summary.
 - **A dict** — becomes `AgentResult.output` directly (e.g. structured planner output, triage decisions).
 - **`None`** — when the primary output is one or more artifacts already written via `write_artifact()`.
 
@@ -106,7 +106,7 @@ An agent that catches all exceptions and returns empty or garbage content will p
 
 ### Resolving upstream content
 
-Downstream agents receive upstream output as short summaries plus catalogue pointers. To access the full content, call `resolve_context()`:
+Downstream agents receive upstream output as short summaries plus artifact store pointers. To access the full content, call `resolve_context()`:
 
 ```python
 from monet import agent, resolve_context
@@ -202,7 +202,7 @@ async def researcher_fast(task: str) -> None:
     await AgentStream.cli(cmd=["./researcher", "--task", task]).run()
 ```
 
-Defaults handle everything: artifacts go to the catalogue, signals reach the collector, progress flows to the LangGraph stream, errors raise `SemanticError`. Register `.on()` handlers only for non-default behaviour:
+Defaults handle everything: artifacts go to the artifact store, signals reach the collector, progress flows to the LangGraph stream, errors raise `SemanticError`. Register `.on()` handlers only for non-default behaviour:
 
 ```python
 from monet import AgentStream, write_artifact, webhook_handler, log_handler

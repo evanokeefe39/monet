@@ -6,6 +6,8 @@ import os
 
 import click
 
+from monet.config import MONET_CONFIG_PATH
+
 
 @click.command()
 @click.option(
@@ -36,8 +38,14 @@ def server(host: str, port: int, config_path: str | None, use_reload: bool) -> N
     """Start the monet orchestration server."""
     import uvicorn
 
+    # Uvicorn's ``factory=True`` loader calls ``create_app`` with no
+    # arguments — it cannot receive a path from us directly. Transport
+    # the CLI ``--config`` value to the factory via MONET_CONFIG_PATH,
+    # which ``monet.config.default_config_path`` reads as the primary
+    # resolution source. This is the one legitimate write to a config
+    # env var in the SDK, and its reader is explicit (no silent contract).
     if config_path:
-        os.environ["MONET_CONFIG_PATH"] = config_path
+        os.environ[MONET_CONFIG_PATH] = config_path
 
     uvicorn.run(
         "monet.server:create_app",

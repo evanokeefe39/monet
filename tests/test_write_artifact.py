@@ -1,4 +1,4 @@
-"""Tests for get_catalogue() and automatic content offload."""
+"""Tests for get_artifacts() and automatic content offload."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from monet import agent, get_catalogue
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet import agent, get_artifacts
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry  # internal: registry_scope fixture
 
@@ -36,20 +36,20 @@ def _clean_registry() -> None:  # type: ignore[misc]
 
 
 @pytest.fixture(autouse=True)
-def _catalogue() -> None:  # type: ignore[misc]
-    configure_catalogue(InMemoryCatalogueClient())
+def _artifacts() -> None:  # type: ignore[misc]
+    configure_artifacts(InMemoryArtifactClient())
     yield
-    configure_catalogue(None)
+    configure_artifacts(None)
 
 
-# --- get_catalogue().write() tests ---
+# --- get_artifacts().write() tests ---
 
 
 async def test_write_no_backend() -> None:
-    """get_catalogue().write() raises without a backend."""
-    configure_catalogue(None)
-    handle = get_catalogue()
-    with pytest.raises(NotImplementedError, match="catalogue backend"):
+    """get_artifacts().write() raises without a backend."""
+    configure_artifacts(None)
+    handle = get_artifacts()
+    with pytest.raises(NotImplementedError, match="artifact store backend"):
         await handle.write(
             content=b"test",
             content_type="text/plain",
@@ -60,12 +60,12 @@ async def test_write_no_backend() -> None:
 
 
 async def test_write_returns_pointer() -> None:
-    """get_catalogue().write() writes and returns a pointer."""
+    """get_artifacts().write() writes and returns a pointer."""
 
     @agent(agent_id="artifact-writer")
     async def my_agent(task: str) -> str:
-        ptr = await get_catalogue().write(
-            content=b"Hello catalogue",
+        ptr = await get_artifacts().write(
+            content=b"Hello artifact store",
             content_type="text/plain",
             summary="Test artifact",
             confidence=0.9,
@@ -84,14 +84,14 @@ async def test_artifacts_collected_in_result() -> None:
 
     @agent(agent_id="collector-agent")
     async def collector(task: str) -> str:
-        await get_catalogue().write(
+        await get_artifacts().write(
             content=b"a",
             content_type="text/plain",
             summary="first",
             confidence=0.8,
             completeness="complete",
         )
-        await get_catalogue().write(
+        await get_artifacts().write(
             content=b"b",
             content_type="text/plain",
             summary="second",
@@ -107,12 +107,12 @@ async def test_artifacts_collected_in_result() -> None:
 
 
 async def test_read_no_side_effects() -> None:
-    """get_catalogue().read() does not register with the artifact collector."""
+    """get_artifacts().read() does not register with the artifact collector."""
 
     @agent(agent_id="reader-agent")
     async def reader(task: str) -> str:
         # write one artifact (collected)
-        ptr = await get_catalogue().write(
+        ptr = await get_artifacts().write(
             content=b"hello",
             content_type="text/plain",
             summary="written",
@@ -120,7 +120,7 @@ async def test_read_no_side_effects() -> None:
             completeness="complete",
         )
         # read it back (must NOT add another entry to artifacts)
-        content, _meta = await get_catalogue().read(ptr["artifact_id"])
+        content, _meta = await get_artifacts().read(ptr["artifact_id"])
         return content.decode()
 
     ctx = _ctx(task="x", agent_id="reader-agent")
@@ -149,7 +149,7 @@ async def test_content_offload_small_output() -> None:
 
 
 async def test_content_offload_large_output() -> None:
-    """Large outputs are offloaded to catalogue automatically."""
+    """Large outputs are offloaded to artifact store automatically."""
 
     @agent(agent_id="large-agent")
     async def large_agent(task: str) -> str:
@@ -169,9 +169,9 @@ async def test_content_offload_large_output() -> None:
     assert len(result.artifacts) == 1
 
 
-async def test_content_offload_no_catalogue() -> None:
-    """Large output without catalogue stays as string (no offload)."""
-    configure_catalogue(None)
+async def test_content_offload_no_artifact_store() -> None:
+    """Large output without artifact store stays as string (no offload)."""
+    configure_artifacts(None)
 
     @agent(agent_id="no-cat-agent")
     async def no_cat_agent(task: str) -> str:
@@ -212,11 +212,11 @@ async def test_signal_accumulation_through_decorator() -> None:
 
 
 async def test_write_with_key() -> None:
-    """get_catalogue().write() with key includes key in returned pointer."""
+    """get_artifacts().write() with key includes key in returned pointer."""
 
     @agent(agent_id="key-writer")
     async def key_writer(task: str) -> str:
-        ptr = await get_catalogue().write(
+        ptr = await get_artifacts().write(
             content=b"brief data",
             content_type="application/json",
             summary="Work brief",
@@ -234,11 +234,11 @@ async def test_write_with_key() -> None:
 
 
 async def test_write_without_key() -> None:
-    """get_catalogue().write() without key omits key from pointer."""
+    """get_artifacts().write() without key omits key from pointer."""
 
     @agent(agent_id="no-key-writer")
     async def no_key_writer(task: str) -> str:
-        ptr = await get_catalogue().write(
+        ptr = await get_artifacts().write(
             content=b"data",
             content_type="text/plain",
             summary="No key",
@@ -255,7 +255,7 @@ async def test_write_without_key() -> None:
 
 
 async def test_write_artifact_key_passthrough() -> None:
-    """write_artifact() passes key through to catalogue."""
+    """write_artifact() passes key through to artifact store."""
     from monet import write_artifact
 
     @agent(agent_id="stub-key-writer")

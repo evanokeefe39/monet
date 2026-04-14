@@ -46,7 +46,7 @@ nav:
   - Getting Started: getting-started.md
   - Guides:
     - Defining Agents: guides/agents.md
-    - Artifact Catalogue: guides/catalogue.md
+    - Artifact Store: guides/artifacts.md
     - Orchestration: guides/orchestration.md
     - Distribution Mode: guides/distribution.md
     - Client SDK: guides/client.md
@@ -55,11 +55,13 @@ nav:
   - API Reference:
     - Core SDK: api/core.md
     - Client: api/client.md
-    - Catalogue: api/catalogue.md
+    - Artifacts: api/artifacts.md
     - Queue Providers: api/queue.md
     - Orchestration: api/orchestration.md
     - Descriptors: api/descriptors.md
     - Server: api/server.md
+  - Reference:
+    - Environment variables: reference/env-vars.md
   - Architecture:
     - Design Principles: architecture/design-principles.md
     - Graph Topology: architecture/graph-topology.md

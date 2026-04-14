@@ -1,8 +1,22 @@
-"""Low-level LangGraph SDK helpers — private implementation detail.
+"""Transport helpers for the LangGraph SDK — public adapter API.
 
 These wrap the ``langgraph_sdk`` client for thread management,
-streaming, and state inspection.  ``MonetClient`` composes them;
-external callers should not use these directly.
+streaming, and state inspection. ``MonetClient`` and pipeline
+adapters (e.g. ``monet.pipelines.default.adapter``) both import from
+here. The underscore prefix on this module is historical — the symbols
+it exports are stable for adapter authors.
+
+Stable adapter API:
+
+- :func:`make_client`, :func:`create_thread`
+- :func:`stream_run`, :func:`drain_stream`, :func:`get_state_values`
+- :func:`task_input`, :func:`chat_input`
+- :data:`MONET_RUN_ID_KEY`, :data:`MONET_GRAPH_KEY`, :data:`MONET_CHAT_NAME_KEY`
+- :data:`TRACE_CARRIER_METADATA_KEY`
+
+Pipeline-specific input builders (e.g. ``planning_input``,
+``execution_input``) live next to their pipeline — see
+``monet.pipelines.default._inputs``.
 """
 
 from __future__ import annotations
@@ -14,13 +28,9 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
-    from monet.types import ArtifactPointer
-
-# ── Graph ID constants (server contract, not caller concern) ────────
+# ── Trace + thread metadata keys ────────────────────────────────────
 
 TRACE_CARRIER_METADATA_KEY = "monet_trace_carrier"
-
-# ── Metadata keys for thread tagging ────────────────────────────────
 
 MONET_RUN_ID_KEY = "monet_run_id"
 MONET_GRAPH_KEY = "monet_graph"
@@ -30,11 +40,19 @@ MONET_CHAT_NAME_KEY = "monet_chat_name"
 # ── Client factory ──────────────────────────────────────────────────
 
 
-def make_client(url: str = "http://localhost:2026") -> LangGraphClient:
-    """Create a LangGraph SDK client pointed at *url*."""
+def make_client(url: str | None = None) -> LangGraphClient:
+    """Create a LangGraph SDK client pointed at *url*.
+
+    When *url* is ``None``, defaults to the server URL resolved by
+    :class:`monet.config.ClientConfig` (``MONET_SERVER_URL`` env var, or
+    ``http://localhost:{STANDARD_DEV_PORT}`` if unset).
+    """
     from langgraph_sdk import get_client
 
-    return get_client(url=url)
+    from monet.config import ClientConfig
+
+    resolved = url if url is not None else ClientConfig.load().server_url
+    return get_client(url=resolved)
 
 
 async def create_thread(
@@ -46,8 +64,8 @@ async def create_thread(
     Args:
         client: LangGraph SDK client.
         metadata: Optional metadata dict attached to the thread.
-            Used by ``MonetClient`` to tag threads with ``monet_run_id``
-            and ``monet_graph`` for later search.
+            Adapters tag threads with ``monet_run_id`` and ``monet_graph``
+            so :meth:`MonetClient.list_runs` / :meth:`get_run` can find them.
     """
     kwargs: dict[str, Any] = {}
     if metadata:
@@ -143,43 +161,15 @@ async def drain_stream(
 # ── State initializers ──────────────────────────────────────────────
 
 
-def entry_input(task: str, run_id: str) -> dict[str, Any]:
-    """Build the initial state dict for the entry (triage) graph."""
-    return {
-        "task": task,
-        "trace_id": f"trace-{run_id}",
-        "run_id": run_id,
-    }
+def task_input(task: str, run_id: str) -> dict[str, Any]:
+    """Build the initial state dict for any entry-like graph.
 
-
-def planning_input(task: str, run_id: str) -> dict[str, Any]:
-    """Build the initial state dict for the planning graph."""
-    return {
-        "task": task,
-        "trace_id": f"trace-{run_id}",
-        "run_id": run_id,
-        "revision_count": 0,
-    }
-
-
-def execution_input(
-    work_brief_pointer: ArtifactPointer,
-    routing_skeleton: dict[str, Any],
-    run_id: str,
-) -> dict[str, Any]:
-    """Build the initial state dict for the execution graph.
-
-    ``work_brief_pointer`` is the catalogue pointer the planner wrote; it's
-    threaded to each agent invocation so the worker-side
-    ``inject_plan_context`` hook can resolve task content. ``routing_skeleton``
-    is the flat DAG (``{goal, nodes}``) that drives traversal.
+    Canonical form: ``{task, trace_id, run_id}`` with
+    ``trace_id = "trace-{run_id}"`` — orchestration OpenTelemetry spans
+    rely on this prefix for trace continuity.
     """
     return {
-        "work_brief_pointer": work_brief_pointer,
-        "routing_skeleton": routing_skeleton,
-        "completed_node_ids": [],
-        "wave_results": [],
-        "wave_reflections": [],
+        "task": task,
         "trace_id": f"trace-{run_id}",
         "run_id": run_id,
     }

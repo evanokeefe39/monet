@@ -1,13 +1,13 @@
-"""Tests for the artifact catalogue."""
+"""Tests for the artifact artifact store."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from monet.catalogue._index import SQLiteIndex
-from monet.catalogue._memory import InMemoryCatalogueClient
-from monet.catalogue._service import CatalogueService
-from monet.catalogue._storage import FilesystemStorage
+from monet.artifacts._index import SQLiteIndex
+from monet.artifacts._memory import InMemoryArtifactClient
+from monet.artifacts._service import ArtifactService
+from monet.artifacts._storage import FilesystemStorage
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -15,11 +15,11 @@ if TYPE_CHECKING:
     import pytest
 
 
-# --- InMemoryCatalogueClient ---
+# --- InMemoryArtifactClient ---
 
 
 async def test_memory_write_read() -> None:
-    client = InMemoryCatalogueClient()
+    client = InMemoryArtifactClient()
     ptr = await client.write(
         b"hello",
         content_type="text/plain",
@@ -36,7 +36,7 @@ async def test_memory_write_read() -> None:
 async def test_memory_read_missing() -> None:
     import pytest
 
-    client = InMemoryCatalogueClient()
+    client = InMemoryArtifactClient()
     with pytest.raises(KeyError):
         await client.read("nonexistent")
 
@@ -45,7 +45,7 @@ async def test_memory_read_missing() -> None:
 
 
 async def test_filesystem_write_read(tmp_path: Path) -> None:
-    from monet.catalogue._metadata import ArtifactMetadata
+    from monet.artifacts._metadata import ArtifactMetadata
 
     storage = FilesystemStorage(tmp_path)
     metadata = ArtifactMetadata(
@@ -70,7 +70,7 @@ async def test_filesystem_write_read(tmp_path: Path) -> None:
 
 
 async def test_filesystem_meta_json_exists(tmp_path: Path) -> None:
-    from monet.catalogue._metadata import ArtifactMetadata
+    from monet.artifacts._metadata import ArtifactMetadata
 
     storage = FilesystemStorage(tmp_path)
     metadata = ArtifactMetadata(
@@ -104,7 +104,7 @@ async def test_filesystem_read_missing(tmp_path: Path) -> None:
 
 
 async def test_index_insert_and_query() -> None:
-    from monet.catalogue._metadata import ArtifactMetadata
+    from monet.artifacts._metadata import ArtifactMetadata
 
     index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
     await index.initialise()
@@ -136,7 +136,7 @@ async def test_index_query_missing() -> None:
 
 
 async def test_index_query_by_run() -> None:
-    from monet.catalogue._metadata import ArtifactMetadata
+    from monet.artifacts._metadata import ArtifactMetadata
 
     index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
     await index.initialise()
@@ -160,17 +160,17 @@ async def test_index_query_by_run() -> None:
     assert results[0]["artifact_id"] == "art-run"
 
 
-# --- CatalogueService (integration of storage + index) ---
+# --- ArtifactService (integration of storage + index) ---
 
 
 async def test_service_write_read(tmp_path: Path) -> None:
     storage = FilesystemStorage(tmp_path)
     index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
     await index.initialise()
-    service = CatalogueService(storage, index)
+    service = ArtifactService(storage, index)
 
     ptr = await service.write(
-        b"catalogue content",
+        b"artifact store content",
         content_type="text/plain",
         summary="test",
         confidence=0.9,
@@ -180,11 +180,11 @@ async def test_service_write_read(tmp_path: Path) -> None:
     assert ptr["url"]
 
     content, meta = await service.read(ptr["artifact_id"])
-    assert content == b"catalogue content"
-    assert meta["content_length"] == len(b"catalogue content")
+    assert content == b"artifact store content"
+    assert meta["content_length"] == len(b"artifact store content")
 
 
-# --- Regression: no blocking syscalls on the catalogue hot path ---
+# --- Regression: no blocking syscalls on the artifact store hot path ---
 
 
 def test_filesystem_storage_no_blocking_syscalls_in_write() -> None:
@@ -208,7 +208,7 @@ def test_filesystem_storage_no_blocking_syscalls_in_write() -> None:
     import ast
     from pathlib import Path as _Path
 
-    src = _Path("src/monet/catalogue/_storage.py").read_text(encoding="utf-8")
+    src = _Path("src/monet/artifacts/_storage.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
 
     offenders: list[str] = []
@@ -262,18 +262,18 @@ async def test_filesystem_read_corrupt_meta_json(tmp_path: Path) -> None:
         await storage.read("corrupt-art")
 
 
-# --- Catalogue service exception narrowing ---
+# --- Artifact store service exception narrowing ---
 
 
 async def test_service_write_propagates_unexpected_exceptions(tmp_path: Path) -> None:
-    """CatalogueService.write does not swallow unexpected exceptions from
+    """ArtifactService.write does not swallow unexpected exceptions from
     get_run_context — only LookupError and RuntimeError are caught."""
     from unittest.mock import patch
 
     storage = FilesystemStorage(tmp_path)
     index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
     await index.initialise()
-    service = CatalogueService(storage, index)
+    service = ArtifactService(storage, index)
 
     with patch(
         "monet.core.context.get_run_context",
@@ -299,8 +299,8 @@ def test_filesystem_storage_relative_root_becomes_absolute(
 ) -> None:
     """FilesystemStorage normalises a relative root to absolute at construction.
 
-    Regression: ``catalogue_from_env()`` constructs the storage with
-    ``Path(".catalogue")`` by default. ``Path.as_uri()`` refuses to format
+    Regression: ``artifacts_from_env()`` constructs the storage with
+    ``Path(".artifacts")`` by default. ``Path.as_uri()`` refuses to format
     a relative path as ``file://``, so every ``write()`` call used to raise
     ``ValueError: relative path can't be expressed as a file URI`` after
     content was already on disk. Enforcing absoluteness in ``__init__``
@@ -313,22 +313,22 @@ def test_filesystem_storage_relative_root_becomes_absolute(
     assert storage.root == (tmp_path / "relative" / "root").absolute()
 
 
-async def test_catalogue_from_env_default_root_produces_absolute_uri(
+async def test_artifacts_from_env_default_root_produces_absolute_uri(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """End-to-end regression: the default (relative) catalogue root must
+    """End-to-end regression: the default (relative) artifact store root must
     round-trip through write() and produce a valid file:// URI. Before the
     fix this raised ``ValueError: relative path can't be expressed as a
     file URI`` inside every agent invocation that wrote an artifact.
     """
     from urllib.parse import unquote, urlparse
 
-    from monet.catalogue import catalogue_from_env
+    from monet.artifacts import artifacts_from_env
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("MONET_CATALOGUE_DIR", raising=False)
+    monkeypatch.delenv("MONET_ARTIFACTS_DIR", raising=False)
 
-    service = catalogue_from_env()
+    service = artifacts_from_env()
     ptr = await service.write(
         b"hello",
         content_type="text/plain",

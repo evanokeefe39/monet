@@ -46,14 +46,16 @@ override graphs. `monet dev` merges your graphs with monet's defaults
 
 ## Programmatic usage
 
-Skip the CLI and drive monet from Python directly:
+Start `monet dev` in another terminal, then drive the server from Python:
 
 ```python
 import asyncio
-from monet import run
+from monet.client import MonetClient
+from monet.pipelines.default import run as run_default
 
 async def main() -> None:
-    async for event in run("AI trends in healthcare"):
+    client = MonetClient()
+    async for event in run_default(client, "AI trends in healthcare", auto_approve=True):
         print(event)
 
 asyncio.run(main())

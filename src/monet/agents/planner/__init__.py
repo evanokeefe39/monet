@@ -89,7 +89,7 @@ async def planner_plan(
     """Build a structured work brief with flat routing DAG.
 
     Returns inline output with ``work_brief_artifact_id`` (keyed artifact
-    in the catalogue) and ``routing_skeleton`` (flat DAG for the
+    in the store) and ``routing_skeleton`` (flat DAG for the
     execution graph). The orchestrator never reads the full brief —
     workers resolve it via the inject_plan_context hook at invocation
     time.

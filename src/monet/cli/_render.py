@@ -1,4 +1,9 @@
-"""Terminal rendering and NDJSON serialization for monet run events."""
+"""Terminal rendering and NDJSON serialization for monet run events.
+
+Renders the graph-agnostic core events (:mod:`monet.client._events`).
+Default-pipeline domain events render via
+:mod:`monet.pipelines.default.render`.
+"""
 
 from __future__ import annotations
 
@@ -12,96 +17,50 @@ import click
 
 from monet.client._events import (
     AgentProgress,
-    ExecutionInterrupt,
+    Interrupt,
+    NodeUpdate,
     PendingDecision,
-    PlanApproved,
-    PlanInterrupt,
-    PlanReady,
-    ReflectionComplete,
     RunComplete,
-    RunDetail,
     RunEvent,
     RunFailed,
+    RunStarted,
     RunSummary,
-    TriageComplete,
-    WaveComplete,
+    SignalEmitted,
 )
 
 
-def _format_node_line(node: dict[str, Any]) -> str:
-    """One-line summary of a routing-skeleton node: ``id: agent/cmd ← deps``."""
-    nid = node.get("id", "?")
-    agent = node.get("agent_id", "?")
-    command = node.get("command", "?")
-    deps = node.get("depends_on") or []
-    base = f"  {nid}: {agent}/{command}"
-    if deps:
-        base += f" ← {', '.join(deps)}"
-    return base
-
-
 def render_event(event: RunEvent) -> None:
-    """Pretty-print a run event to the terminal."""
-    if isinstance(event, TriageComplete):
-        click.secho(f"Triage: {event.complexity}", fg="cyan")
-        if event.suggested_agents:
-            click.secho(f"  Agents: {', '.join(event.suggested_agents)}", fg="cyan")
+    """Pretty-print a core run event to the terminal."""
+    if isinstance(event, RunStarted):
+        click.secho(f"Run {event.run_id} on {event.graph_id}", dim=True)
 
-    elif isinstance(event, PlanReady):
-        click.secho(f"Plan: {event.goal}", fg="green")
-        for node in event.nodes:
-            click.echo(_format_node_line(node))
-
-    elif isinstance(event, PlanApproved):
-        click.secho("Plan approved", fg="green")
-
-    elif isinstance(event, PlanInterrupt):
-        click.secho("Plan awaiting approval:", fg="yellow", bold=True)
-        if event.goal:
-            click.echo(f"  Goal: {event.goal}")
-        for node in event.nodes:
-            click.echo(_format_node_line(node))
+    elif isinstance(event, NodeUpdate):
+        # Quiet by default — node deltas are noisy. Show as dim one-liner.
+        keys = ", ".join(sorted(event.update)) or "(no keys)"
+        click.secho(f"  → {event.node} [{keys}]", dim=True)
 
     elif isinstance(event, AgentProgress):
         click.secho(f"  [{event.agent_id}] {event.status}", dim=True)
         if event.reasons:
             click.secho(f"    {event.reasons}", fg="red", dim=True)
 
-    elif isinstance(event, WaveComplete):
+    elif isinstance(event, SignalEmitted):
         click.secho(
-            f"Wave {event.wave_index} complete ({len(event.results)} result(s))",
-            fg="green",
+            f"  [{event.agent_id}] signal: {event.signal_type}", fg="yellow", dim=True
         )
 
-    elif isinstance(event, ReflectionComplete):
-        color = "green" if event.verdict == "pass" else "yellow"
-        click.secho(f"QA: {event.verdict}", fg=color)
-        if event.notes:
-            click.echo(f"  {event.notes}")
-
-    elif isinstance(event, ExecutionInterrupt):
-        click.secho(f"Execution paused: {event.reason}", fg="yellow", bold=True)
-        if event.pending_node_ids:
-            click.echo(f"  Pending: {', '.join(event.pending_node_ids)}")
+    elif isinstance(event, Interrupt):
+        click.secho(f"Paused at {event.tag}", fg="yellow", bold=True)
 
     elif isinstance(event, RunComplete):
         click.secho("Done.", fg="green", bold=True)
-        for wr in event.wave_results:
-            for art in wr.get("artifacts") or []:
-                url = art.get("url", "")
-                if url:
-                    click.secho(f"  {url}", dim=True)
 
     elif isinstance(event, RunFailed):
         click.secho(f"Failed: {event.error}", fg="red", bold=True)
 
 
 def prompt_plan_decision() -> Literal["approve", "revise", "reject"]:
-    """Prompt the user for a plan approval decision.
-
-    Returns:
-        One of ``"approve"``, ``"revise"``, or ``"reject"``.
-    """
+    """Prompt the user for a plan approval decision."""
     click.echo()
     choice = click.prompt(
         "Action",
@@ -112,11 +71,7 @@ def prompt_plan_decision() -> Literal["approve", "revise", "reject"]:
 
 
 def prompt_execution_decision() -> Literal["retry", "abort"]:
-    """Prompt the user for an execution interrupt decision.
-
-    Returns:
-        One of ``"retry"`` or ``"abort"``.
-    """
+    """Prompt the user for an execution interrupt decision."""
     click.echo()
     choice = click.prompt(
         "Action",
@@ -132,23 +87,21 @@ def prompt_execution_decision() -> Literal["retry", "abort"]:
 _CAMEL_TO_SNAKE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
-def _event_type_name(event: RunEvent) -> str:
-    """Convert event class name to snake_case for the ``type`` field.
-
-    ``TriageComplete`` -> ``triage_complete``.
-    """
+def _event_type_name(event: object) -> str:
+    """Convert event class name to snake_case for the ``type`` field."""
     return _CAMEL_TO_SNAKE.sub("_", type(event).__name__).lower()
 
 
-def serialize_event(event: RunEvent) -> str:
-    """Serialize a ``RunEvent`` to a single NDJSON line.
+def serialize_event(event: object) -> str:
+    """Serialize any dataclass event to a single NDJSON line.
 
     Uses ``default=str`` to handle non-JSON-serializable values
     (datetime, bytes, custom objects) in ``dict[str, Any]`` fields
     that carry untrusted agent outputs.
     """
     payload: dict[str, Any] = {"type": _event_type_name(event)}
-    payload.update(dataclasses.asdict(event))
+    if dataclasses.is_dataclass(event) and not isinstance(event, type):
+        payload.update(dataclasses.asdict(event))
     return json.dumps(payload, default=str, ensure_ascii=False)
 
 
@@ -156,15 +109,10 @@ def serialize_event(event: RunEvent) -> str:
 
 
 def format_age(iso_timestamp: str) -> str:
-    """Convert an ISO-8601 timestamp to a human-friendly relative age.
-
-    Returns strings like ``"2m ago"``, ``"3h ago"``, ``"5d ago"``.
-    Returns ``""`` if the timestamp cannot be parsed.
-    """
+    """Convert an ISO-8601 timestamp to a human-friendly relative age."""
     if not iso_timestamp:
         return ""
     try:
-        # Handle both Z-suffix and +00:00 offset formats.
         ts = iso_timestamp.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
         delta = datetime.now(UTC) - dt
@@ -190,11 +138,12 @@ def render_run_table(summaries: list[RunSummary]) -> None:
         click.echo("No runs found.")
         return
 
-    click.echo(f"{'RUN ID':<12} {'STATUS':<14} {'PHASE':<12} {'AGE'}")
-    click.echo("-" * 48)
+    click.echo(f"{'RUN ID':<12} {'STATUS':<14} {'STAGES':<24} {'AGE'}")
+    click.echo("-" * 60)
     for s in summaries:
         age = format_age(s.created_at)
-        click.echo(f"{s.run_id:<12} {s.status:<14} {s.phase:<12} {age}")
+        stages = ",".join(s.completed_stages) or "-"
+        click.echo(f"{s.run_id:<12} {s.status:<14} {stages:<24} {age}")
 
 
 def render_pending_table(decisions: list[PendingDecision]) -> None:
@@ -203,59 +152,7 @@ def render_pending_table(decisions: list[PendingDecision]) -> None:
         click.echo("No pending decisions.")
         return
 
-    click.echo(f"{'RUN ID':<12} {'TYPE':<20} {'SUMMARY'}")
+    click.echo(f"{'RUN ID':<12} {'TAG':<20} {'SUMMARY'}")
     click.echo("-" * 56)
     for d in decisions:
         click.echo(f"{d.run_id:<12} {d.decision_type:<20} {d.summary}")
-
-
-def render_run_detail(detail: RunDetail) -> None:
-    """Render full run detail to stdout."""
-    click.secho(f"Run {detail.run_id}", bold=True)
-    click.echo(f"  Status: {detail.status}")
-    click.echo(f"  Phase:  {detail.phase}")
-
-    if detail.triage:
-        click.echo()
-        click.secho("Triage", bold=True)
-        complexity = detail.triage.get("complexity", "unknown")
-        click.echo(f"  Complexity: {complexity}")
-        agents = detail.triage.get("suggested_agents") or []
-        if agents:
-            click.echo(f"  Agents: {', '.join(agents)}")
-
-    if detail.routing_skeleton:
-        click.echo()
-        click.secho("Plan", bold=True)
-        goal = detail.routing_skeleton.get("goal", "")
-        if goal:
-            click.echo(f"  Goal: {goal}")
-        for node in detail.routing_skeleton.get("nodes") or []:
-            click.echo(_format_node_line(node))
-
-    if detail.wave_results:
-        click.echo()
-        click.secho("Results", bold=True)
-        for wr in detail.wave_results:
-            agent = wr.get("agent_id", "?")
-            command = wr.get("command", "?")
-            click.echo(f"  [{agent}/{command}]")
-            output = wr.get("output")
-            if output:
-                text = str(output)[:200]
-                click.secho(f"    {text}", dim=True)
-            for art in wr.get("artifacts") or []:
-                url = art.get("url", "")
-                if url:
-                    click.secho(f"    {url}", dim=True)
-
-    if detail.wave_reflections:
-        click.echo()
-        click.secho("QA", bold=True)
-        for ref in detail.wave_reflections:
-            verdict = ref.get("verdict", "")
-            notes = ref.get("notes", "")
-            color = "green" if verdict == "pass" else "yellow"
-            click.secho(f"  {verdict}", fg=color)
-            if notes:
-                click.echo(f"    {notes}")

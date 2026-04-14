@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import tomllib
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+from monet.config import (
+    default_config_path,
+    pool_auth_env,
+    pool_url_env,
+    read_str,
+    read_toml,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 __all__ = ["PoolConfig", "load_config"]
 
@@ -61,14 +69,12 @@ def load_config(path: Path | None = None) -> dict[str, PoolConfig]:
         ValueError: If a pool type is not one of ``local``, ``pull``,
             ``push``, or if a ``push`` pool has no URL configured.
     """
-    if path is None:
-        path = Path.cwd() / "monet.toml"
+    resolved = path if path is not None else default_config_path()
 
-    if not path.exists():
+    if not resolved.exists():
         return {"local": PoolConfig(name="local", type="local")}
 
-    with open(path, "rb") as f:
-        raw = tomllib.load(f)
+    raw = read_toml(resolved)
 
     pools_section: dict[str, dict[str, object]] = raw.get("pools", {})
     result: dict[str, PoolConfig] = {}
@@ -81,17 +87,16 @@ def load_config(path: Path | None = None) -> dict[str, PoolConfig]:
                 f"Must be one of: {', '.join(sorted(_VALID_POOL_TYPES))}"
             )
 
-        env_prefix = f"MONET_POOL_{name.upper()}_"
         lease_ttl = pool_data.get("lease_ttl", 300)
 
-        url = pool_data.get("url") or os.environ.get(f"{env_prefix}URL") or None
-        auth = pool_data.get("auth") or os.environ.get(f"{env_prefix}AUTH") or None
+        url = pool_data.get("url") or read_str(pool_url_env(name))
+        auth = pool_data.get("auth") or read_str(pool_auth_env(name))
 
         # Push pools require a URL — either in config or environment.
         if pool_type == "push" and url is None:
             raise ValueError(
                 f"Push pool {name!r} requires a URL. Set it in monet.toml "
-                f"or via the {env_prefix}URL environment variable."
+                f"or via the {pool_url_env(name)} environment variable."
             )
 
         result[name] = PoolConfig(

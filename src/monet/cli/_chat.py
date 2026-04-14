@@ -2,7 +2,7 @@
 
 Each session is backed by an Aegra thread. Messages persist across
 CLI restarts via LangGraph checkpoint state. The ``/run`` command
-dispatches work through the monet pipeline inline.
+dispatches work through the default monet pipeline inline.
 """
 
 from __future__ import annotations
@@ -15,20 +15,21 @@ import click
 if TYPE_CHECKING:
     from monet.client import MonetClient
 
+from monet._constants import STANDARD_DEV_PORT
 from monet.cli._render import (
     prompt_execution_decision,
     prompt_plan_decision,
-    render_event,
     render_run_table,
 )
 from monet.cli._setup import check_env
+from monet.config import MONET_SERVER_URL
 
 
 @click.command()
 @click.option(
     "--url",
-    default="http://localhost:2026",
-    envvar="MONET_SERVER_URL",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
+    envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
 @click.option("--new", "force_new", is_flag=True, help="Start a new conversation.")
@@ -44,11 +45,7 @@ def chat(
     session_name: str | None,
     graph_override: str | None,
 ) -> None:
-    """Interactive multi-turn conversation with the monet platform.
-
-    Sessions persist across CLI restarts. Use /run <task> to dispatch
-    work through the monet pipeline from within the conversation.
-    """
+    """Interactive multi-turn conversation with the monet platform."""
     import contextlib
 
     check_env()
@@ -82,7 +79,6 @@ async def _chat_main(
 
     client = MonetClient(url, graph_ids=graph_ids)
 
-    # --list: show saved conversations and exit.
     if list_sessions:
         chats = await client.list_chats()
         if not chats:
@@ -98,13 +94,11 @@ async def _chat_main(
             click.echo(f"{c.thread_id:<40} {name:<20} {c.message_count:<6} {age}")
         return
 
-    # Resolve thread_id: --resume, --session, --new, or most recent.
     thread_id: str | None = None
 
     if resume_id:
         thread_id = resume_id
     elif session_name:
-        # Search for existing named session.
         chats = await client.list_chats()
         for c in chats:
             if c.name == session_name:
@@ -116,7 +110,6 @@ async def _chat_main(
     elif force_new:
         thread_id = await client.create_chat()
     else:
-        # Resume most recent, or create new if none.
         thread_id = await client.get_most_recent_chat()
         if thread_id is None:
             thread_id = await client.create_chat()
@@ -124,11 +117,9 @@ async def _chat_main(
 
     click.echo(f"Session: {thread_id}", err=True)
 
-    # Show recent history on resume.
     history = await client.get_chat_history(thread_id)
     if history:
         click.echo(f"({len(history)} messages in history)", err=True)
-        # Show last few messages for context.
         recent = history[-4:]
         for msg in recent:
             role = msg.get("role", "?")
@@ -157,18 +148,16 @@ async def _chat_repl(client: MonetClient, thread_id: str) -> None:
         if not line:
             continue
 
-        # Slash commands.
         if line.startswith("/"):
             should_exit = await _handle_slash_command(client, thread_id, line)
             if should_exit:
                 return
             continue
 
-        # Send message and stream response.
         try:
             async for token in client.send_message(thread_id, line):
                 click.echo(token, nl=False)
-            click.echo()  # Final newline after response.
+            click.echo()
         except Exception as exc:
             click.echo(f"Error: {exc}", err=True)
 
@@ -207,14 +196,16 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
             click.echo("Usage: /attach <run_id>")
             return False
         try:
+            from monet.pipelines.default import DefaultPipelineRunDetail
+
             detail = await client.get_run(arg)
-            # Build a summary of the run results.
+            view = DefaultPipelineRunDetail.from_run_detail(detail)
             parts_list: list[str] = [f"Attached run {arg} (status: {detail.status})"]
-            if detail.routing_skeleton:
-                goal = detail.routing_skeleton.get("goal", "")
+            if view.routing_skeleton:
+                goal = view.routing_skeleton.get("goal", "")
                 if goal:
                     parts_list.append(f"Goal: {goal}")
-            for wr in detail.wave_results:
+            for wr in view.wave_results:
                 agent = wr.get("agent_id", "?")
                 output = str(wr.get("output", ""))[:200]
                 parts_list.append(f"[{agent}] {output}")
@@ -260,71 +251,81 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
 
 
 async def _handle_inline_run(client: MonetClient, thread_id: str, task: str) -> None:
-    """Dispatch a monet run inline from the chat REPL."""
-    from monet.client._events import (
+    """Dispatch a default-pipeline run inline from the chat REPL."""
+    from monet.client import RunComplete, RunFailed
+    from monet.pipelines.default import (
+        DefaultPipelineRunDetail,
         ExecutionInterrupt,
         PlanInterrupt,
-        RunComplete,
-        RunFailed,
+        abort_run,
+        approve_plan,
+        reject_plan,
+        retry_wave,
+        revise_plan,
     )
+    from monet.pipelines.default import (
+        run as run_default,
+    )
+    from monet.pipelines.default.render import render_pipeline_event
 
     click.echo(f"Running: {task}", err=True)
     run_id: str | None = None
 
     try:
-        async for event in client.run(task):
-            render_event(event)
+        async for event in run_default(client, task):
+            if isinstance(event, RunComplete | RunFailed):
+                from monet.cli._render import render_event
+
+                render_event(event)
+            else:
+                render_pipeline_event(event)
 
             if run_id is None and hasattr(event, "run_id"):
                 run_id = event.run_id
 
-            # HITL: plan approval.
             if isinstance(event, PlanInterrupt) and run_id:
                 decision = prompt_plan_decision()
                 if decision == "approve":
-                    async for follow_up in client.approve_plan(run_id):
-                        render_event(follow_up)
+                    await approve_plan(client, run_id)
                 elif decision == "revise":
                     feedback = click.prompt("Feedback")
-                    async for follow_up in client.revise_plan(run_id, feedback):
-                        render_event(follow_up)
+                    await revise_plan(client, run_id, feedback)
                 elif decision == "reject":
+                    await reject_plan(client, run_id)
                     click.secho("Run rejected.", fg="red")
                     return
                 break
 
-            # HITL: execution interrupt.
             if isinstance(event, ExecutionInterrupt) and run_id:
                 exec_decision = prompt_execution_decision()
                 if exec_decision == "retry":
-                    async for follow_up in client.retry_wave(run_id):
-                        render_event(follow_up)
+                    await retry_wave(client, run_id)
                 else:
-                    await client.abort_run(run_id)
+                    await abort_run(client, run_id)
                     click.secho("Run aborted.", fg="red")
                 break
 
             if isinstance(event, RunComplete | RunFailed):
                 break
 
-        # Send summary back to chat context.
         if run_id:
             try:
                 detail = await client.get_run(run_id)
+                view = DefaultPipelineRunDetail.from_run_detail(detail)
                 summary_parts: list[str] = [
                     f"Completed run {run_id} (status: {detail.status})"
                 ]
-                if detail.routing_skeleton:
-                    goal = detail.routing_skeleton.get("goal", "")
+                if view.routing_skeleton:
+                    goal = view.routing_skeleton.get("goal", "")
                     if goal:
                         summary_parts.append(f"Goal: {goal}")
-                for wr in detail.wave_results[:5]:
+                for wr in view.wave_results[:5]:
                     agent = wr.get("agent_id", "?")
                     output = str(wr.get("output", ""))[:200]
                     summary_parts.append(f"[{agent}] {output}")
                 await client.send_context(thread_id, "\n".join(summary_parts))
             except Exception:
-                pass  # Best-effort context injection.
+                pass
 
     except Exception as exc:
         click.echo(f"Run error: {exc}", err=True)

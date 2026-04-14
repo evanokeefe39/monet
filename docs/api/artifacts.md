@@ -1,17 +1,17 @@
-# Catalogue API Reference
+# Artifact Store API Reference
 
-All exports from `monet.catalogue`.
+All exports from `monet.artifacts`.
 
-## `CatalogueClient`
+## `ArtifactClient`
 
 ```python
 @runtime_checkable
-class CatalogueClient(Protocol):
+class ArtifactClient(Protocol):
     def write(self, content: bytes, metadata: ArtifactMetadata) -> ArtifactPointer: ...
     def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]: ...
 ```
 
-Protocol for catalogue implementations. Any class with `write` and `read` methods satisfying these signatures is a valid client.
+Protocol for artifact store implementations. Any class with `write` and `read` methods satisfying these signatures is a valid client.
 
 ## `ArtifactMetadata`
 
@@ -60,23 +60,23 @@ class FilesystemStorage:
 
 Local filesystem storage backend. Stores at `{root}/{artifact_id}/content` and `{root}/{artifact_id}/meta.json`. Returns `file://` URLs.
 
-## `CatalogueService`
+## `ArtifactService`
 
 ```python
-class CatalogueService:
-    def __init__(self, storage: StorageBackend, db_url: str = "sqlite:///catalogue.db") -> None
+class ArtifactService:
+    def __init__(self, storage: StorageBackend, db_url: str = "sqlite:///artifact store.db") -> None
 ```
 
-Composes a `StorageBackend` with a `SQLiteIndex`. Implements `CatalogueClient`.
+Composes a `StorageBackend` with a `SQLiteIndex`. Implements `ArtifactClient`.
 
 - `write()` -- generates UUID, computes SHA-256, timestamps, writes to storage, indexes metadata
 - `read()` -- retrieves from storage, verifies content hash integrity
 
-## `InMemoryCatalogueClient`
+## `InMemoryArtifactClient`
 
 ```python
-class InMemoryCatalogueClient:
+class InMemoryArtifactClient:
     def __init__(self) -> None
 ```
 
-Dict-backed implementation for testing. Implements `CatalogueClient`. Auto-generates UUIDs and computes content hashes.
+Dict-backed implementation for testing. Implements `ArtifactClient`. Auto-generates UUIDs and computes content hashes.

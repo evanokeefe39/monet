@@ -29,7 +29,7 @@ The decorator has two jobs only: registration and context injection. Before call
 - The verbose form requires `agent_id`; an empty value raises `ValueError`.
 - The wrapper is always async. Sync functions are called synchronously inside the async wrapper.
 - Returns `AgentResult` on every code path (success, typed exception, unexpected exception).
-- If a string return exceeds `DEFAULT_CONTENT_LIMIT` (4000 bytes) and a catalogue backend is configured, the full content is offloaded to the catalogue (the pointer lands in `artifacts`) and `output` becomes a 200-character inline summary.
+- If a string return exceeds `DEFAULT_CONTENT_LIMIT` (4000 bytes) and a artifact store backend is configured, the full content is offloaded to the artifact store (the pointer lands in `artifacts`) and `output` becomes a 200-character inline summary.
 
 ## Types
 
@@ -49,7 +49,7 @@ class AgentResult:
     def get_signal(self, signal_type: SignalType) -> Signal | None: ...
 ```
 
-`output` is for inline results only — a string summary, a structured dict, or `None`. `artifacts` lists every catalogue pointer the agent wrote. The two fields are distinct: the orchestrator never falls back from one to the other.
+`output` is for inline results only — a string summary, a structured dict, or `None`. `artifacts` lists every artifact store pointer the agent wrote. The two fields are distinct: the orchestrator never falls back from one to the other.
 
 ### `AgentRunContext`
 
@@ -124,7 +124,7 @@ class ArtifactPointer(TypedDict):
     url: str
 ```
 
-Reference to an artifact in the catalogue.
+Reference to an artifact in the artifact store.
 
 ## Ambient functions
 
@@ -159,15 +159,15 @@ async def write_artifact(
 ) -> ArtifactPointer
 ```
 
-Convenience alias for `await get_catalogue().write(...)`. The pointer is appended to `AgentResult.artifacts` automatically. Raises `NotImplementedError` if no catalogue backend is configured — call `monet.catalogue.configure_catalogue(...)` at startup.
+Convenience alias for `await get_artifacts().write(...)`. The pointer is appended to `AgentResult.artifacts` automatically. Raises `NotImplementedError` if no artifact store backend is configured — call `monet.artifacts.configure_artifacts(...)` at startup.
 
-### `get_catalogue`
+### `get_artifacts`
 
 ```python
-def get_catalogue() -> CatalogueHandle
+def get_artifacts() -> ArtifactStoreHandle
 ```
 
-Returns the context-aware catalogue handle. `await handle.write(...)` and `await handle.read(...)` are the canonical operations; `write_artifact` is the convenience alias.
+Returns the context-aware artifact store handle. `await handle.write(...)` and `await handle.read(...)` are the canonical operations; `write_artifact` is the convenience alias.
 
 ### `get_run_context`
 
@@ -222,7 +222,7 @@ If no handler is registered for an event type, default routing applies:
 |---|---|
 | `progress` | `emit_progress(event)` |
 | `signal` | `emit_signal(Signal(...))` |
-| `artifact` | `await get_catalogue().write(...)` |
+| `artifact` | `await get_artifacts().write(...)` |
 | `error` | `raise SemanticError(...)` |
 | `result` | captured as `.run()` return value |
 | unknown | log warning, continue |

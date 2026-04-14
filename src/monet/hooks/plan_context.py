@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 
-from monet import AgentMeta, AgentRunContext, get_catalogue, on_hook
+from monet import AgentMeta, AgentRunContext, get_artifacts, on_hook
 from monet.orchestration._state import WorkBrief
 
 __all__ = ["inject_plan_context"]
@@ -36,7 +36,7 @@ async def inject_plan_context(ctx: AgentRunContext, meta: AgentMeta) -> AgentRun
     pointer = plan_entry["work_brief_pointer"]
     node_id = plan_entry["node_id"]
 
-    content_bytes, _meta = await get_catalogue().read(pointer["artifact_id"])
+    content_bytes, _meta = await get_artifacts().read(pointer["artifact_id"])
     work_brief = WorkBrief.model_validate(json.loads(content_bytes.decode()))
 
     node = next((n for n in work_brief.nodes if n.id == node_id), None)

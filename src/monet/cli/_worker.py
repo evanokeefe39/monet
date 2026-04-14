@@ -6,7 +6,6 @@ import asyncio
 import importlib
 import importlib.util
 import logging
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -14,26 +13,22 @@ from typing import TYPE_CHECKING
 
 import click
 
+from monet.config import (
+    GEMINI_API_KEY,
+    GROQ_API_KEY,
+    MONET_API_KEY,
+    MONET_SERVER_URL,
+    MONET_WORKER_AGENTS,
+    MONET_WORKER_CONCURRENCY,
+    MONET_WORKER_POOL,
+    ConfigError,
+    WorkerConfig,
+)
+
 if TYPE_CHECKING:
     from monet.cli._discovery import DiscoveredAgent
 
 logger = logging.getLogger("monet.cli.worker")
-
-
-def _read_env_float(name: str, default: float) -> float:
-    """Read a float from an environment variable with validation."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        msg = f"{name}={raw!r} is not a valid number"
-        raise click.BadParameter(msg) from None
-    if value <= 0:
-        msg = f"{name}={raw!r} must be positive"
-        raise click.BadParameter(msg)
-    return value
 
 
 @click.command()
@@ -45,41 +40,41 @@ def _read_env_float(name: str, default: float) -> float:
 )
 @click.option(
     "--pool",
-    default="local",
-    envvar="MONET_WORKER_POOL",
-    help="Pool to claim tasks from.",
+    default=None,
+    envvar=MONET_WORKER_POOL,
+    help="Pool to claim tasks from (default: local).",
 )
 @click.option(
     "--concurrency",
-    default=10,
+    default=None,
     type=int,
-    envvar="MONET_WORKER_CONCURRENCY",
-    help="Max concurrent task executions.",
+    envvar=MONET_WORKER_CONCURRENCY,
+    help="Max concurrent task executions (default: 10).",
 )
 @click.option(
     "--server-url",
-    envvar="MONET_SERVER_URL",
+    envvar=MONET_SERVER_URL,
     default=None,
     help="Orchestration server URL.",
 )
 @click.option(
     "--api-key",
-    envvar="MONET_API_KEY",
+    envvar=MONET_API_KEY,
     default=None,
     help="API key for server auth.",
 )
 @click.option(
     "--agents",
     "agents_file",
-    envvar="MONET_WORKER_AGENTS",
+    envvar=MONET_WORKER_AGENTS,
     default=None,
     type=click.Path(exists=True),
     help="Path to agents.toml for declarative agent registration.",
 )
 def worker(
     path: str,
-    pool: str,
-    concurrency: int,
+    pool: str | None,
+    concurrency: int | None,
     server_url: str | None,
     api_key: str | None,
     agents_file: str | None,
@@ -101,36 +96,34 @@ def worker(
       MONET_WORKER_SHUTDOWN_TIMEOUT — graceful shutdown wait (default 30)
       MONET_WORKER_HEARTBEAT_INTERVAL — remote heartbeat cycle (default 30)
     """
-    poll_interval = _read_env_float("MONET_WORKER_POLL_INTERVAL", 0.1)
-    shutdown_timeout = _read_env_float("MONET_WORKER_SHUTDOWN_TIMEOUT", 30.0)
-    heartbeat_interval = _read_env_float("MONET_WORKER_HEARTBEAT_INTERVAL", 30.0)
-    asyncio.run(
-        _run_worker(
-            Path(path),
-            pool,
-            concurrency,
-            server_url,
-            api_key,
-            agents_file=Path(agents_file) if agents_file else None,
-            poll_interval=poll_interval,
-            shutdown_timeout=shutdown_timeout,
-            heartbeat_interval=heartbeat_interval,
-        )
-    )
+    overrides: dict[str, object] = {}
+    if pool is not None:
+        overrides["pool"] = pool
+    if concurrency is not None:
+        overrides["concurrency"] = concurrency
+    if server_url is not None:
+        overrides["server_url"] = server_url
+    if api_key is not None:
+        overrides["api_key"] = api_key
+    if agents_file is not None:
+        overrides["agents_toml"] = Path(agents_file)
+
+    cfg = WorkerConfig.load().model_copy(update=overrides)
+    # Reference agents need at least one LLM provider key. A worker that
+    # boots without one will successfully claim tasks and then fail the
+    # moment the first agent tries to instantiate a model — far from the
+    # cause. Require at least one common LLM key at boot instead.
+    cfg = cfg.with_required_llm_keys((GEMINI_API_KEY, GROQ_API_KEY))
+    try:
+        cfg.validate_for_boot()
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from None
+
+    logger.info("monet worker booted: %s", cfg.redacted_summary())
+    asyncio.run(_run_worker(Path(path), cfg))
 
 
-async def _run_worker(
-    path: Path,
-    pool: str,
-    concurrency: int,
-    server_url: str | None,
-    api_key: str | None,
-    *,
-    agents_file: Path | None = None,
-    poll_interval: float = 0.1,
-    shutdown_timeout: float = 30.0,
-    heartbeat_interval: float = 30.0,
-) -> None:
+async def _run_worker(path: Path, cfg: WorkerConfig) -> None:
     """Discover agents, configure queue, and run the worker loop."""
     from monet.cli._discovery import discover_agents
 
@@ -152,42 +145,21 @@ async def _run_worker(
         logger.info("Imported %s", agent_file)
 
     # Load declarative agent config if provided.
-    if agents_file is not None:
+    if cfg.agents_toml is not None:
         from monet.core._agents_config import load_agents
 
-        count = load_agents(agents_file)
-        logger.info("Registered %d agent(s) from %s", count, agents_file)
+        count = load_agents(cfg.agents_toml)
+        logger.info("Registered %d agent(s) from %s", count, cfg.agents_toml)
 
-    if server_url:
-        await _run_remote(
-            discovered,
-            pool,
-            concurrency,
-            server_url,
-            api_key,
-            poll_interval=poll_interval,
-            shutdown_timeout=shutdown_timeout,
-            heartbeat_interval=heartbeat_interval,
-        )
+    if cfg.server_url:
+        await _run_remote(discovered, cfg)
     else:
-        await _run_local(
-            pool,
-            concurrency,
-            poll_interval=poll_interval,
-            shutdown_timeout=shutdown_timeout,
-        )
+        await _run_local(cfg)
 
 
 async def _run_remote(
     discovered: list[DiscoveredAgent],
-    pool: str,
-    concurrency: int,
-    server_url: str,
-    api_key: str | None,
-    *,
-    poll_interval: float = 0.1,
-    shutdown_timeout: float = 30.0,
-    heartbeat_interval: float = 30.0,
+    cfg: WorkerConfig,
 ) -> None:
     """Run worker in remote mode with HTTP-based queue."""
     import contextlib
@@ -195,6 +167,8 @@ async def _run_remote(
     from monet.core.manifest import AgentCapability, default_manifest
     from monet.core.worker_client import RemoteQueue, WorkerClient
     from monet.queue import run_worker
+
+    pool = cfg.pool
 
     def _current_capabilities() -> list[AgentCapability]:
         """Read capabilities from the manifest with descriptions."""
@@ -208,7 +182,8 @@ async def _run_remote(
             for cap in default_manifest.capabilities()
         ]
 
-    client = WorkerClient(server_url, api_key or "")
+    assert cfg.server_url is not None  # validated in validate_for_boot
+    client = WorkerClient(cfg.server_url, cfg.api_key or "")
     worker_id = uuid.uuid4().hex[:8]
 
     capabilities = _current_capabilities()
@@ -224,7 +199,7 @@ async def _run_remote(
 
     async def _heartbeat_loop() -> None:
         while True:
-            await asyncio.sleep(heartbeat_interval)
+            await asyncio.sleep(cfg.heartbeat_interval)
             # Read current capabilities each cycle so hot-reloads
             # are picked up on the next heartbeat. Transient failures
             # are handled inside heartbeat_with_tracking; 4xx auth
@@ -240,9 +215,9 @@ async def _run_remote(
         await run_worker(
             queue,
             pool=pool,
-            max_concurrency=concurrency,
-            poll_interval=poll_interval,
-            shutdown_timeout=shutdown_timeout,
+            max_concurrency=cfg.concurrency,
+            poll_interval=cfg.poll_interval,
+            shutdown_timeout=cfg.shutdown_timeout,
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Worker shutting down")
@@ -254,28 +229,22 @@ async def _run_remote(
         await client.close()
 
 
-async def _run_local(
-    pool: str,
-    concurrency: int,
-    *,
-    poll_interval: float = 0.1,
-    shutdown_timeout: float = 30.0,
-) -> None:
+async def _run_local(cfg: WorkerConfig) -> None:
     """Run worker in local mode with an in-memory queue."""
     from monet.orchestration._invoke import configure_queue
     from monet.queue import InMemoryTaskQueue, run_worker
 
     queue = InMemoryTaskQueue()
     configure_queue(queue)
-    logger.info("Worker running in local mode (pool=%s)", pool)
+    logger.info("Worker running in local mode (pool=%s)", cfg.pool)
 
     try:
         await run_worker(
             queue,
-            pool=pool,
-            max_concurrency=concurrency,
-            poll_interval=poll_interval,
-            shutdown_timeout=shutdown_timeout,
+            pool=cfg.pool,
+            max_concurrency=cfg.concurrency,
+            poll_interval=cfg.poll_interval,
+            shutdown_timeout=cfg.shutdown_timeout,
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Worker shutting down")

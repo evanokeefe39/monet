@@ -35,7 +35,7 @@ async def qa_fast(task: str, context: list[dict[str, Any]] | None = None) -> str
     """Evaluate content quality. May emit LOW_CONFIDENCE / REVISION_SUGGESTED.
 
     The artifact(s) being evaluated are passed via ``context`` — upstream
-    wave outputs carry short summaries and catalogue pointers. We resolve
+    wave outputs carry short summaries and artifact pointers. We resolve
     them here to get the full content before grading.
     """
     emit_progress({"status": "evaluating", "agent": "qa"})

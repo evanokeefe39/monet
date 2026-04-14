@@ -1,7 +1,7 @@
-"""Reference implementation of CatalogueClient.
+"""Reference implementation of ArtifactClient.
 
 Wires FilesystemStorage (bytes on disk) with SQLiteIndex (queryable metadata).
-Production applications implement CatalogueClient directly against their
+Production applications implement ArtifactClient directly against their
 own storage backend. This service is for development and simple deployments.
 """
 
@@ -11,15 +11,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from monet.catalogue._metadata import ArtifactMetadata
+from monet.artifacts._metadata import ArtifactMetadata
 
 if TYPE_CHECKING:
-    from monet.catalogue._index import SQLiteIndex
-    from monet.catalogue._storage import FilesystemStorage
+    from monet.artifacts._index import SQLiteIndex
+    from monet.artifacts._storage import FilesystemStorage
     from monet.types import ArtifactPointer
 
 
-class CatalogueService:
+class ArtifactService:
     """Composes FilesystemStorage and SQLiteIndex."""
 
     def __init__(self, storage: FilesystemStorage, index: SQLiteIndex) -> None:

@@ -1,24 +1,25 @@
 """Default graph exports for Aegra / LangGraph dev servers.
 
-Point ``aegra.json`` (or ``langgraph.json``) here to serve the three
-monet graphs with zero configuration.
+Point ``aegra.json`` (or ``langgraph.json``) at this module to serve the
+four monet graphs with zero configuration.
 
-Infrastructure (tracing, catalogue, queue, worker) is configured at
-import time using environment defaults.  Override via env vars:
-
-- ``MONET_CATALOGUE_DIR`` — catalogue storage path (default: ``.catalogue``)
-- ``MONET_QUEUE_BACKEND`` — queue backend: ``memory`` (default),
-  ``redis``, or ``sqlite``
-- ``OTEL_EXPORTER_OTLP_ENDPOINT`` / ``LANGFUSE_*`` — tracing backend
+Importing this module performs one-shot server bootstrap: load +
+validate a :class:`~monet.config.ServerConfig`, then wire tracing,
+artifacts, and the task queue. A typo in ``MONET_QUEUE_BACKEND`` or a
+missing ``MONET_API_KEY`` in distributed mode fails here — loud — rather
+than 500-ing on a later request. The resolved, redacted config is
+logged at ``INFO`` so an operator can see what the running process
+actually picked up.
 """
 
 from __future__ import annotations
 
-import os
+import logging
 from typing import TYPE_CHECKING
 
 import monet.agents  # noqa: F401 — registers reference agents
-from monet.catalogue import catalogue_from_env, configure_catalogue
+from monet.artifacts import artifacts_from_env, configure_artifacts
+from monet.config import MONET_QUEUE_BACKEND, ConfigError, QueueConfig, ServerConfig
 from monet.core.tracing import configure_tracing
 from monet.orchestration import (
     build_chat_graph as _build_chat_graph,
@@ -41,49 +42,64 @@ from monet.server import configure_lazy_worker
 if TYPE_CHECKING:
     from langgraph.graph import StateGraph
 
+_log = logging.getLogger("monet.server")
 
-def _create_queue() -> TaskQueue:
-    """Create a task queue from the ``MONET_QUEUE_BACKEND`` env var.
 
-    Supported values:
+def _create_queue(cfg: QueueConfig) -> TaskQueue:
+    """Create a task queue from a validated :class:`QueueConfig`.
 
-    - ``memory`` (default): in-process queue, suitable for sidecar workers.
-    - ``redis``: Redis-backed queue (requires ``REDIS_URI``).
-    - ``sqlite``: SQLite-backed queue (uses ``MONET_QUEUE_DB``, default
-      ``.monet/queue.db``).
-    - ``upstash``: Upstash Redis queue (requires ``UPSTASH_REDIS_REST_URL``
-      and ``UPSTASH_REDIS_REST_TOKEN``).
+    ``cfg.validate_for_boot()`` must have been called first; this
+    function trusts that credentials for the chosen backend are present.
+    Still uses a final :class:`ConfigError` as a belt-and-suspenders
+    guard so a future backend added to :data:`QueueBackend` without a
+    branch here cannot silently fall through to in-memory.
     """
-    backend = os.getenv("MONET_QUEUE_BACKEND", "memory")
-    if backend == "redis":
+    if cfg.backend == "memory":
+        queue: TaskQueue = InMemoryTaskQueue()
+        return queue
+    if cfg.backend == "redis":
         from monet.queue.backends.redis import RedisTaskQueue
 
-        return RedisTaskQueue(os.environ["REDIS_URI"])
-    if backend == "sqlite":
+        assert cfg.redis_uri is not None  # validated by cfg.validate_for_boot()
+        return RedisTaskQueue(cfg.redis_uri)
+    if cfg.backend == "sqlite":
         from monet.queue.backends.sqlite import SQLiteTaskQueue
 
-        return SQLiteTaskQueue(os.getenv("MONET_QUEUE_DB", ".monet/queue.db"))
-    if backend == "upstash":
+        return SQLiteTaskQueue(str(cfg.sqlite_path))
+    if cfg.backend == "upstash":
         from monet.queue.backends.upstash import UpstashTaskQueue
 
         return UpstashTaskQueue()
-    return InMemoryTaskQueue()  # type: ignore[no-any-return]
+    raise ConfigError(
+        MONET_QUEUE_BACKEND,
+        cfg.backend,
+        "one of {memory, redis, sqlite, upstash}",
+    )
 
 
-# ── Infrastructure init (runs at import time) ───────────────────────
-configure_tracing()
-configure_catalogue(catalogue_from_env())
+# ── Server bootstrap (runs at import time) ─────────────────────────────
+_config = ServerConfig.load()
+_config.validate_for_boot()
 
-queue: TaskQueue = _create_queue()
+configure_tracing(_config.observability)
+
+if not _config.artifacts.distributed:
+    configure_artifacts(artifacts_from_env(default_root=_config.artifacts.root))
+
+queue: TaskQueue = _create_queue(_config.queue)
 configure_queue(queue)
 configure_lazy_worker(queue)
 
+_log.info("monet server booted: %s", _config.redacted_summary())
+
+
 # Aegra's factory classifier inspects parameter count: a 1-arg function
 # whose parameter isn't ServerRuntime is treated as a config-accepting
-# factory and called with a RunnableConfig dict.  The real graph builders
-# accept an optional ``hooks`` kwarg, which Aegra would misinterpret.
-# Wrap them as 0-arg functions so Aegra calls them once at load time
-# with no arguments — the default ``hooks=None`` is what we want here.
+# factory and called with a RunnableConfig dict. The real graph
+# builders accept an optional ``hooks`` kwarg, which Aegra would
+# misinterpret. Wrap them as 0-arg functions so Aegra calls them once
+# at load time with no arguments — the default ``hooks=None`` is what
+# we want here.
 
 
 def build_chat_graph() -> StateGraph:  # type: ignore[type-arg]

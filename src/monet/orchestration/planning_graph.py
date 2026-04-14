@@ -1,7 +1,7 @@
 """Planning graph — iterative work brief construction with HITL approval.
 
 The orchestrator is pointer-only: planning state carries a ``work_brief_pointer``
-(catalogue artifact) and a ``routing_skeleton`` (flat DAG of agent invocations).
+(artifact store pointer) and a ``routing_skeleton`` (flat DAG of agent invocations).
 The full work brief artifact is never read on the orchestration side — workers
 resolve it via the ``inject_plan_context`` hook at invocation time.
 
@@ -39,7 +39,7 @@ _tracer = trace.get_tracer("monet.orchestration.planning")
 
 
 async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str, Any]:
-    """Call planner/plan, store pointer + skeleton. Never read catalogue content."""
+    """Call planner/plan, store pointer + skeleton. Never read artifact content."""
     context_entries: list[dict[str, Any]] = []
     for entry in state.get("planning_context") or []:
         context_entries.append(
@@ -133,7 +133,7 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
 
     Passes both the work brief pointer and the routing skeleton to the
     interrupt payload so UIs can render plan structure without a
-    catalogue read.
+    artifact read.
     """
     pointer = state.get("work_brief_pointer")
     if not pointer:

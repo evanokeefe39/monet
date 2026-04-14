@@ -10,6 +10,8 @@ from pathlib import Path
 import click
 import httpx
 
+from monet.config import MONET_API_KEY, MONET_SERVER_URL
+
 _log = logging.getLogger("monet.cli.register")
 
 
@@ -22,13 +24,13 @@ _log = logging.getLogger("monet.cli.register")
 )
 @click.option(
     "--server-url",
-    envvar="MONET_SERVER_URL",
+    envvar=MONET_SERVER_URL,
     required=True,
     help="Orchestration server URL.",
 )
 @click.option(
     "--api-key",
-    envvar="MONET_API_KEY",
+    envvar=MONET_API_KEY,
     required=True,
     help="API key for server auth.",
 )
