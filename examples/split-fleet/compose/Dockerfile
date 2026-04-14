@@ -8,7 +8,9 @@ WORKDIR /app
 RUN addgroup --system app && adduser --system --ingroup app app
 
 # -----------------------------
-# Builder stage
+# Builder stage — install monet with its [examples] extra (aegra-cli,
+# LLM providers, reference agents). No example pyproject needed inside
+# the image; agents/ and graphs/ ship as plain modules under /app.
 # -----------------------------
 FROM base AS builder
 
@@ -19,13 +21,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build context = repo root. Install monet editable + split-fleet deps.
-COPY examples/split-fleet/pyproject.toml ./pyproject.toml
+# Build context = repo root. Install monet editable from its own pyproject.
+COPY pyproject.toml ./pyproject.toml
+COPY README.md ./README.md
 COPY src/ ./src/
 RUN uv venv /app/.venv \
     && . /app/.venv/bin/activate \
-    && uv pip install --no-cache -e . \
-    && uv pip install --no-cache aegra-cli
+    && uv pip install --no-cache -e ".[examples]"
 
 # -----------------------------
 # Runtime stage — single image drives both server and workers via CMD
