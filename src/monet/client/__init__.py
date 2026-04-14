@@ -1,15 +1,23 @@
 """High-level client for interacting with a monet LangGraph server.
 
-The primary interface is ``MonetClient``, which hides the three-graph
-topology and provides typed event streaming, HITL action methods, and
-run inspection.
+:class:`MonetClient` is graph-agnostic: it drives any graph declared in
+``monet.toml [entrypoints]``, streams typed core events, and exposes
+generic HITL resume/abort. Pipeline-specific composition (the default
+entry → planning → execution flow) lives in
+:mod:`monet.pipelines.default`.
 
-Usage::
+Typical library usage::
 
     from monet.client import MonetClient
+    from monet.pipelines.default import run as run_default
 
     client = MonetClient("http://localhost:2026")
-    async for event in client.run("AI trends in healthcare", auto_approve=True):
+    async for event in run_default(client, "topic", auto_approve=True):
+        print(event)
+
+For single-graph invocations::
+
+    async for event in client.run("my-graph", {"task": "hello", "run_id": "abc"}):
         print(event)
 """
 
@@ -19,36 +27,39 @@ import logging
 import secrets
 from typing import TYPE_CHECKING, Any
 
+from monet.client._errors import (
+    AlreadyResolved,
+    AmbiguousInterrupt,
+    GraphNotInvocable,
+    InterruptTagMismatch,
+    MonetClientError,
+    RunNotInterrupted,
+)
 from monet.client._events import (
     AgentProgress,
     ChatSummary,
-    ExecutionInterrupt,
+    Interrupt,
+    NodeUpdate,
     PendingDecision,
-    PlanApproved,
-    PlanInterrupt,
-    PlanReady,
-    ReflectionComplete,
     RunComplete,
     RunDetail,
     RunEvent,
     RunFailed,
+    RunStarted,
     RunSummary,
-    TriageComplete,
-    WaveComplete,
+    SignalEmitted,
 )
-from monet.client._run_state import _RunState, _RunStore
+from monet.client._run_state import _RunStore
 from monet.client._wire import (
     MONET_CHAT_NAME_KEY,
     MONET_GRAPH_KEY,
     MONET_RUN_ID_KEY,
     chat_input,
     create_thread,
-    entry_input,
-    execution_input,
     get_state_values,
     make_client,
-    planning_input,
     stream_run,
+    task_input,
 )
 
 if TYPE_CHECKING:
@@ -56,38 +67,37 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
-    from monet.types import ArtifactPointer
-
 _log = logging.getLogger("monet.client")
 
 __all__ = [
     "AgentProgress",
+    "AlreadyResolved",
+    "AmbiguousInterrupt",
     "ChatSummary",
-    "ExecutionInterrupt",
+    "GraphNotInvocable",
+    "Interrupt",
+    "InterruptTagMismatch",
     "MonetClient",
+    "MonetClientError",
+    "NodeUpdate",
     "PendingDecision",
-    "PlanApproved",
-    "PlanInterrupt",
-    "PlanReady",
-    "ReflectionComplete",
     "RunComplete",
     "RunDetail",
     "RunEvent",
     "RunFailed",
+    "RunNotInterrupted",
+    "RunStarted",
     "RunSummary",
-    "TriageComplete",
-    "WaveComplete",
+    "SignalEmitted",
     "make_client",
 ]
 
 
 def _build_agent_progress(run_id: str, data: dict[str, Any]) -> AgentProgress | None:
-    """Convert a custom-stream wire dict into an ``AgentProgress`` event.
+    """Convert a custom-stream wire dict into an :class:`AgentProgress`.
 
-    Extracted as a pure helper so the field-extraction contract is directly
-    unit-testable without a live langgraph client. Returns ``None`` when the
-    dict does not carry an ``agent`` field — the caller should skip it
-    rather than emit a malformed event.
+    Returns ``None`` when the dict does not carry an ``agent`` field —
+    callers should skip such payloads rather than emit a malformed event.
     """
     agent = data.get("agent", "")
     if not agent:
@@ -100,439 +110,323 @@ def _build_agent_progress(run_id: str, data: dict[str, Any]) -> AgentProgress | 
     )
 
 
+def _build_signal_emitted(run_id: str, data: dict[str, Any]) -> SignalEmitted | None:
+    """Convert a custom-stream wire dict into a :class:`SignalEmitted`.
+
+    Monet's ``emit_signal`` writer produces dicts with at least
+    ``{"signal_type": ..., "agent": ..., ...}``. Returns ``None`` when
+    the dict doesn't look like a signal payload.
+    """
+    signal_type = data.get("signal_type") or data.get("type")
+    agent = data.get("agent", "")
+    if not signal_type or not agent:
+        return None
+    _skip = {"signal_type", "type", "agent"}
+    payload = {k: v for k, v in data.items() if k not in _skip}
+    return SignalEmitted(
+        run_id=run_id,
+        agent_id=agent,
+        signal_type=str(signal_type),
+        payload=payload,
+    )
+
+
 class MonetClient:
-    """Client for a monet LangGraph server.
+    """Graph-agnostic client for a monet LangGraph server.
 
-    Provides three groups of operations:
+    Three groups of operations:
 
-    - **Run lifecycle** — start runs, stream progress, query history
-    - **HITL decisions** — approve/revise/reject plans, retry/abort execution
-    - **Results** — inspect completed runs and their artifacts
+    - **Run lifecycle** — :meth:`run` drives any declared graph and
+      yields core events; :meth:`list_runs` / :meth:`get_run` inspect
+      history.
+    - **HITL** — :meth:`resume` dispatches a resume payload to a
+      paused interrupt; :meth:`abort` terminates a run.
+    - **Chat** — :meth:`create_chat`, :meth:`send_message`, etc. drive
+      the chat graph resolved from ``monet.toml [graphs]``.
+
+    Pipeline-specific verbs (``approve_plan`` etc.) live on the
+    pipeline adapter modules (e.g. ``monet.pipelines.default``).
     """
 
     def __init__(
         self,
-        url: str = "http://localhost:2026",
+        url: str | None = None,
         *,
         graph_ids: dict[str, str] | None = None,
     ) -> None:
-        self._client: LangGraphClient = make_client(url)
-        self._store = _RunStore()
-        if graph_ids is not None:
-            self._graph_ids = graph_ids
-        else:
-            from monet._graph_config import DEFAULT_GRAPH_ROLES
+        from monet._graph_config import load_entrypoints, load_graph_roles
+        from monet.config import ClientConfig
 
-            self._graph_ids = DEFAULT_GRAPH_ROLES.copy()
+        resolved_url = url if url is not None else ClientConfig.load().server_url
+        self._client: LangGraphClient = make_client(resolved_url)
+        self._store = _RunStore()
+        self._entrypoints = load_entrypoints()
+        if graph_ids is not None:
+            self._graph_roles = dict(graph_ids)
+        else:
+            self._graph_roles = load_graph_roles()
+        self._chat_graph_id = self._graph_roles.get("chat", "chat")
 
     # ── Run lifecycle ───────────────────────────────────────────
 
     async def run(
         self,
-        topic: str,
+        graph_id: str,
+        input: dict[str, Any] | str | None = None,
         *,
         run_id: str | None = None,
-        auto_approve: bool = False,
     ) -> AsyncIterator[RunEvent]:
-        """Start a run and yield typed events as it progresses.
+        """Drive one graph and yield typed core events.
 
         Args:
-            topic: The user's request or topic.
+            graph_id: A graph declared in ``monet.toml [entrypoints]``
+                (by ``graph`` value). Raises :class:`GraphNotInvocable`
+                if not declared.
+            input: Initial state dict. If a string is passed, it is
+                wrapped by :func:`task_input`. If ``None``, an empty
+                dict is used (for graphs that take no input).
             run_id: Optional run identifier. Auto-generated if omitted.
-            auto_approve: When True, planning interrupts are approved
-                automatically. Execution interrupts always pause.
 
         Yields:
-            ``RunEvent`` instances in order as the run progresses.
-            When the run pauses for a HITL decision, the stream yields
-            a ``PlanInterrupt`` or ``ExecutionInterrupt`` and ends.
-            Use the HITL methods to continue.
+            :class:`RunStarted`, then :class:`NodeUpdate` /
+            :class:`AgentProgress` / :class:`SignalEmitted` chunks as
+            they arrive, then either :class:`Interrupt` (run paused) or
+            :class:`RunComplete` / :class:`RunFailed`.
         """
+        declared_graphs = {ep["graph"] for ep in self._entrypoints.values()}
+        if graph_id not in declared_graphs:
+            raise GraphNotInvocable(graph_id, sorted(declared_graphs))
+
         rid = run_id or secrets.token_hex(4)
-        rs = _RunState(run_id=rid)
-        self._store.put(rs)
+        if isinstance(input, str):
+            input = task_input(input, rid)
 
-        try:
-            # ── Entry / triage ──────────────────────────────────
-            rs.status = "triaging"
-            rs.phase = "entry"
-            rs.entry_thread = await self._create_tagged_thread(rid, "entry")
-
-            await self._drain(
-                rs.entry_thread, self._graph_ids["entry"], entry_input(topic, rid)
-            )
-            values, _ = await get_state_values(self._client, rs.entry_thread)
-
-            triage = values.get("triage") or {}
-            yield TriageComplete(
-                run_id=rid,
-                complexity=triage.get("complexity", "unknown"),
-                suggested_agents=triage.get("suggested_agents") or [],
-            )
-
-            if triage.get("complexity") == "simple":
-                rs.status = "complete"
-                yield RunComplete(run_id=rid)
-                return
-
-            # ── Planning ────────────────────────────────────────
-            rs.status = "planning"
-            rs.phase = "planning"
-            rs.planning_thread = await self._create_tagged_thread(rid, "planning")
-
-            await self._drain(
-                rs.planning_thread,
-                self._graph_ids["planning"],
-                planning_input(topic, rid),
-            )
-            values, nxt = await get_state_values(self._client, rs.planning_thread)
-
-            # Handle HITL approval interrupt
-            if "human_approval" in nxt:
-                if auto_approve:
-                    await self._drain(
-                        rs.planning_thread,
-                        self._graph_ids["planning"],
-                        command={"resume": {"approved": True}},
-                    )
-                    values, _ = await get_state_values(self._client, rs.planning_thread)
-                    yield PlanApproved(run_id=rid)
-                else:
-                    rs.status = "interrupted"
-                    skeleton = values.get("routing_skeleton") or {}
-                    yield PlanInterrupt(
-                        run_id=rid,
-                        goal=skeleton.get("goal", ""),
-                        nodes=skeleton.get("nodes") or [],
-                    )
-                    return
-
-            if not values.get("plan_approved"):
-                rs.status = "failed"
-                error = values.get("planner_error") or "plan not approved"
-                yield RunFailed(run_id=rid, error=error)
-                return
-
-            pointer = values.get("work_brief_pointer")
-            skeleton = values.get("routing_skeleton") or {}
-            if not pointer or not skeleton:
-                rs.status = "failed"
-                error = values.get("planner_error") or (
-                    "planner did not return work_brief_pointer/routing_skeleton"
-                )
-                yield RunFailed(run_id=rid, error=error)
-                return
-
-            yield PlanReady(
-                run_id=rid,
-                goal=skeleton.get("goal", ""),
-                nodes=skeleton.get("nodes") or [],
-            )
-
-            # ── Execution ───────────────────────────────────────
-            async for event in self._run_execution(rs, pointer, skeleton):
-                yield event
-
-        except Exception as exc:
-            _log.exception("Run %s failed with unhandled exception", rid)
-            rs.status = "failed"
-            yield RunFailed(run_id=rid, error=str(exc))
-
-    async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
-        """List recent runs with status.
-
-        Queries the server for threads tagged as monet entry threads,
-        then determines each run's current status from thread state.
-        """
-        threads = await self._client.threads.search(
-            metadata={MONET_GRAPH_KEY: "entry"},
-            limit=limit,
-            sort_by="created_at",
-            sort_order="desc",
+        thread = await create_thread(
+            self._client,
+            metadata={MONET_RUN_ID_KEY: rid, MONET_GRAPH_KEY: graph_id},
         )
-        summaries: list[RunSummary] = []
-        for t in threads:
-            meta = t.get("metadata") or {}
-            rid = meta.get(MONET_RUN_ID_KEY, "")
-            status = str(t.get("status", "unknown"))
-            phase = self._phase_from_status(rid, status)
-            created = str(t.get("created_at", ""))
-            summaries.append(
-                RunSummary(
-                    run_id=rid,
-                    status=status,
-                    phase=phase,
-                    created_at=created,
-                )
-            )
-        return summaries
-
-    async def get_run(self, run_id: str) -> RunDetail:
-        """Get full state of a run by inspecting all its threads."""
-        triage: dict[str, Any] = {}
-        routing_skeleton: dict[str, Any] = {}
-        work_brief_pointer: Any = None
-        wave_results: list[dict[str, Any]] = []
-        wave_reflections: list[dict[str, Any]] = []
-        status = "unknown"
-        phase = "entry"
-
-        for graph in ("entry", "planning", "execution"):
-            threads = await self._client.threads.search(
-                metadata={MONET_RUN_ID_KEY: run_id, MONET_GRAPH_KEY: graph},
-                limit=1,
-            )
-            if not threads:
-                continue
-            tid = str(threads[0]["thread_id"])
-            values, nxt = await get_state_values(self._client, tid)
-
-            if graph == "entry":
-                triage = values.get("triage") or {}
-            elif graph == "planning":
-                phase = "planning"
-                routing_skeleton = values.get("routing_skeleton") or {}
-                work_brief_pointer = values.get("work_brief_pointer")
-            elif graph == "execution":
-                phase = "execution"
-                wave_results = values.get("wave_results") or []
-                wave_reflections = values.get("wave_reflections") or []
-
-            if nxt:
-                status = "interrupted"
-            elif graph == "execution" and wave_results:
-                status = "complete"
-            else:
-                status = "running"
-
-        return RunDetail(
-            run_id=run_id,
-            status=status,
-            phase=phase,
-            triage=triage,
-            routing_skeleton=routing_skeleton,
-            work_brief_pointer=work_brief_pointer,
-            wave_results=wave_results,
-            wave_reflections=wave_reflections,
-        )
-
-    # ── HITL decisions ──────────────────────────────────────────
-
-    async def list_pending(self) -> list[PendingDecision]:
-        """List runs currently waiting for human input."""
-        threads = await self._client.threads.search(
-            status="interrupted",
-            metadata={MONET_RUN_ID_KEY: None},  # any monet thread
-        )
-        # Filter to threads that have our metadata key
-        decisions: list[PendingDecision] = []
-        seen_runs: set[str] = set()
-        for t in threads:
-            meta = t.get("metadata") or {}
-            rid = meta.get(MONET_RUN_ID_KEY)
-            graph = meta.get(MONET_GRAPH_KEY)
-            if not rid or rid in seen_runs:
-                continue
-            seen_runs.add(rid)
-
-            if graph == "planning":
-                decisions.append(
-                    PendingDecision(
-                        run_id=rid,
-                        decision_type="plan_approval",
-                        summary="Plan awaiting approval",
-                    )
-                )
-            elif graph == "execution":
-                decisions.append(
-                    PendingDecision(
-                        run_id=rid,
-                        decision_type="execution_review",
-                        summary="Execution paused — blocking signal or QA failure",
-                    )
-                )
-        return decisions
-
-    async def approve_plan(self, run_id: str) -> AsyncIterator[RunEvent]:
-        """Approve a pending plan and continue into execution.
-
-        Yields remaining run events (execution progress and completion).
-        """
-        thread = await self._find_thread(run_id, "planning")
-        await self._drain(
-            thread,
-            self._graph_ids["planning"],
-            command={"resume": {"approved": True}},
-        )
-        values, _ = await get_state_values(self._client, thread)
-        yield PlanApproved(run_id=run_id)
-
-        if not values.get("plan_approved"):
-            error = values.get("planner_error") or "plan not approved after resume"
-            yield RunFailed(run_id=run_id, error=error)
-            return
-
-        pointer = values.get("work_brief_pointer")
-        skeleton = values.get("routing_skeleton") or {}
-        if not pointer or not skeleton:
-            error = values.get("planner_error") or (
-                "planner did not return work_brief_pointer/routing_skeleton"
-            )
-            yield RunFailed(run_id=run_id, error=error)
-            return
-
-        yield PlanReady(
-            run_id=run_id,
-            goal=skeleton.get("goal", ""),
-            nodes=skeleton.get("nodes") or [],
-        )
-
-        rs = self._store.get(run_id) or _RunState(run_id=run_id)
-        rs.planning_thread = thread
-        self._store.put(rs)
-
-        async for event in self._run_execution(rs, pointer, skeleton):
-            yield event
-
-    async def revise_plan(self, run_id: str, feedback: str) -> AsyncIterator[RunEvent]:
-        """Send plan back for revision with feedback.
-
-        Yields events as the planner revises. May yield another
-        ``PlanInterrupt`` if the revised plan also needs approval.
-        """
-        thread = await self._find_thread(run_id, "planning")
-        await self._drain(
-            thread,
-            self._graph_ids["planning"],
-            command={"resume": {"approved": False, "feedback": feedback}},
-        )
-        values, nxt = await get_state_values(self._client, thread)
-
-        if "human_approval" in nxt:
-            skeleton = values.get("routing_skeleton") or {}
-            yield PlanInterrupt(
-                run_id=run_id,
-                goal=skeleton.get("goal", ""),
-                nodes=skeleton.get("nodes") or [],
-            )
-            return
-
-        if values.get("plan_approved"):
-            skeleton = values.get("routing_skeleton") or {}
-            yield PlanApproved(run_id=run_id)
-            yield PlanReady(
-                run_id=run_id,
-                goal=skeleton.get("goal", ""),
-                nodes=skeleton.get("nodes") or [],
-            )
-        else:
-            error = values.get("planner_error") or "plan rejected after revision"
-            yield RunFailed(run_id=run_id, error=error)
-
-    async def reject_plan(self, run_id: str) -> None:
-        """Reject a plan and terminate the run."""
-        thread = await self._find_thread(run_id, "planning")
-        await self._drain(
-            thread,
-            self._graph_ids["planning"],
-            command={"resume": {"approved": False, "feedback": None}},
-        )
-        rs = self._store.get(run_id)
-        if rs:
-            rs.status = "failed"
-
-    async def retry_wave(self, run_id: str) -> AsyncIterator[RunEvent]:
-        """Retry the current wave after an execution interrupt."""
-        thread = await self._find_thread(run_id, "execution")
-        async for event in self._stream_execution(run_id, thread, resume=True):
-            yield event
-
-    async def abort_run(self, run_id: str) -> None:
-        """Abort a run during an execution interrupt."""
-        thread = await self._find_thread(run_id, "execution")
-        await self._drain(
-            thread,
-            self._graph_ids["execution"],
-            command={"resume": {"action": "abort"}},
-        )
-        rs = self._store.get(run_id)
-        if rs:
-            rs.status = "failed"
-
-    # ── Single-graph entrypoint ─────────────────────────────────
-
-    async def run_single(
-        self,
-        graph_id: str,
-        topic: str,
-        *,
-        run_id: str | None = None,
-    ) -> AsyncIterator[RunEvent]:
-        """Drive a single graph directly with ``{task, run_id, trace_id}``.
-
-        Unlike :meth:`run`, this does not compose entry → planning →
-        execution. The graph is expected to accept the same keys that
-        ``entry_input`` produces and return a final state. Yields
-        ``TriageComplete`` if ``values["triage"]`` is present, plus
-        ``RunComplete`` / ``RunFailed`` based on the stream outcome.
-
-        This is the dispatch path for ``[entrypoints.<name>]`` configs
-        with ``kind = "single"``.
-        """
-        rid = run_id or secrets.token_hex(4)
-        thread = await self._create_tagged_thread(rid, graph_id)
+        self._store.put_thread(rid, graph_id, thread)
+        yield RunStarted(run_id=rid, graph_id=graph_id, thread_id=thread)
 
         try:
             async for mode, data in stream_run(
-                self._client,
-                thread,
-                graph_id,
-                input=entry_input(topic, rid),
+                self._client, thread, graph_id, input=input or {}
             ):
                 if mode == "error":
                     yield RunFailed(run_id=rid, error=str(data))
                     return
                 if mode == "custom" and isinstance(data, dict):
+                    signal = _build_signal_emitted(rid, data)
+                    if signal is not None:
+                        yield signal
+                        continue
                     progress = _build_agent_progress(rid, data)
                     if progress is not None:
                         yield progress
+                        continue
+                elif mode == "updates" and isinstance(data, dict):
+                    for node_name, update in data.items():
+                        if isinstance(update, dict):
+                            yield NodeUpdate(run_id=rid, node=node_name, update=update)
 
-            values, _ = await get_state_values(self._client, thread)
-            triage = values.get("triage") or {}
-            if triage:
-                yield TriageComplete(
+            values, nxt = await get_state_values(self._client, thread)
+            if nxt:
+                tag = nxt[0]
+                yield Interrupt(
                     run_id=rid,
-                    complexity=triage.get("complexity", "unknown"),
-                    suggested_agents=triage.get("suggested_agents") or [],
+                    tag=tag,
+                    values=values.get("__interrupt__") or {},
+                    next_nodes=list(nxt),
                 )
-            yield RunComplete(run_id=rid)
+                return
+            yield RunComplete(run_id=rid, final_values=values)
         except Exception as exc:
-            _log.exception("Single-graph run %s failed", rid)
+            _log.exception("run %s on %s failed", rid, graph_id)
             yield RunFailed(run_id=rid, error=str(exc))
 
-    # ── Results ─────────────────────────────────────────────────
+    # ── HITL ────────────────────────────────────────────────────
 
-    async def get_results(self, run_id: str) -> RunDetail:
-        """Get wave results and reflections from a run."""
-        return await self.get_run(run_id)
+    async def resume(
+        self,
+        run_id: str,
+        tag: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Resume a paused interrupt.
 
-    async def get_artifacts(self, run_id: str) -> list[dict[str, Any]]:
-        """Get all artifact pointers from a run's wave results."""
-        detail = await self.get_run(run_id)
-        artifacts: list[dict[str, Any]] = []
-        for wr in detail.wave_results:
-            for ptr in wr.get("artifacts") or []:
-                artifacts.append(ptr)
-        return artifacts
+        Validates that the run is actually paused at *tag* before
+        dispatching. Raises :class:`RunNotInterrupted`,
+        :class:`AlreadyResolved`, :class:`AmbiguousInterrupt`, or
+        :class:`InterruptTagMismatch` on mismatch.
+
+        Args:
+            run_id: The run to resume.
+            tag: The interrupt node name (must match ``Interrupt.tag``).
+            payload: Dict forwarded to the graph as ``Command(resume=payload)``.
+        """
+        thread, graph_id = await self._find_interrupted_thread(run_id)
+        _, nxt = await get_state_values(self._client, thread)
+        if not nxt:
+            raise AlreadyResolved(run_id)
+        if len(nxt) > 1:
+            raise AmbiguousInterrupt(run_id, list(nxt))
+        if nxt[0] != tag:
+            raise InterruptTagMismatch(run_id, expected=nxt[0], got=tag)
+
+        _log.info(
+            "resume",
+            extra={"run_id": run_id, "tag": tag, "payload_keys": list(payload)},
+        )
+        async for mode, data in stream_run(
+            self._client,
+            thread,
+            graph_id,
+            command={"resume": payload},
+        ):
+            if mode == "error":
+                raise RuntimeError(f"server error: {data}")
+
+    async def abort(self, run_id: str) -> None:
+        """Abort a paused run — resumes with a canonical abort payload.
+
+        Finds the interrupted thread and dispatches
+        ``{"resume": {"action": "abort"}}``. Graphs that don't consume
+        that shape will simply continue past the interrupt.
+        """
+        thread, graph_id = await self._find_interrupted_thread(run_id)
+        async for mode, data in stream_run(
+            self._client,
+            thread,
+            graph_id,
+            command={"resume": {"action": "abort"}},
+        ):
+            if mode == "error":
+                raise RuntimeError(f"server error: {data}")
+
+    # ── Queries ─────────────────────────────────────────────────
+
+    async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
+        """List recent runs with status and completed stages.
+
+        Groups threads by ``monet_run_id`` metadata. The first-seen
+        graph_id per run (in creation order, newest first) is treated
+        as the run's head for timing purposes.
+        """
+        threads = await self._client.threads.search(
+            metadata={MONET_RUN_ID_KEY: None},
+            limit=limit * 4,  # overscan; dedupe by run_id below
+            sort_by="created_at",
+            sort_order="desc",
+        )
+        per_run: dict[str, list[dict[str, Any]]] = {}
+        for raw in threads:
+            t: dict[str, Any] = dict(raw)  # type: ignore[call-overload]
+            meta = t.get("metadata") or {}
+            rid = meta.get(MONET_RUN_ID_KEY)
+            if not isinstance(rid, str):
+                continue
+            per_run.setdefault(rid, []).append(t)
+
+        summaries: list[RunSummary] = []
+        for rid, ts in per_run.items():
+            ts.sort(key=lambda t: str(t.get("created_at", "")))
+            head = ts[-1]  # newest
+            stages = [
+                str((t.get("metadata") or {}).get(MONET_GRAPH_KEY, ""))
+                for t in ts
+                if (t.get("metadata") or {}).get(MONET_GRAPH_KEY)
+            ]
+            summaries.append(
+                RunSummary(
+                    run_id=rid,
+                    status=str(head.get("status", "unknown")),
+                    completed_stages=stages,
+                    created_at=str(ts[0].get("created_at", "")),
+                )
+            )
+            if len(summaries) >= limit:
+                break
+        return summaries
+
+    async def get_run(self, run_id: str) -> RunDetail:
+        """Merge all threads for *run_id* into a generic :class:`RunDetail`."""
+        threads = await self._client.threads.search(
+            metadata={MONET_RUN_ID_KEY: run_id},
+            limit=20,
+        )
+        # Order threads by creation — earliest first — so later-stage
+        # keys win on collision.
+        threads.sort(key=lambda t: str(t.get("created_at", "")))
+
+        merged_values: dict[str, Any] = {}
+        completed: list[str] = []
+        status = "unknown"
+        pending: Interrupt | None = None
+
+        for t in threads:
+            tid = str(t.get("thread_id", ""))
+            if not tid:
+                continue
+            meta = t.get("metadata") or {}
+            graph = str(meta.get(MONET_GRAPH_KEY, ""))
+            if graph:
+                completed.append(graph)
+
+            values, nxt = await get_state_values(self._client, tid)
+            merged_values.update(values)
+            status = str(t.get("status", status))
+            if nxt:
+                status = "interrupted"
+                pending = Interrupt(
+                    run_id=run_id,
+                    tag=nxt[0],
+                    values=values.get("__interrupt__") or {},
+                    next_nodes=list(nxt),
+                )
+        return RunDetail(
+            run_id=run_id,
+            status=status,
+            completed_stages=completed,
+            values=merged_values,
+            pending_interrupt=pending,
+        )
+
+    async def list_pending(self) -> list[PendingDecision]:
+        """List runs currently waiting for human input."""
+        threads = await self._client.threads.search(
+            status="interrupted",
+            metadata={MONET_RUN_ID_KEY: None},
+        )
+        decisions: list[PendingDecision] = []
+        seen: set[str] = set()
+        for t in threads:
+            meta = t.get("metadata") or {}
+            rid = meta.get(MONET_RUN_ID_KEY)
+            if not isinstance(rid, str) or rid in seen:
+                continue
+            seen.add(rid)
+            tid = str(t.get("thread_id", ""))
+            _, nxt = await get_state_values(self._client, tid)
+            tag = nxt[0] if nxt else ""
+            decisions.append(PendingDecision(run_id=rid, decision_type=tag, summary=""))
+        return decisions
+
+    async def list_graphs(self) -> list[str]:
+        """Return graph IDs available on the connected server."""
+        assistants = await self._client.assistants.search(limit=100)
+        graph_ids: list[str] = []
+        seen: set[str] = set()
+        for a in assistants:
+            gid = a.get("graph_id", "")
+            if gid and gid not in seen:
+                seen.add(gid)
+                graph_ids.append(gid)
+        return sorted(graph_ids)
 
     # ── Chat ────────────────────────────────────────────────────
 
     async def create_chat(self, *, name: str | None = None) -> str:
-        """Create a new chat thread and return its thread_id.
-
-        Args:
-            name: Optional human-readable name for the session.
-        """
+        """Create a new chat thread and return its thread_id."""
         metadata: dict[str, Any] = {MONET_GRAPH_KEY: "chat"}
         if name:
             metadata[MONET_CHAT_NAME_KEY] = name
@@ -551,16 +445,13 @@ class MonetClient:
             meta = t.get("metadata") or {}
             tid = str(t.get("thread_id", ""))
             name = str(meta.get(MONET_CHAT_NAME_KEY, ""))
-
-            # Count messages from thread state if available.
             msg_count = 0
             try:
                 values, _ = await get_state_values(self._client, tid)
                 messages = values.get("messages") or []
                 msg_count = len(messages)
             except Exception:
-                pass  # Thread may not have state yet.
-
+                pass
             summaries.append(
                 ChatSummary(
                     thread_id=tid,
@@ -573,21 +464,15 @@ class MonetClient:
         return summaries
 
     async def send_message(self, thread_id: str, message: str) -> AsyncIterator[str]:
-        """Send a user message to a chat thread and yield response tokens.
-
-        Streams the chat graph response, yielding content strings as
-        they arrive. The full response is checkpointed in the thread.
-        """
-        input_data = chat_input(message)
+        """Send a user message to a chat thread and yield response tokens."""
         async for mode, data in stream_run(
             self._client,
             thread_id,
-            self._graph_ids["chat"],
-            input=input_data,
+            self._chat_graph_id,
+            input=chat_input(message),
         ):
             if mode == "error":
                 raise RuntimeError(f"server error: {data}")
-            # Extract assistant content from updates.
             if mode == "updates" and isinstance(data, dict):
                 messages = data.get("messages") or data.get("respond", {}).get(
                     "messages", []
@@ -600,13 +485,16 @@ class MonetClient:
                                 yield content
 
     async def send_context(self, thread_id: str, content: str) -> None:
-        """Append a context message to a chat thread.
-
-        Used to inject run summaries or attached results into the
-        conversation history.
-        """
+        """Append a system-context message to a chat thread."""
         input_data = {"messages": [{"role": "system", "content": content}]}
-        await self._drain(thread_id, self._graph_ids["chat"], input=input_data)
+        async for mode, data in stream_run(
+            self._client,
+            thread_id,
+            self._chat_graph_id,
+            input=input_data,
+        ):
+            if mode == "error":
+                raise RuntimeError(f"server error: {data}")
 
     async def get_chat_history(self, thread_id: str) -> list[dict[str, Any]]:
         """Fetch the message history from a chat thread."""
@@ -620,10 +508,7 @@ class MonetClient:
         )
 
     async def get_most_recent_chat(self) -> str | None:
-        """Return the thread_id of the most recently active chat.
-
-        Returns ``None`` if no chat threads exist.
-        """
+        """Return the thread_id of the most recently active chat."""
         threads = await self._client.threads.search(
             metadata={MONET_GRAPH_KEY: "chat"},
             limit=1,
@@ -634,213 +519,27 @@ class MonetClient:
             return None
         return str(threads[0]["thread_id"])
 
-    # ── Graph discovery ──────────────────────────────────────────
-
-    async def list_graphs(self) -> list[str]:
-        """Return graph IDs available on the connected server.
-
-        Uses the LangGraph assistants API to discover registered graphs.
-        """
-        assistants = await self._client.assistants.search(limit=100)
-        graph_ids: list[str] = []
-        seen: set[str] = set()
-        for a in assistants:
-            gid = a.get("graph_id", "")
-            if gid and gid not in seen:
-                seen.add(gid)
-                graph_ids.append(gid)
-        return sorted(graph_ids)
-
     # ── Private helpers ─────────────────────────────────────────
 
-    async def _create_tagged_thread(self, run_id: str, graph: str) -> str:
-        """Create a thread tagged with monet run_id and graph name."""
-        return await create_thread(
-            self._client,
-            metadata={MONET_RUN_ID_KEY: run_id, MONET_GRAPH_KEY: graph},
-        )
+    async def _find_interrupted_thread(self, run_id: str) -> tuple[str, str]:
+        """Return ``(thread_id, graph_id)`` for the currently paused thread."""
+        cached = self._store.threads_for(run_id)
+        if cached:
+            for graph_id, thread_id in cached.items():
+                _, nxt = await get_state_values(self._client, thread_id)
+                if nxt:
+                    return thread_id, graph_id
 
-    async def _drain(
-        self,
-        thread_id: str,
-        graph_id: str,
-        input: dict[str, Any] | None = None,
-        *,
-        command: dict[str, Any] | None = None,
-    ) -> None:
-        """Stream a graph run to completion, discarding events."""
-        async for mode, data in stream_run(
-            self._client,
-            thread_id,
-            graph_id,
-            input=input,
-            command=command,
-        ):
-            if mode == "error":
-                raise RuntimeError(f"server error: {data}")
-
-    async def _find_thread(self, run_id: str, graph: str) -> str:
-        """Find the thread ID for a specific graph phase of a run."""
-        # Check local cache first
-        rs = self._store.get(run_id)
-        if rs:
-            tid: str | None = getattr(rs, f"{graph}_thread", None)
-            if tid:
-                return tid
-
-        # Search server
         threads = await self._client.threads.search(
-            metadata={MONET_RUN_ID_KEY: run_id, MONET_GRAPH_KEY: graph},
-            limit=1,
+            metadata={MONET_RUN_ID_KEY: run_id},
+            status="interrupted",
+            limit=5,
         )
         if not threads:
-            raise ValueError(f"no {graph} thread found for run {run_id!r}")
-        return str(threads[0]["thread_id"])
-
-    async def _run_execution(
-        self,
-        rs: _RunState,
-        pointer: ArtifactPointer,
-        skeleton: dict[str, Any],
-    ) -> AsyncIterator[RunEvent]:
-        """Create an execution thread and stream it, yielding events."""
-        rs.status = "executing"
-        rs.phase = "execution"
-        rs.execution_thread = await self._create_tagged_thread(rs.run_id, "execution")
-        async for event in self._stream_execution(
-            rs.run_id,
-            rs.execution_thread,
-            pointer=pointer,
-            skeleton=skeleton,
-        ):
-            yield event
-
-    async def _stream_execution(
-        self,
-        run_id: str,
-        thread_id: str,
-        *,
-        pointer: ArtifactPointer | None = None,
-        skeleton: dict[str, Any] | None = None,
-        resume: bool = False,
-    ) -> AsyncIterator[RunEvent]:
-        """Stream an execution graph run and yield typed events."""
-        if resume:
-            input_data: dict[str, Any] | None = None
-            command = {"resume": {"action": None}}
-        else:
-            if pointer is None or not skeleton:
-                yield RunFailed(
-                    run_id=run_id,
-                    error=(
-                        "execution requires work_brief_pointer and routing_skeleton; "
-                        "planner produced neither"
-                    ),
-                )
-                return
-            input_data = execution_input(pointer, skeleton, run_id)
-            command = None
-
-        # Collect streaming events
-        async for mode, data in stream_run(
-            self._client,
-            thread_id,
-            self._graph_ids["execution"],
-            input=input_data,
-            command=command,
-        ):
-            if mode == "error":
-                yield RunFailed(run_id=run_id, error=str(data))
-                return
-            if mode == "custom" and isinstance(data, dict):
-                progress = _build_agent_progress(run_id, data)
-                if progress is not None:
-                    yield progress
-
-        # Post-stream: inspect final state.
-        values, nxt = await get_state_values(self._client, thread_id)
-        wave_results = values.get("wave_results") or []
-        wave_reflections = values.get("wave_reflections") or []
-        # Prefer the skeleton from state on resume (input `skeleton` is None
-        # there); fall back to the caller-supplied one otherwise.
-        skeleton_for_waves = values.get("routing_skeleton") or skeleton or {}
-
-        # Group wave_results into dispatch batches. The flat-DAG executor
-        # emits wave_results strictly in batch order (initialise -> dispatch
-        # -> agent_node xN -> collect_batch -> dispatch -> ...). Each new
-        # batch starts after the prior batch's completed nodes are observed.
-        if wave_results:
-            completed_set: set[str] = set()
-            batch: list[dict[str, Any]] = []
-            wave_index = 0
-            for wr in wave_results:
-                deps = {
-                    d
-                    for node in (skeleton_for_waves.get("nodes") or [])
-                    if node.get("id") == wr.get("node_id")
-                    for d in (node.get("depends_on") or [])
-                }
-                if batch and deps and not deps.issubset(completed_set):
-                    # This result's deps weren't in the completed set when
-                    # the prior batch flushed → it belongs to a later wave.
-                    yield WaveComplete(
-                        run_id=run_id,
-                        wave_index=wave_index,
-                        node_ids=[r.get("node_id", "") for r in batch],
-                        results=batch,
-                    )
-                    for r in batch:
-                        if r.get("success"):
-                            completed_set.add(r.get("node_id", ""))
-                    batch = []
-                    wave_index += 1
-                batch.append(wr)
-            if batch:
-                yield WaveComplete(
-                    run_id=run_id,
-                    wave_index=wave_index,
-                    node_ids=[r.get("node_id", "") for r in batch],
-                    results=batch,
-                )
-
-        for ref in wave_reflections:
-            yield ReflectionComplete(
-                run_id=run_id,
-                verdict=ref.get("verdict", ""),
-                notes=ref.get("notes", ""),
-            )
-
-        # Check for execution interrupt
-        if nxt:
-            rs = self._store.get(run_id)
-            if rs:
-                rs.status = "interrupted"
-            skeleton_state = values.get("routing_skeleton") or {}
-            all_node_ids = [
-                n.get("id", "") for n in (skeleton_state.get("nodes") or [])
-            ]
-            completed = set(values.get("completed_node_ids") or [])
-            pending = [nid for nid in all_node_ids if nid and nid not in completed]
-            yield ExecutionInterrupt(
-                run_id=run_id,
-                reason=values.get("abort_reason") or "execution paused",
-                pending_node_ids=pending,
-            )
-            return
-
-        # Complete
-        rs = self._store.get(run_id)
-        if rs:
-            rs.status = "complete"
-        yield RunComplete(
-            run_id=run_id,
-            wave_results=wave_results,
-            wave_reflections=wave_reflections,
-        )
-
-    def _phase_from_status(self, run_id: str, thread_status: str) -> str:
-        """Determine the current phase from cached state or default."""
-        rs = self._store.get(run_id)
-        if rs:
-            return rs.phase
-        return "entry"
+            raise RunNotInterrupted(run_id)
+        t = threads[0]
+        tid = str(t.get("thread_id", ""))
+        graph_id = str((t.get("metadata") or {}).get(MONET_GRAPH_KEY, ""))
+        if not tid:
+            raise RunNotInterrupted(run_id)
+        return tid, graph_id

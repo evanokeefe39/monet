@@ -16,7 +16,7 @@ import json
 import shlex
 from typing import TYPE_CHECKING, Any
 
-from .core.catalogue import get_catalogue
+from .core.artifacts import get_artifacts
 from .core.stubs import emit_progress, emit_signal
 from .exceptions import SemanticError
 from .signals import SignalType
@@ -42,7 +42,7 @@ class AgentStream:
 
     Construct via a named transport (``cli``/``sse``/``http``), register
     handlers with ``.on()``, then ``await .run()``. Default handlers wire
-    progress → ``emit_progress``, artifact → catalogue, signal →
+    progress → ``emit_progress``, artifact → artifact store, signal →
     ``emit_signal``, error → ``SemanticError``, result → return value.
     """
 
@@ -263,7 +263,7 @@ class AgentStream:
             content_bytes = (
                 content.encode() if isinstance(content, str) else bytes(content)
             )
-            await get_catalogue().write(
+            await get_artifacts().write(
                 content=content_bytes,
                 content_type=event.get("content_type", "application/octet-stream"),
                 summary=event.get("summary", ""),

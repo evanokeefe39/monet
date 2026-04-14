@@ -39,7 +39,7 @@ For programmatic server setup (e.g. in tests or custom entrypoints), use `bootst
 from monet.server import bootstrap
 
 worker_task = await bootstrap(
-    catalogue_root="/data/catalogue",
+    artifacts_root="/data/artifacts",
     enable_tracing=True,
     queue=my_queue,
 )
@@ -48,7 +48,7 @@ worker_task = await bootstrap(
 ```python
 async def bootstrap(
     *,
-    catalogue_root: str | Path | None = None,
+    artifacts_root: str | Path | None = None,
     enable_tracing: bool = True,
     agents: list[AgentCapability] | None = None,
     queue: TaskQueue | None = None,
@@ -59,7 +59,7 @@ async def bootstrap(
 Initialization order:
 
 1. **Tracing** -- configure OpenTelemetry (if `enable_tracing=True`)
-2. **Catalogue** -- resolve root from parameter, `MONET_CATALOGUE_DIR` env, or `.catalogue` default
+2. **Artifact Store** -- resolve root from parameter, `MONET_ARTIFACTS_DIR` env, or `.artifacts` default
 3. **Manifest** -- declare additional agent capabilities (if `agents` provided)
 4. **Queue** -- register task queue (defaults to `InMemoryTaskQueue`)
 5. **Worker** -- start background worker task, or defer to first enqueue if `lazy_worker=True`

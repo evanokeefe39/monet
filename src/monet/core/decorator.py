@@ -27,7 +27,7 @@ from monet.types import (
     SignalType,
 )
 
-from .catalogue import _artifact_collector, _artifact_hashes, get_catalogue
+from .artifacts import _artifact_collector, _artifact_hashes, get_artifacts
 from .context import _agent_context
 from .hooks import run_after_agent_hooks, run_before_agent_hooks
 from .manifest import default_manifest
@@ -38,7 +38,7 @@ from .tracing import get_tracer
 # Default content limit for automatic offload (bytes).
 #
 # Return values whose string form exceeds this length are written to
-# the catalogue as an artifact and replaced inline with a short summary.
+# the artifact store and replaced inline with a short summary.
 DEFAULT_CONTENT_LIMIT = 4000
 
 #: error_type metadata value emitted by the poka-yoke guard when an
@@ -93,8 +93,8 @@ async def _wrap_result(
     """Assemble a successful AgentResult from a function's return value.
 
     Inline output is ``str | dict | None``. If a string return exceeds
-    ``content_limit`` and a catalogue backend is configured, the full
-    content is offloaded to the catalogue (the pointer lands in
+    ``content_limit`` and an artifact backend is configured, the full
+    content is offloaded to the artifact store (the pointer lands in
     ``artifacts``) and ``output`` becomes a short inline summary.
 
     Poka-yoke guard: when ``allow_empty`` is ``False`` (the default),
@@ -115,7 +115,7 @@ async def _wrap_result(
         output_str = str(return_value)
         output = output_str
         if len(output_str) > content_limit:
-            from .catalogue import _catalogue_backend
+            from .artifacts import _artifact_backend
 
             encoded = output_str.encode()
             already_written = hashlib.sha256(encoded).hexdigest() in written_hashes
@@ -124,10 +124,10 @@ async def _wrap_result(
                 # the auto-offload, but still inline-summarise so consumers
                 # see a compact output field matching the explicit artifact.
                 output = output_str[:200]
-            elif _catalogue_backend is not None:
+            elif _artifact_backend is not None:
                 try:
                     # write() appends to _artifact_collector (same list as `artifacts`)
-                    await get_catalogue().write(
+                    await get_artifacts().write(
                         content=output_str.encode(),
                         content_type="text/plain",
                         summary=output_str[:200],

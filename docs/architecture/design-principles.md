@@ -4,17 +4,17 @@ monet's architecture draws from two sources: Mario Zechner's pi-agent design phi
 
 ## From pi-agent
 
-**Build only what you need.** Every feature has a carrying cost in context, complexity, and maintenance. The SDK is a small package with no mandatory dependency on LangGraph or any orchestration framework. The catalogue wraps fsspec and SQLAlchemy rather than adopting a heavier platform. Every abstraction justifies itself against a concrete use case.
+**Build only what you need.** Every feature has a carrying cost in context, complexity, and maintenance. The SDK is a small package with no mandatory dependency on LangGraph or any orchestration framework. The artifact store wraps fsspec and SQLAlchemy rather than adopting a heavier platform. Every abstraction justifies itself against a concrete use case.
 
 **Full observability is non-negotiable.** You must see exactly what goes into the model's context, what came out, and what tools were called. OTel spans fire at every agent invocation. Agent sessions are inspectable. Artifacts carry full provenance.
 
 **Minimal stable interfaces.** The agent interface is two endpoints, one input envelope, two output envelopes. The node wrapper sees only `AgentResult`. The orchestrator sees only the output envelope. These interfaces are designed to not change.
 
-**Context engineering is the real work.** Content limits prevent context bloat in graph state. Summaries and pointers keep the orchestrator light. Agents fetch full artifacts from the catalogue only when needed.
+**Context engineering is the real work.** Content limits prevent context bloat in graph state. Summaries and pointers keep the orchestrator light. Agents fetch full artifacts from the artifact store only when needed.
 
-**Composability through layering.** Six layers, each ignorant of the others' internals. The SDK has no LangGraph dependency. The orchestrator has no knowledge of agent runtimes. The catalogue has no knowledge of agents or workflows.
+**Composability through layering.** Six layers, each ignorant of the others' internals. The SDK has no LangGraph dependency. The orchestrator has no knowledge of agent runtimes. The artifact store has no knowledge of agents or workflows.
 
-**Sessions are first-class serialisable artifacts.** LangGraph state is persisted via the checkpointer. Artifacts are stored in the catalogue with full provenance. Execution history is reconstructable from these stores.
+**Sessions are first-class serialisable artifacts.** LangGraph state is persisted via the checkpointer. Artifacts are stored in the artifact store with full provenance. Execution history is reconstructable from these stores.
 
 ## From Toyota Way
 

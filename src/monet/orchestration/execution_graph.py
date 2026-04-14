@@ -64,7 +64,7 @@ class NodeItem(TypedDict):
 async def initialise_execution(
     state: ExecutionState, config: RunnableConfig
 ) -> dict[str, Any]:
-    """Validate state, attach trace context. No catalogue read."""
+    """Validate state, attach trace context. No artifact read."""
     skeleton_raw = state.get("routing_skeleton")
     if not skeleton_raw:
         return {"abort_reason": "No routing_skeleton in execution state."}

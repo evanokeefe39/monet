@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from monet import EscalationRequired, NeedsHumanReview, SemanticError, agent
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.manifest import default_manifest
 from monet.core.registry import (
     default_registry,  # internal: needed for registry_scope test fixture
@@ -245,13 +245,13 @@ async def test_concurrent_context_isolation() -> None:
 
 
 @pytest.fixture
-def _catalogue():  # type: ignore[no-untyped-def]
-    configure_catalogue(InMemoryCatalogueClient())
+def _artifacts():  # type: ignore[no-untyped-def]
+    configure_artifacts(InMemoryArtifactClient())
     yield
-    configure_catalogue(None)
+    configure_artifacts(None)
 
 
-async def test_auto_offload_naive_agent(_catalogue: None) -> None:
+async def test_auto_offload_naive_agent(_artifacts: None) -> None:
     """Agent returns >limit bytes, writes nothing — auto-offload kicks in."""
     big = "x" * 5000
 
@@ -264,15 +264,15 @@ async def test_auto_offload_naive_agent(_catalogue: None) -> None:
     assert result.output == big[:200]
 
 
-async def test_double_write_dedupes(_catalogue: None) -> None:
+async def test_double_write_dedupes(_artifacts: None) -> None:
     """Agent writes bytes AND returns the same bytes — one artifact, not two."""
     big = "y" * 5000
 
     @agent(agent_id="test-offload-dedupe")
     async def dedupe_agent(task: str) -> str:
-        from monet import get_catalogue
+        from monet import get_artifacts
 
-        await get_catalogue().write(
+        await get_artifacts().write(
             content=big.encode(),
             content_type="text/markdown",
             summary=big[:200],
@@ -286,7 +286,7 @@ async def test_double_write_dedupes(_catalogue: None) -> None:
     assert result.output == big[:200]
 
 
-async def test_side_artifact_still_offloads(_catalogue: None) -> None:
+async def test_side_artifact_still_offloads(_artifacts: None) -> None:
     """Agent writes a *different* big string as a side artifact while
     returning its own big string — both must land as artifacts."""
     side = "a" * 5000
@@ -294,9 +294,9 @@ async def test_side_artifact_still_offloads(_catalogue: None) -> None:
 
     @agent(agent_id="test-offload-side")
     async def side_agent(task: str) -> str:
-        from monet import get_catalogue
+        from monet import get_artifacts
 
-        await get_catalogue().write(
+        await get_artifacts().write(
             content=side.encode(),
             content_type="text/markdown",
             summary="side outline",
@@ -310,7 +310,7 @@ async def test_side_artifact_still_offloads(_catalogue: None) -> None:
     assert result.output == returned[:200]
 
 
-async def test_empty_string_no_artifacts_is_defect(_catalogue: None) -> None:
+async def test_empty_string_no_artifacts_is_defect(_artifacts: None) -> None:
     """Poka-yoke: empty string return + zero artifacts is a defect signal,
     not a silent success. This is the regression guard for the BlockingError
     case where reference agents produced empty AgentResults for three
@@ -330,7 +330,7 @@ async def test_empty_string_no_artifacts_is_defect(_catalogue: None) -> None:
     )
 
 
-async def test_none_return_no_artifacts_is_defect(_catalogue: None) -> None:
+async def test_none_return_no_artifacts_is_defect(_artifacts: None) -> None:
     """None return with no artifacts is the same defect class as empty
     string — agent produced nothing at all."""
 
@@ -346,7 +346,7 @@ async def test_none_return_no_artifacts_is_defect(_catalogue: None) -> None:
     )
 
 
-async def test_allow_empty_opt_out(_catalogue: None) -> None:
+async def test_allow_empty_opt_out(_artifacts: None) -> None:
     """Agents that legitimately return nothing (e.g. signal-only ack
     handlers) can opt out of the empty-result guard."""
 
@@ -363,7 +363,7 @@ async def test_allow_empty_opt_out(_catalogue: None) -> None:
     )
 
 
-async def test_dict_return_exempt_from_empty_guard(_catalogue: None) -> None:
+async def test_dict_return_exempt_from_empty_guard(_artifacts: None) -> None:
     """Dict returns are structured output and exempt from the guard even
     when small."""
 
@@ -376,16 +376,16 @@ async def test_dict_return_exempt_from_empty_guard(_catalogue: None) -> None:
     assert result.output == {"verdict": "pass"}
 
 
-async def test_empty_string_with_artifact_is_success(_catalogue: None) -> None:
+async def test_empty_string_with_artifact_is_success(_artifacts: None) -> None:
     """A short/empty return string is fine as long as an artifact was
     written — the agent produced something, the inline output just
     wasn't the primary vehicle."""
 
     @agent(agent_id="test-empty-string-with-artifact")
     async def stringy_agent(task: str) -> str:
-        from monet import get_catalogue
+        from monet import get_artifacts
 
-        await get_catalogue().write(
+        await get_artifacts().write(
             content=b"real content",
             content_type="text/plain",
             summary="s",
@@ -401,14 +401,14 @@ async def test_empty_string_with_artifact_is_success(_catalogue: None) -> None:
     assert len(result.artifacts) == 1
 
 
-async def test_short_return_with_explicit_write(_catalogue: None) -> None:
+async def test_short_return_with_explicit_write(_artifacts: None) -> None:
     """Short return + explicit write — 1 artifact, output unchanged."""
 
     @agent(agent_id="test-offload-short")
     async def short_agent(task: str) -> str:
-        from monet import get_catalogue
+        from monet import get_artifacts
 
-        await get_catalogue().write(
+        await get_artifacts().write(
             content=b"some artifact bytes",
             content_type="text/plain",
             summary="s",

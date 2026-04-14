@@ -86,14 +86,14 @@ Unexpected exceptions are caught and wrapped as `SemanticError(type="unexpected_
 
 ## Writing artifacts
 
-For large outputs, write to the catalogue explicitly:
+For large outputs, write to the artifact store explicitly:
 
 ```python
 from monet import agent, write_artifact
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 
-# Configure the catalogue backend at startup
-configure_catalogue(InMemoryCatalogueClient())
+# Configure the artifact store backend at startup
+configure_artifacts(InMemoryArtifactClient())
 
 writer = agent("writer")
 
@@ -111,7 +111,7 @@ async def write_report(task: str, context: list) -> str:
     return f"Report written: {pointer['artifact_id']}"
 ```
 
-If a function returns output longer than 4000 characters and a catalogue client is configured, the decorator automatically offloads the content and returns a pointer. You do not need to call `write_artifact()` for simple cases.
+If a function returns output longer than 4000 characters and a artifact store client is configured, the decorator automatically offloads the content and returns a pointer. You do not need to call `write_artifact()` for simple cases.
 
 ## Running a pipeline
 
@@ -134,33 +134,26 @@ monet run "Research quantum computing trends"
 ```python
 import asyncio
 from monet.client import MonetClient
+from monet.pipelines.default import run as run_default
 
 async def main():
     client = MonetClient()
-    async for event in client.run("Research quantum computing trends"):
+    async for event in run_default(client, "Research quantum computing trends"):
         print(type(event).__name__, event)
 
 asyncio.run(main())
 ```
 
-### In-process (no server)
+`MonetClient` drives any graph declared in `monet.toml [entrypoints]`. The default pipeline (`entry → planning → execution` with HITL plan approval) ships as an adapter in `monet.pipelines.default`. Single-graph invocations use `client.run(graph_id, input)` directly — see the [Client guide](guides/client.md).
 
-```python
-from monet import run
-
-async def main():
-    async for event in run("Research quantum computing trends"):
-        print(event)
-
-asyncio.run(main())
-```
+> **No in-process driver.** The `from monet import run` path has been removed. Use `monet dev` to start a local server, or invoke `aegra dev` directly.
 
 See [Distribution Mode](guides/distribution.md) for production deployment with workers.
 
 ## Next steps
 
 - [Defining Agents](guides/agents.md) -- full guide to the agent SDK
-- [Artifact Catalogue](guides/catalogue.md) -- storage, metadata, and backends
+- [Artifact Store](guides/artifacts.md) -- storage, metadata, and backends
 - [Orchestration](guides/orchestration.md) -- LangGraph integration
 - [Distribution Mode](guides/distribution.md) -- distributed deployment, CLI, workers
 - [Client SDK](guides/client.md) -- MonetClient, event streaming, HITL decisions

@@ -1,62 +1,44 @@
-"""Typed events yielded by ``MonetClient.run()`` and query responses."""
+"""Typed events yielded by ``MonetClient.run()`` and query responses.
+
+These events are *graph-agnostic* — any LangGraph graph driven through
+:class:`~monet.client.MonetClient` produces them. Pipeline-specific
+events (e.g. ``TriageComplete``, ``PlanReady``, ``WaveComplete``) live
+next to their pipeline adapter — see ``monet.pipelines.default.events``.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from monet.types import ArtifactPointer
+from typing import Any
 
 # ── Run stream events ───────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
-class TriageComplete:
-    """Triage phase finished — topic classified."""
+class RunStarted:
+    """A new run has been created on a thread."""
 
     run_id: str
-    complexity: str
-    suggested_agents: list[str] = field(default_factory=list)
+    graph_id: str
+    thread_id: str
 
 
 @dataclass(frozen=True)
-class PlanReady:
-    """Planner produced a routing skeleton (flat DAG).
+class NodeUpdate:
+    """A LangGraph node wrote a state delta.
 
-    ``nodes`` items are dumps of ``RoutingNode`` — each has
-    ``{id, agent_id, command, depends_on}``.
+    ``update`` is the raw dict the node returned — its shape is the
+    node's contract, not ours.
     """
 
     run_id: str
-    goal: str
-    nodes: list[dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class PlanApproved:
-    """Plan was approved (auto or manual)."""
-
-    run_id: str
-
-
-@dataclass(frozen=True)
-class PlanInterrupt:
-    """Run paused — plan needs human approval.
-
-    Use ``client.approve_plan``, ``client.revise_plan``, or
-    ``client.reject_plan`` to continue. Carries the skeleton directly so
-    UIs can render plan structure without a catalogue read.
-    """
-
-    run_id: str
-    goal: str = ""
-    nodes: list[dict[str, Any]] = field(default_factory=list)
+    node: str
+    update: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class AgentProgress:
-    """Streaming progress from an agent invocation."""
+    """Streaming progress from an agent invocation (``emit_progress``)."""
 
     run_id: str
     agent_id: str
@@ -65,42 +47,29 @@ class AgentProgress:
 
 
 @dataclass(frozen=True)
-class WaveComplete:
-    """A dispatch batch of parallel agent invocations finished.
-
-    ``wave_index`` is a monotonic counter assigned client-side for ordering;
-    it no longer corresponds to a planning phase (the flat DAG has no
-    phases). ``node_ids`` are the routing-skeleton node ids that completed
-    in this batch.
-    """
+class SignalEmitted:
+    """A monet agent emitted a signal via ``emit_signal``."""
 
     run_id: str
-    wave_index: int
-    node_ids: list[str] = field(default_factory=list)
-    results: list[dict[str, Any]] = field(default_factory=list)
+    agent_id: str
+    signal_type: str
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class ReflectionComplete:
-    """QA reflection on a wave finished."""
+class Interrupt:
+    """The graph hit ``interrupt(...)`` — run is paused.
 
-    run_id: str
-    verdict: str
-    notes: str = ""
-
-
-@dataclass(frozen=True)
-class ExecutionInterrupt:
-    """Run paused — execution needs human decision.
-
-    Use ``client.retry_wave`` or ``client.abort_run`` to continue.
-    ``pending_node_ids`` are routing-skeleton nodes that have not yet
-    completed successfully.
+    ``tag`` is the interrupt node's name (``next_nodes[0]`` when a
+    single node is pending). ``values`` is the dict the node passed to
+    ``interrupt()``. Resume via :meth:`MonetClient.resume` with the
+    matching ``tag`` and a payload the node will accept.
     """
 
     run_id: str
-    reason: str
-    pending_node_ids: list[str] = field(default_factory=list)
+    tag: str
+    values: dict[str, Any] = field(default_factory=dict)
+    next_nodes: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -108,8 +77,7 @@ class RunComplete:
     """Run finished successfully."""
 
     run_id: str
-    wave_results: list[dict[str, Any]] = field(default_factory=list)
-    wave_reflections: list[dict[str, Any]] = field(default_factory=list)
+    final_values: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -121,14 +89,11 @@ class RunFailed:
 
 
 RunEvent = (
-    TriageComplete
-    | PlanReady
-    | PlanApproved
-    | PlanInterrupt
+    RunStarted
+    | NodeUpdate
     | AgentProgress
-    | WaveComplete
-    | ReflectionComplete
-    | ExecutionInterrupt
+    | SignalEmitted
+    | Interrupt
     | RunComplete
     | RunFailed
 )
@@ -140,39 +105,43 @@ RunEvent = (
 
 @dataclass(frozen=True)
 class RunSummary:
-    """Lightweight run record returned by ``list_runs``."""
+    """Lightweight run record returned by :meth:`MonetClient.list_runs`."""
 
     run_id: str
     status: str
-    phase: str
+    completed_stages: list[str] = field(default_factory=list)
     created_at: str = ""
 
 
 @dataclass(frozen=True)
 class RunDetail:
-    """Full run state returned by ``get_run`` and ``get_results``.
+    """Generic run snapshot — any pipeline, any graph topology.
 
-    ``routing_skeleton`` is the planner's flat DAG (``{goal, nodes}``);
-    ``work_brief_pointer`` is the catalogue pointer to the full brief,
-    resolvable via ``monet.core.context_resolver.resolve_context``.
+    ``completed_stages`` is a timeline of per-graph stage names that
+    have been observed for this run (derived from the graph IDs of its
+    threads). ``values`` is a merge of each thread's state values.
+    Pipeline-specific typed views (e.g. ``DefaultPipelineRunDetail``)
+    project from this.
     """
 
     run_id: str
     status: str
-    phase: str
-    triage: dict[str, Any] = field(default_factory=dict)
-    routing_skeleton: dict[str, Any] = field(default_factory=dict)
-    work_brief_pointer: ArtifactPointer | None = None
-    wave_results: list[dict[str, Any]] = field(default_factory=list)
-    wave_reflections: list[dict[str, Any]] = field(default_factory=list)
+    completed_stages: list[str] = field(default_factory=list)
+    values: dict[str, Any] = field(default_factory=dict)
+    pending_interrupt: Interrupt | None = None
 
 
 @dataclass(frozen=True)
 class PendingDecision:
-    """A run waiting for human input, returned by ``list_pending``."""
+    """A run waiting for human input, returned by ``list_pending``.
+
+    ``decision_type`` is the raw interrupt tag (the node name that
+    called ``interrupt()``). Pipeline adapters map tags to friendlier
+    summaries for UI rendering.
+    """
 
     run_id: str
-    decision_type: str  # "plan_approval" | "execution_review"
+    decision_type: str
     summary: str = ""
     detail: dict[str, Any] = field(default_factory=dict)
 

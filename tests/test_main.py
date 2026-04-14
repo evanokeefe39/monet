@@ -3,7 +3,7 @@
 
 Spawns the CLI in a subprocess with a stub agents module that monkeypatches
 the reference agents to return canned content. This exercises the full
-startup path including catalogue.initialise() without needing API keys.
+startup path including artifact store.initialise() without needing API keys.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def test_python_m_monet_runs(tmp_path: Path) -> None:
             (";" if sys.platform == "win32" else ":")
             + __import__("os").environ.get("PYTHONPATH", "")
         ),
-        "MONET_CATALOGUE_DIR": str(tmp_path / ".catalogue"),
+        "MONET_ARTIFACTS_DIR": str(tmp_path / ".artifacts"),
         "PATH": __import__("os").environ.get("PATH", ""),
         "SYSTEMROOT": __import__("os").environ.get("SYSTEMROOT", ""),
     }

@@ -1,4 +1,4 @@
-"""Context resolver — fetch full content from catalogue pointers.
+"""Context resolver — fetch full content from artifact pointers.
 
 Called by agents that need full upstream output. The orchestration
 layer passes only pointers and summaries; this helper resolves them
@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from monet.core.catalogue import get_catalogue
+from monet.core.artifacts import get_artifacts
 
 __all__ = ["resolve_context"]
 
@@ -31,10 +31,10 @@ _TEXT_PREFIXES: tuple[str, ...] = (
 async def resolve_context(
     entries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Resolve catalogue pointers in context entries to full content.
+    """Resolve artifact pointers in context entries to full content.
 
     For each entry with ``artifacts``, fetches text content from the
-    catalogue and adds it as ``content``. Binary artifacts get a
+    artifact store and adds it as ``content``. Binary artifacts get a
     metadata stub. Entries without artifacts are passed through unchanged.
 
     Args:
@@ -43,9 +43,9 @@ async def resolve_context(
             optionally ``artifacts`` (list of pointer dicts).
 
     Returns:
-        Enriched entries with ``content`` field populated from catalogue.
+        Enriched entries with ``content`` field populated from the store.
     """
-    catalogue = get_catalogue()
+    store = get_artifacts()
     resolved: list[dict[str, Any]] = []
 
     for entry in entries:
@@ -62,10 +62,10 @@ async def resolve_context(
             if not art_id:
                 continue
             try:
-                raw, meta = await catalogue.read(art_id)
+                raw, meta = await store.read(art_id)
             except (KeyError, ValueError, FileNotFoundError):
                 _log.warning(
-                    "Failed to read artifact %s from catalogue; "
+                    "Failed to read artifact %s from store; "
                     "agent will receive incomplete context",
                     art_id,
                 )

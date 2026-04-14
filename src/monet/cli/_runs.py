@@ -10,14 +10,14 @@ import click
 if TYPE_CHECKING:
     from monet.client import MonetClient
 
+from monet._constants import STANDARD_DEV_PORT
 from monet.cli._render import (
     prompt_execution_decision,
     prompt_plan_decision,
-    render_event,
     render_pending_table,
-    render_run_detail,
     render_run_table,
 )
+from monet.config import MONET_SERVER_URL
 
 
 def _make_client(url: str) -> MonetClient:
@@ -34,13 +34,13 @@ def runs() -> None:
 @runs.command(name="list")
 @click.option(
     "--url",
-    default="http://localhost:2026",
-    envvar="MONET_SERVER_URL",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
+    envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
 @click.option("--limit", default=20, help="Maximum runs to display.")
 def list_runs(url: str, limit: int) -> None:
-    """List recent runs with status, phase, and age."""
+    """List recent runs with status, stages, and age."""
     asyncio.run(_list_runs(url, limit))
 
 
@@ -53,8 +53,8 @@ async def _list_runs(url: str, limit: int) -> None:
 @runs.command()
 @click.option(
     "--url",
-    default="http://localhost:2026",
-    envvar="MONET_SERVER_URL",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
+    envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
 def pending(url: str) -> None:
@@ -72,8 +72,8 @@ async def _pending(url: str) -> None:
 @click.argument("run_id")
 @click.option(
     "--url",
-    default="http://localhost:2026",
-    envvar="MONET_SERVER_URL",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
+    envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
 def inspect(run_id: str, url: str) -> None:
@@ -82,24 +82,34 @@ def inspect(run_id: str, url: str) -> None:
 
 
 async def _inspect(url: str, run_id: str) -> None:
+    from monet.pipelines.default import DefaultPipelineRunDetail
+    from monet.pipelines.default.render import render_pipeline_run_detail
+
     client = _make_client(url)
     detail = await client.get_run(run_id)
-    render_run_detail(detail)
+    # If the run's stages look like the default pipeline, render the typed view.
+    if any(s in detail.completed_stages for s in ("entry", "planning", "execution")):
+        render_pipeline_run_detail(DefaultPipelineRunDetail.from_run_detail(detail))
+    else:
+        click.secho(f"Run {detail.run_id}", bold=True)
+        click.echo(f"  Status: {detail.status}")
+        if detail.completed_stages:
+            click.echo(f"  Stages: {', '.join(detail.completed_stages)}")
 
 
 @runs.command()
 @click.argument("run_id")
 @click.option(
     "--url",
-    default="http://localhost:2026",
-    envvar="MONET_SERVER_URL",
+    default=f"http://localhost:{STANDARD_DEV_PORT}",
+    envvar=MONET_SERVER_URL,
     help="Aegra server URL.",
 )
 def resume(run_id: str, url: str) -> None:
     """Resume an interrupted run.
 
-    Detects whether the run is paused at plan approval or execution
-    interrupt, prompts for a decision, and streams remaining events.
+    Detects the pending interrupt's tag, prompts for a decision, and
+    dispatches the matching HITL verb.
     """
     try:
         exit_code = asyncio.run(_resume(url, run_id))
@@ -109,63 +119,44 @@ def resume(run_id: str, url: str) -> None:
 
 
 async def _resume(url: str, run_id: str) -> int:
-    from monet.client._events import (
-        ExecutionInterrupt,
-        RunFailed,
+    from monet.pipelines.default import (
+        abort_run,
+        approve_plan,
+        reject_plan,
+        retry_wave,
+        revise_plan,
     )
 
     client = _make_client(url)
     detail = await client.get_run(run_id)
 
-    if detail.status != "interrupted":
+    if detail.status != "interrupted" or detail.pending_interrupt is None:
         click.echo(f"Run {run_id} is not interrupted (status: {detail.status}).")
         return 0
 
-    # Determine interrupt type by checking which phase has a pending node.
-    if detail.phase == "planning":
+    tag = detail.pending_interrupt.tag
+
+    if tag == "human_approval":
         decision = prompt_plan_decision()
-
         if decision == "approve":
-            async for event in client.approve_plan(run_id):
-                render_event(event)
-                if isinstance(event, ExecutionInterrupt):
-                    return await _handle_resume_exec(client, run_id)
-                if isinstance(event, RunFailed):
-                    return 1
-
+            await approve_plan(client, run_id)
         elif decision == "revise":
             feedback = click.prompt("Feedback")
-            async for event in client.revise_plan(run_id, feedback):
-                render_event(event)
-
+            await revise_plan(client, run_id, feedback)
         elif decision == "reject":
-            await client.reject_plan(run_id)
+            await reject_plan(client, run_id)
             click.secho("Run rejected.", fg="red")
             return 1
-
-    elif detail.phase == "execution":
-        return await _handle_resume_exec(client, run_id)
-
-    else:
-        click.echo(f"Run {run_id} is interrupted in unexpected phase: {detail.phase}")
-        return 1
-
-    return 0
-
-
-async def _handle_resume_exec(client: MonetClient, run_id: str) -> int:
-    """Handle execution interrupt resume with prompt."""
-    from monet.client._events import RunFailed
-
-    decision = prompt_execution_decision()
-
-    if decision == "retry":
-        async for event in client.retry_wave(run_id):
-            render_event(event)
-            if isinstance(event, RunFailed):
-                return 1
         return 0
 
-    await client.abort_run(run_id)
-    click.secho("Run aborted.", fg="red")
+    if tag == "human_interrupt":
+        exec_decision = prompt_execution_decision()
+        if exec_decision == "retry":
+            await retry_wave(client, run_id)
+            return 0
+        await abort_run(client, run_id)
+        click.secho("Run aborted.", fg="red")
+        return 1
+
+    click.echo(f"Run {run_id} is interrupted at unknown tag: {tag}")
     return 1

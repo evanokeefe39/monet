@@ -10,20 +10,20 @@
 - [x] `webhook_handler` (with timeout + error handling), `log_handler` handler factories
 - [x] `get_run_context()`, `get_run_logger()` context access
 - [x] Ambient trio: `emit_progress()`, `emit_signal()`, `write_artifact()`
-- [x] `configure_catalogue()`, `catalogue_from_env()` for backend wiring
-- [x] `resolve_context()` for agent-side catalogue content resolution
+- [x] `configure_artifacts()`, `artifacts_from_env()` for backend wiring
+- [x] `resolve_context()` for agent-side artifact store content resolution
 - [x] `NeedsHumanReview`, `EscalationRequired`, `SemanticError` typed exceptions
 - [x] `AgentDescriptor`, `CommandDescriptor`, `SLACharacteristics`, `RetryConfig` descriptors
 - [x] OpenTelemetry tracing (spans, W3C traceparent, gen_ai.* conventions)
 - [x] `monet.tracing` public module (configure_tracing, get_tracer, inject_trace_context, constants)
-- [x] `CatalogueHandle` re-exported from top-level `monet` namespace
+- [x] `ArtifactStoreHandle` re-exported from top-level `monet` namespace
 
 ### Task Queue and Worker
 - [x] `TaskQueue` protocol with pool-based claim (Prefect model)
 - [x] `InMemoryTaskQueue` with per-pool queues, O(1) claim, backpressure, memory cleanup, cancellation
 - [x] `SQLiteTaskQueue` with persistent storage, lease-based claiming, background sweeper
 - [x] `run_worker()` with concurrent execution (semaphore-capped), OTel spans, graceful shutdown, optional registry
-- [x] `bootstrap()` one-call server init (tracing → catalogue → manifest → queue → worker)
+- [x] `bootstrap()` one-call server init (tracing → artifact store → manifest → queue → worker)
 
 ### Capability Manifest
 - [x] `AgentManifest` static capability declaration with pool assignment
@@ -31,17 +31,17 @@
 - [x] `_assert_registered` checks manifest (not handler registry) at graph build time
 - [x] `invoke_agent` checks manifest before enqueue; `CAPABILITY_UNAVAILABLE` signal on missing agent
 
-### Catalogue
-- [x] `CatalogueClient` protocol
+### Artifact Store
+- [x] `ArtifactClient` protocol
 - [x] `ArtifactMetadata` model
 - [x] `FilesystemStorage` + `SQLiteIndex` implementations
-- [x] `CatalogueService` (composes storage + index)
-- [x] `InMemoryCatalogueClient` for testing
+- [x] `ArtifactService` (composes storage + index)
+- [x] `InMemoryArtifactClient` for testing
 
 ### Orchestration
 - [x] Three-graph supervisor topology: entry (triage) → planning (HITL) → execution (wave-based parallel)
 - [x] Queue-only dispatch: `invoke_agent` enqueues to TaskQueue, polls for results
-- [x] Pointer-only state: `_resolve_wave_result` passes summaries + catalogue pointers only
+- [x] Pointer-only state: `_resolve_wave_result` passes summaries + artifact store pointers only
 - [x] Wave fan-out via LangGraph `Send`, QA reflection gates, retry budget
 - [x] Signal routing: `SignalRouter` maps signal groups to actions (interrupt, retry)
 - [x] State schemas: `EntryState`, `PlanningState`, `ExecutionState`, `WaveItem`, `WaveResult`

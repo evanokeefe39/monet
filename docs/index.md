@@ -6,7 +6,7 @@ A multi-agent orchestration SDK for Python. monet provides a uniform agent inter
 
 - **Uniform agent interface** -- one decorator, one input envelope, one output envelope. Every agent looks the same to the orchestrator regardless of runtime.
 - **Lean orchestration state** -- full artifact content never lives in the graph. Summaries and pointers keep state small and inspectable.
-- **Automatic content offload** -- large outputs are transparently written to the catalogue. No manual size management.
+- **Automatic content offload** -- large outputs are transparently written to the artifact store. No manual size management.
 - **Typed signals** -- agents communicate structured signals (human review needed, escalation, semantic errors) via exceptions. The orchestrator decides what to do with them.
 - **Transport-agnostic** -- agents run as local Python functions or over HTTP. Switch between co-located and distributed deployment with configuration, not code changes.
 - **Observable by default** -- OpenTelemetry spans at every agent invocation. W3C trace propagation across service boundaries.
@@ -38,7 +38,7 @@ async def researcher_deep(task: str, context: list, effort: str = "high"):
 - [Getting Started](getting-started.md) -- install, define your first agent, run it
 - **Guides**
     - [Defining Agents](guides/agents.md) -- the `@agent` decorator, commands, effort, signals
-    - [Artifact Catalogue](guides/catalogue.md) -- storage, metadata, backends
+    - [Artifact Store](guides/artifacts.md) -- storage, metadata, backends
     - [Orchestration](guides/orchestration.md) -- LangGraph nodes, state, HITL
     - [Distribution Mode](guides/distribution.md) -- distributed deployment, CLI, workers, queue providers
     - [Client SDK](guides/client.md) -- MonetClient, event streaming, HITL decisions

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 if TYPE_CHECKING:
-    from monet.catalogue._metadata import ArtifactMetadata
+    from monet.artifacts._metadata import ArtifactMetadata
 
 
 class Base(DeclarativeBase):
@@ -40,7 +40,7 @@ class SQLiteIndex:
     DB URL must use sqlite+aiosqlite:// scheme.
     """
 
-    def __init__(self, db_url: str = "sqlite+aiosqlite:///.catalogue/index.db") -> None:
+    def __init__(self, db_url: str = "sqlite+aiosqlite:///.artifacts/index.db") -> None:
         self._engine = create_async_engine(db_url)
 
     async def initialise(self) -> None:

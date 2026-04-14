@@ -1,10 +1,10 @@
-# Artifact Catalogue
+# Artifact Store
 
-The catalogue is a thin storage layer for agent outputs. It stores binary content alongside structured metadata and makes artifacts addressable by URL.
+The artifact store is a thin storage layer for agent outputs. It stores binary content alongside structured metadata and makes artifacts addressable by URL.
 
 ## Overview
 
-Agents produce artifacts -- research findings, reports, analyses, plans. The catalogue stores these with full provenance (who created it, when, as part of which trace and run) and makes them retrievable by any agent or external system via standard HTTP.
+Agents produce artifacts -- research findings, reports, analyses, plans. The artifact store stores these with full provenance (who created it, when, as part of which trace and run) and makes them retrievable by any agent or external system via standard HTTP.
 
 The architecture separates storage (where bytes live) from indexing (how you query metadata). Both are pluggable.
 
@@ -15,14 +15,14 @@ The architecture separates storage (where bytes live) from indexing (how you que
 
 The switch is pure configuration. No code changes.
 
-## `CatalogueClient` protocol
+## `ArtifactClient` protocol
 
 The minimal interface for reading and writing artifacts:
 
 ```python
-from monet.catalogue import CatalogueClient, ArtifactMetadata
+from monet.artifacts import ArtifactClient, ArtifactMetadata
 
-class CatalogueClient(Protocol):
+class ArtifactClient(Protocol):
     def write(self, content: bytes, metadata: ArtifactMetadata) -> ArtifactPointer: ...
     def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]: ...
 ```
@@ -65,9 +65,9 @@ Validation: if `pii_flag` is `True`, `retention_policy` must be set. This is enf
 The default local backend. Stores artifacts at `{root}/{artifact_id}/content` (binary) and `{root}/{artifact_id}/meta.json`. Returns `file://` URLs.
 
 ```python
-from monet.catalogue import FilesystemStorage
+from monet.artifacts import FilesystemStorage
 
-storage = FilesystemStorage(root="/tmp/monet-catalogue")
+storage = FilesystemStorage(root="/tmp/monet-artifact store")
 ```
 
 ### `StorageBackend` protocol
@@ -75,7 +75,7 @@ storage = FilesystemStorage(root="/tmp/monet-catalogue")
 Implement this to add custom backends (S3, GCS, etc.):
 
 ```python
-from monet.catalogue import StorageBackend
+from monet.artifacts import StorageBackend
 
 class StorageBackend(Protocol):
     def write(self, artifact_id: str, content: bytes, metadata_dict: dict) -> str: ...
@@ -84,15 +84,15 @@ class StorageBackend(Protocol):
 
 `write()` returns a URL string. `read()` returns content bytes and the metadata dict.
 
-## `CatalogueService`
+## `ArtifactService`
 
 Composes a storage backend with the SQLite metadata index:
 
 ```python
-from monet.catalogue import CatalogueService, FilesystemStorage
+from monet.artifacts import ArtifactService, FilesystemStorage
 
-storage = FilesystemStorage(root="/tmp/monet-catalogue")
-service = CatalogueService(storage=storage, db_url="sqlite:///catalogue.db")
+storage = FilesystemStorage(root="/tmp/monet-artifact store")
+service = ArtifactService(storage=storage, db_url="sqlite:///artifact store.db")
 ```
 
 The service:
@@ -104,30 +104,30 @@ The service:
 - Indexes metadata in SQLite
 - On read, verifies integrity via hash comparison
 
-## `InMemoryCatalogueClient`
+## `InMemoryArtifactClient`
 
 A dict-backed implementation for tests:
 
 ```python
-from monet.catalogue import InMemoryCatalogueClient
+from monet.artifacts import InMemoryArtifactClient
 
-client = InMemoryCatalogueClient()
+client = InMemoryArtifactClient()
 pointer = client.write(b"hello", metadata)
 content, meta = client.read(pointer.artifact_id)
 ```
 
 Auto-generates UUIDs and computes hashes. No external dependencies.
 
-## Using the catalogue from agents
+## Using the artifact store from agents
 
-The SDK function `write_artifact()` wraps the catalogue client:
+The SDK function `write_artifact()` wraps the artifact store client:
 
 ```python
 from monet import write_artifact
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 
 # At startup
-configure_catalogue(InMemoryCatalogueClient())
+configure_artifacts(InMemoryArtifactClient())
 
 # Inside an agent function
 pointer = await write_artifact(
@@ -140,4 +140,4 @@ pointer = await write_artifact(
 )
 ```
 
-`write_artifact()` is async — it forwards to `await get_catalogue().write(...)`. The pointer it returns is also appended to `AgentResult.artifacts` automatically. Stamping (`trace_id`, `run_id`, `agent_id`) is handled by the `CatalogueService`. Raises `NotImplementedError` if no catalogue backend is configured.
+`write_artifact()` is async — it forwards to `await get_artifacts().write(...)`. The pointer it returns is also appended to `AgentResult.artifacts` automatically. Stamping (`trace_id`, `run_id`, `agent_id`) is handled by the `ArtifactService`. Raises `NotImplementedError` if no artifact store backend is configured.

@@ -8,10 +8,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from monet.config import ObservabilityConfig
 from monet.core.tracing import (
-    _apply_honeycomb_shortcut,
-    _apply_langfuse_shortcut,
-    _apply_langsmith_shortcut,
     configure_tracing,
     get_tracer,
 )
@@ -50,69 +48,65 @@ def test_configure_tracing_idempotent() -> None:
     """configure_tracing() can be called multiple times safely."""
     configure_tracing()
     configure_tracing()
-    configure_tracing(service_name="custom")
+    configure_tracing(ObservabilityConfig(service_name="custom"))
 
 
 def test_langfuse_shortcut_derives_endpoint_and_header(
-    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+    clean_otel_env: None,
 ) -> None:
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
-    _apply_langfuse_shortcut()
-    import os
-
-    assert (
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
-        == "http://localhost:3000/api/public/otel"
+    cfg = ObservabilityConfig(
+        langfuse_public_key="pk-lf-test",
+        langfuse_secret_key="sk-lf-test",
     )
+    endpoint, headers = cfg.otlp_endpoint_and_headers()
+    assert endpoint == "http://localhost:3000/api/public/otel"
     expected = base64.b64encode(b"pk-lf-test:sk-lf-test").decode()
-    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == f"Authorization=Basic {expected}"
+    assert headers == f"Authorization=Basic {expected}"
 
 
-def test_langsmith_shortcut(
-    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
-    monkeypatch.setenv("LANGSMITH_PROJECT", "monet")
-    _apply_langsmith_shortcut()
-    import os
-
-    assert (
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
-        == "https://api.smith.langchain.com/otel/v1/traces"
+def test_langsmith_shortcut(clean_otel_env: None) -> None:
+    cfg = ObservabilityConfig(
+        langsmith_api_key="lsv2_test",
+        langsmith_project="monet",
     )
-    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == (
-        "x-api-key=lsv2_test,Langsmith-Project=monet"
+    endpoint, headers = cfg.otlp_endpoint_and_headers()
+    assert endpoint == "https://api.smith.langchain.com/otel"
+    assert headers == "x-api-key=lsv2_test,Langsmith-Project=monet"
+
+
+def test_honeycomb_shortcut(clean_otel_env: None) -> None:
+    cfg = ObservabilityConfig(
+        honeycomb_api_key="hc_test",
+        honeycomb_dataset="monet",
     )
+    endpoint, headers = cfg.otlp_endpoint_and_headers()
+    assert endpoint == "https://api.honeycomb.io"
+    assert headers == "x-honeycomb-team=hc_test,x-honeycomb-dataset=monet"
 
 
-def test_honeycomb_shortcut(
-    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+def test_explicit_endpoint_wins_over_vendor_shortcuts(
+    clean_otel_env: None,
 ) -> None:
-    monkeypatch.setenv("HONEYCOMB_API_KEY", "hc_test")
-    monkeypatch.setenv("HONEYCOMB_DATASET", "monet")
-    _apply_honeycomb_shortcut()
-    import os
-
-    assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "https://api.honeycomb.io"
-    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == (
-        "x-honeycomb-team=hc_test,x-honeycomb-dataset=monet"
+    """Explicit OTLP endpoint always wins; vendor shortcuts are fallbacks."""
+    cfg = ObservabilityConfig(
+        otlp_endpoint="http://explicit.example/otel",
+        otlp_headers="x-custom=value",
+        langsmith_api_key="lsv2_test",
+        honeycomb_api_key="hc_test",
     )
+    endpoint, headers = cfg.otlp_endpoint_and_headers()
+    assert endpoint == "http://explicit.example/otel"
+    assert headers == "x-custom=value"
 
 
-def test_shortcut_does_not_override_explicit_otel_vars(
-    clean_otel_env: None, monkeypatch: pytest.MonkeyPatch
+def test_otlp_headers_dict_parses_comma_separated(
+    clean_otel_env: None,
 ) -> None:
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://explicit.example/otel")
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-custom=value")
-    monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_test")
-    monkeypatch.setenv("HONEYCOMB_API_KEY", "hc_test")
-    _apply_langsmith_shortcut()
-    _apply_honeycomb_shortcut()
-    import os
-
-    assert os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://explicit.example/otel"
-    assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == "x-custom=value"
+    cfg = ObservabilityConfig(
+        otlp_endpoint="http://x.example",
+        otlp_headers="x-a=1,x-b=2",
+    )
+    assert cfg.otlp_headers_dict() == {"x-a": "1", "x-b": "2"}
 
 
 def test_trace_context_propagates_across_extract_attach() -> None:

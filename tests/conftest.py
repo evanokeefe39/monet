@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
+from monet.config import MONET_ENV_VARS
 from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 from monet.orchestration._invoke import configure_queue
@@ -33,6 +34,20 @@ def make_ctx(**overrides: Any) -> AgentRunContext:
     return base
 
 
+@pytest.fixture(autouse=True)
+def _clean_monet_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Delenv every ``MONET_*`` variable before each test.
+
+    Config tests that need a specific value set it via
+    ``monkeypatch.setenv``. Without this, a test that sets
+    ``MONET_API_KEY=xxx`` leaks that value into a later test that
+    expects it unset — the silent-failure class this whole hardening
+    pass exists to prevent.
+    """
+    for name in MONET_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def clean_registry() -> Any:
     """Isolate each test from registry and manifest side effects."""
@@ -41,11 +56,11 @@ def clean_registry() -> Any:
 
 
 @pytest.fixture
-def catalogue() -> Any:
-    """Provide an in-memory catalogue backend."""
-    configure_catalogue(InMemoryCatalogueClient())
+def artifacts() -> Any:
+    """Provide an in-memory artifact store backend."""
+    configure_artifacts(InMemoryArtifactClient())
     yield
-    configure_catalogue(None)
+    configure_artifacts(None)
 
 
 @pytest.fixture(autouse=True)

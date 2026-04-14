@@ -129,7 +129,7 @@ Fires unconditionally after every execution -- successful, partial, or failed.
 |-- compare: planned phases and waves vs actual execution
 |-- note: deviations, partial completions, scope changes
 |-- record: agent confidence distributions
-|-- write: hansei record to kaizen log (catalogue artifact)
+|-- write: hansei record to kaizen log (artifact store artifact)
 +-- return: final message to user
 ```
 

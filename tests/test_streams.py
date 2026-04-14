@@ -13,16 +13,16 @@ if TYPE_CHECKING:
     from monet.types import Signal
 
 from monet import AgentStream, SemanticError
-from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
-from monet.core.catalogue import _artifact_collector
+from monet.artifacts import InMemoryArtifactClient, configure_artifacts
+from monet.core.artifacts import _artifact_collector
 from monet.core.stubs import _signal_collector
 
 
 @pytest.fixture(autouse=True)
-def _catalogue() -> None:  # type: ignore[misc]
-    configure_catalogue(InMemoryCatalogueClient())
+def _artifacts() -> None:  # type: ignore[misc]
+    configure_artifacts(InMemoryArtifactClient())
     yield
-    configure_catalogue(None)
+    configure_artifacts(None)
 
 
 def _write_emitter(tmp_path: Path, payloads: list[dict[str, object]]) -> list[str]:
@@ -36,7 +36,7 @@ def _write_emitter(tmp_path: Path, payloads: list[dict[str, object]]) -> list[st
 
 
 async def test_cli_default_handlers_route_events(tmp_path: Path) -> None:
-    """Default handlers wire artifact → catalogue, signal → collector,
+    """Default handlers wire artifact → artifact store, signal → collector,
     result → return value."""
     cmd = _write_emitter(
         tmp_path,

@@ -1,6 +1,6 @@
 """AgentManifest handle — worker-side access to agent registry.
 
-get_agent_manifest() is a core SDK getter alongside get_catalogue()
+get_agent_manifest() is a core SDK getter alongside get_artifacts()
 and get_run_context(). Workers configure the backend at startup.
 
 In monolith mode, server bootstrap calls configure_agent_manifest()
@@ -72,7 +72,7 @@ _handle_instance = AgentManifestHandle()
 def get_agent_manifest() -> AgentManifestHandle:
     """Return the agent manifest handle.
 
-    One of the core SDK getters alongside get_catalogue() and
+    One of the core SDK getters alongside get_artifacts() and
     get_run_context(). Works anywhere the worker runtime is configured.
     """
     return _handle_instance

@@ -8,7 +8,7 @@ twice. Ordered newest first.
 
 **Trigger:** commit `c735f8f` ("Use Path.as_uri() for filesystem artifact
 URLs") added `.resolve()` to the URL assembly in
-`src/monet/catalogue/_storage.py::FilesystemStorage.write`. Under
+`src/monet/artifacts/_storage.py::FilesystemStorage.write`. Under
 `langgraph dev`, `blockbuster` intercepts blocking syscalls on the
 event loop and raises `BlockingError`. Every `researcher/writer/
 publisher` invocation crashed at the URL line, was caught by the
@@ -68,7 +68,7 @@ diagnostic instrumentation pass.
   manipulation inside agent execution. Use `aiofiles` or
   `asyncio.to_thread` for unavoidable blocking I/O. Reviewer check:
   grep for `\.resolve\(|os\.getcwd|os\.path\.realpath` under
-  `src/monet/catalogue/` and `src/monet/agents/`.
+  `src/monet/artifacts/` and `src/monet/agents/`.
 
 - **An agent that returns "" and writes no artifacts is a defect, not
   a success.** The `_wrap_result` poka-yoke catches this now, but

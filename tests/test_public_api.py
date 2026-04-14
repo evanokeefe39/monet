@@ -13,7 +13,7 @@ def test_monet_root_exports() -> None:
         "AgentResult",
         "AgentRunContext",
         "ArtifactPointer",
-        "CatalogueHandle",
+        "ArtifactStoreHandle",
         "GraphHookRegistry",
         "HookRegistry",
         "Signal",
@@ -32,42 +32,41 @@ def test_monet_root_exports() -> None:
         "get_agent_manifest",
         "get_run_context",
         "get_run_logger",
-        "get_catalogue",
+        "get_artifacts",
         "resolve_context",
         "emit_progress",
         "emit_signal",
         "NeedsHumanReview",
         "EscalationRequired",
         "SemanticError",
-        "run",
     }
     assert set(monet.__all__) == expected
     for name in expected:
         assert getattr(monet, name) is not None, f"{name} is None"
 
 
-def test_monet_catalogue_exports() -> None:
-    import monet.catalogue as cat
+def test_monet_artifacts_exports() -> None:
+    import monet.artifacts as cat
 
     expected = {
         "ArtifactMetadata",
-        "CatalogueClient",
-        "CatalogueService",
+        "ArtifactClient",
+        "ArtifactService",
         "FilesystemStorage",
-        "InMemoryCatalogueClient",
+        "InMemoryArtifactClient",
         "SQLiteIndex",
-        "catalogue_from_env",
-        "configure_catalogue",
+        "artifacts_from_env",
+        "configure_artifacts",
     }
     assert set(cat.__all__) == expected
     for name in expected:
         assert getattr(cat, name) is not None, f"{name} is None"
 
 
-def test_configure_catalogue_callable() -> None:
-    from monet.catalogue import configure_catalogue
+def test_configure_artifacts_callable() -> None:
+    from monet.artifacts import configure_artifacts
 
-    assert callable(configure_catalogue)
+    assert callable(configure_artifacts)
 
 
 def test_monet_orchestration_exports() -> None:
@@ -84,17 +83,17 @@ def test_agent_result_has_signal_methods() -> None:
     assert callable(getattr(AgentResult, "get_signal", None))
 
 
-def test_get_catalogue_returns_handle_with_read_and_write() -> None:
-    from monet import get_catalogue
+def test_get_artifacts_returns_handle_with_read_and_write() -> None:
+    from monet import get_artifacts
 
-    handle = get_catalogue()
+    handle = get_artifacts()
     assert callable(getattr(handle, "write", None))
     assert callable(getattr(handle, "read", None))
 
 
 def test_handle_agent_event_not_in_sdk() -> None:
     """handle_agent_event should not exist in the SDK."""
-    import monet.catalogue as cat
+    import monet.artifacts as cat
 
     assert not hasattr(cat, "handle_agent_event")
 
@@ -132,25 +131,54 @@ def test_server_public_api() -> None:
 
 
 def test_client_public_api() -> None:
+    """Graph-agnostic client surface — pipeline-specific types live in
+    ``monet.pipelines.default``.
+    """
     from monet.client import (  # noqa: F401
         AgentProgress,
-        ExecutionInterrupt,
+        AlreadyResolved,
+        AmbiguousInterrupt,
+        ChatSummary,
+        GraphNotInvocable,
+        Interrupt,
+        InterruptTagMismatch,
         MonetClient,
+        MonetClientError,
+        NodeUpdate,
         PendingDecision,
-        PlanApproved,
-        PlanInterrupt,
-        PlanReady,
-        ReflectionComplete,
         RunComplete,
         RunDetail,
         RunEvent,
         RunFailed,
+        RunNotInterrupted,
+        RunStarted,
         RunSummary,
-        TriageComplete,
-        WaveComplete,
+        SignalEmitted,
         make_client,
     )
 
 
-def test_catalogue_handle_public() -> None:
-    from monet import CatalogueHandle  # noqa: F401
+def test_default_pipeline_public_api() -> None:
+    """Default-pipeline surface — typed events and HITL verbs."""
+    from monet.pipelines.default import (  # noqa: F401
+        DefaultInterruptTag,
+        DefaultPipelineEvent,
+        DefaultPipelineRunDetail,
+        ExecutionInterrupt,
+        PlanApproved,
+        PlanInterrupt,
+        PlanReady,
+        ReflectionComplete,
+        TriageComplete,
+        WaveComplete,
+        abort_run,
+        approve_plan,
+        reject_plan,
+        retry_wave,
+        revise_plan,
+        run,
+    )
+
+
+def test_artifact_store_handle_public() -> None:
+    from monet import ArtifactStoreHandle  # noqa: F401

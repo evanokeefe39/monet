@@ -20,7 +20,7 @@ Each graph has its own TypedDict state:
 - `PlanningState` — task, work brief, planning context, human feedback, revision count
 - `ExecutionState` — work brief, phase/wave indices, wave results (append-only), wave reflections, signals, abort reason, pending context
 
-State is pointer-only: `pending_context` entries contain summaries and catalogue artifact pointers, never full content. Agents that need upstream content call `resolve_context()`.
+State is pointer-only: `pending_context` entries contain summaries and artifact store artifact pointers, never full content. Agents that need upstream content call `resolve_context()`.
 
 ## Agent invocation
 
@@ -59,7 +59,7 @@ The `InMemoryTaskQueue` provides per-pool FIFO queues, O(1) claim, backpressure 
 from monet.server import bootstrap
 
 worker_task = await bootstrap(
-    catalogue_root=".catalogue",
+    artifacts_root=".artifacts",
     enable_tracing=True,
 )
 ```
@@ -67,7 +67,7 @@ worker_task = await bootstrap(
 `bootstrap()` handles the full startup sequence with guaranteed ordering:
 
 1. Configure OpenTelemetry tracing
-2. Configure catalogue (from path or `MONET_CATALOGUE_DIR` env var)
+2. Configure artifact store (from path or `MONET_ARTIFACTS_DIR` env var)
 3. Create task queue (in-memory by default)
 4. Start background worker for the local pool
 5. Monitor worker health via done_callback
@@ -88,7 +88,7 @@ Default pool is `"local"`. The manifest tracks pool assignments. Workers claim t
 
 Full artifact content never enters orchestration state. After each wave:
 
-1. `_resolve_wave_result()` extracts a 200-char summary and catalogue pointers
+1. `_resolve_wave_result()` extracts a 200-char summary and artifact store pointers
 2. Downstream agents receive pointers in their context
 3. Agents that need full content call `resolve_context()`:
 
@@ -98,7 +98,7 @@ from monet import resolve_context
 @agent("writer")
 async def write(task: str, context: list) -> str:
     resolved = await resolve_context(context)
-    # resolved entries now have 'content' field populated from catalogue
+    # resolved entries now have 'content' field populated from artifact store
     ...
 ```
 

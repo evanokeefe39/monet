@@ -16,7 +16,7 @@ import aiofiles  # type: ignore[import-untyped]
 from monet.types import ArtifactPointer
 
 if TYPE_CHECKING:
-    from monet.catalogue._metadata import ArtifactMetadata
+    from monet.artifacts._metadata import ArtifactMetadata
 
 
 class FilesystemStorage:

@@ -223,7 +223,7 @@ See [Queue Providers Reference](../api/queue.md) for constructor signatures and 
 | `MONET_API_KEY` | server, worker, CLI | Bearer token for authenticated endpoints |
 | `MONET_SERVER_URL` | worker, CLI | Orchestration server URL |
 | `MONET_CONFIG_PATH` | server | Path to monet.toml |
-| `MONET_CATALOGUE_DIR` | server | Catalogue storage directory |
+| `MONET_ARTIFACTS_DIR` | server | Artifact Store storage directory |
 | `MONET_AGENT_TIMEOUT` | orchestration | Task poll timeout in seconds (default 600) |
 | `MONET_POOL_{NAME}_URL` | server | Pool endpoint URL |
 | `MONET_POOL_{NAME}_AUTH` | server | Pool auth token |

@@ -1,6 +1,6 @@
 """Public types for the monet agent SDK.
 
-All types used across the SDK, catalogue, and orchestration layers.
+All types used across the SDK, artifact store, and orchestration layers.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class _ArtifactPointerRequired(TypedDict):
 
 
 class ArtifactPointer(_ArtifactPointerRequired, total=False):
-    """Reference to an artifact in the catalogue.
+    """Reference to a stored artifact.
 
     key is an optional semantic tag. Set at write time, consumed
     by find_artifact() at lookup time.

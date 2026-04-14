@@ -1,6 +1,6 @@
 """Server bootstrap — one-call init with guaranteed ordering.
 
-Handles: tracing -> catalogue -> queue -> worker. Called once from the
+Handles: tracing -> artifacts -> queue -> worker. Called once from the
 server entry point (e.g., ``server_graphs.py``).
 """
 
@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from monet.config import ArtifactsConfig, ServerConfig
 from monet.core.manifest import AgentCapability
 
 if TYPE_CHECKING:
@@ -56,7 +56,7 @@ def configure_lazy_worker(queue: TaskQueue) -> None:
 
 async def bootstrap(
     *,
-    catalogue_root: str | Path | None = None,
+    artifacts_root: str | Path | None = None,
     enable_tracing: bool = True,
     agents: list[AgentCapability] | None = None,
     queue: TaskQueue | None = None,
@@ -65,14 +65,14 @@ async def bootstrap(
     """Initialize the monet server with guaranteed ordering.
 
     1. Configure tracing (if enabled)
-    2. Configure catalogue (from catalogue_root or MONET_CATALOGUE_DIR)
+    2. Configure artifact store (from artifacts_root or MONET_ARTIFACTS_DIR)
     3. Declare agent capabilities in manifest (if provided)
     4. Configure task queue (creates in-memory queue if none provided)
     5. Start in-process worker as a background task
 
     Args:
-        catalogue_root: Path to catalogue directory. Falls back to
-            MONET_CATALOGUE_DIR env var, then to ``Path(".catalogue")``.
+        artifacts_root: Path to artifact store directory. Falls back to
+            MONET_ARTIFACTS_DIR env var, then to ``Path(".artifacts")``.
         enable_tracing: Whether to eagerly configure OpenTelemetry tracing.
         agents: Additional capabilities to declare in the manifest.
             Agents registered via ``@agent`` are auto-declared.
@@ -85,27 +85,31 @@ async def bootstrap(
         The background worker task, or None when *lazy_worker* is True.
         Cancel the task on shutdown when non-None.
     """
+    # 0. Validate full server config and log a redacted summary before
+    #    anything else fires. A typo or missing required value fails
+    #    here rather than 500-ing on a later request.
+    server_cfg = ServerConfig.load()
+    server_cfg.validate_for_boot()
+    _log.info("monet server booted: %s", server_cfg.redacted_summary())
+
     # 1. Tracing
     if enable_tracing:
         from monet.core.tracing import configure_tracing
 
-        configure_tracing()
+        configure_tracing(server_cfg.observability)
 
-    # 2. Catalogue
-    # In monolith mode (default), the server configures the catalogue and
+    # 2. Artifact store
+    # In monolith mode (default), the server configures the store and
     # the in-process worker inherits it. In distributed mode (set
     # MONET_DISTRIBUTED=1), the server has no need to read or write
-    # artifacts — workers configure their own catalogue at startup.
-    distributed_mode = os.environ.get("MONET_DISTRIBUTED", "").lower() in (
-        "1",
-        "true",
-    )
-    if not distributed_mode:
-        from monet.catalogue import catalogue_from_env, configure_catalogue
+    # artifacts — workers configure their own store at startup.
+    artifacts_cfg = ArtifactsConfig.load()
+    if not artifacts_cfg.distributed:
+        from monet.artifacts import artifacts_from_env, configure_artifacts
 
-        root = Path(catalogue_root) if catalogue_root else None
-        service = catalogue_from_env(default_root=root)
-        configure_catalogue(service)
+        root = Path(artifacts_root) if artifacts_root else None
+        service = artifacts_from_env(default_root=root)
+        configure_artifacts(service)
 
     # 3. Manifest declarations (supplemental to @agent auto-declarations)
     from monet.agent_manifest import configure_agent_manifest

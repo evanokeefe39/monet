@@ -27,13 +27,16 @@ def create_app(
     """Create the monet orchestration server FastAPI application.
 
     Args:
-        config_path: Path to monet.toml. Uses defaults if not provided.
+        config_path: Path to monet.toml. When ``None``, resolves via
+            :func:`monet.config.default_config_path` (which consults
+            ``MONET_CONFIG_PATH`` and then ``Path.cwd() / "monet.toml"``).
         queue: Task queue implementation. Defaults to InMemoryTaskQueue.
     """
     import logging
 
     from fastapi import FastAPI as _FastAPI
 
+    from monet.config import default_config_path
     from monet.core.manifest import default_manifest
     from monet.server._config import load_config
     from monet.server._deployment import DeploymentStore
@@ -41,7 +44,8 @@ def create_app(
 
     logger = logging.getLogger("monet.server")
 
-    config = load_config(config_path)
+    resolved_path = config_path if config_path is not None else default_config_path()
+    config = load_config(resolved_path if resolved_path.exists() else None)
 
     if queue is None:
         from monet.queue.backends.memory import InMemoryTaskQueue

@@ -10,19 +10,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import secrets
 import uuid
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 
+from monet.config import OrchestrationConfig
+
 if TYPE_CHECKING:
     from monet.queue import TaskQueue
     from monet.types import AgentResult, AgentRunContext
-
-# Default timeout for queue poll (seconds). Override via MONET_AGENT_TIMEOUT.
-_DEFAULT_TIMEOUT = 600.0
 
 _log = logging.getLogger("monet.orchestration")
 
@@ -46,16 +44,6 @@ def configure_queue(queue: TaskQueue | None) -> None:
 def get_queue() -> TaskQueue | None:
     """Return the currently configured queue, or None."""
     return _task_queue
-
-
-def _get_timeout() -> float:
-    raw = os.environ.get("MONET_AGENT_TIMEOUT")
-    if not raw:
-        return _DEFAULT_TIMEOUT
-    try:
-        return float(raw)
-    except ValueError:
-        return _DEFAULT_TIMEOUT
 
 
 def _generate_trace_id() -> str:
@@ -140,7 +128,8 @@ async def invoke_agent(
         progress_task = asyncio.create_task(_forward_progress(_task_queue, task_id))
         try:
             try:
-                result = await _task_queue.poll_result(task_id, timeout=_get_timeout())
+                timeout = OrchestrationConfig.load().agent_timeout
+                result = await _task_queue.poll_result(task_id, timeout=timeout)
             except TimeoutError:
                 # Cancel the task so workers don't waste resources on it
                 await _task_queue.cancel(task_id)
