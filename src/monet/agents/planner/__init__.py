@@ -17,7 +17,6 @@ from monet import (
     get_run_logger,
     write_artifact,
 )
-from monet.exceptions import NeedsHumanReview
 from monet.orchestration._state import WorkBrief
 
 from .._prompts import extract_text, make_env
@@ -126,9 +125,6 @@ async def planner_plan(
     except ValidationError as exc:
         msg = f"Planner output failed WorkBrief validation: {exc}"
         raise ValueError(msg) from exc
-
-    if work_brief.is_sensitive:
-        raise NeedsHumanReview(reason=f"Topic may be sensitive: {work_brief.goal}")
 
     routing_skeleton = work_brief.to_routing_skeleton()
 

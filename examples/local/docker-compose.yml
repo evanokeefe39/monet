@@ -1,22 +1,26 @@
 services:
-  postgres:
+  # Postgres is provisioned automatically by `monet dev`. Do NOT start a
+  # second one here — aegra's auto-generated .monet/docker-compose.yml
+  # already binds port 5432 and tears itself down between examples.
+  #
+  # Everything below is the optional Langfuse tracing stack. Start it
+  # with:  docker compose --profile tracing up -d
+
+  postgres-tracing:
     image: postgres:16
+    profiles: [tracing]
     environment:
-      POSTGRES_USER: monet
-      POSTGRES_PASSWORD: monet
-      POSTGRES_DB: monet
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
     volumes:
       - pgdata:/var/lib/postgresql/data
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U monet"]
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
       interval: 5s
       timeout: 5s
       retries: 5
-
-  # ── Tracing stack (opt-in: docker compose --profile tracing up) ──
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
@@ -85,7 +89,7 @@ services:
     image: langfuse/langfuse-worker:latest
     profiles: [tracing]
     depends_on:
-      postgres:
+      postgres-tracing:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
@@ -95,7 +99,7 @@ services:
         condition: service_healthy
     mem_limit: 256m
     environment:
-      DATABASE_URL: postgresql://monet:monet@postgres:5432/monet
+      DATABASE_URL: postgresql://langfuse:langfuse@postgres-tracing:5432/langfuse
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
       CLICKHOUSE_USER: langfuse
@@ -117,7 +121,7 @@ services:
     image: langfuse/langfuse:latest
     profiles: [tracing]
     environment:
-      DATABASE_URL: postgresql://monet:monet@postgres:5432/monet
+      DATABASE_URL: postgresql://langfuse:langfuse@postgres-tracing:5432/langfuse
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
       CLICKHOUSE_USER: langfuse
@@ -142,7 +146,7 @@ services:
       - "3000:3000"
     mem_limit: 512m
     depends_on:
-      postgres:
+      postgres-tracing:
         condition: service_healthy
       clickhouse:
         condition: service_healthy

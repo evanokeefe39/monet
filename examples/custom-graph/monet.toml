@@ -4,4 +4,3 @@
 
 [entrypoints.review]
 graph = "review"
-kind = "single"

@@ -143,7 +143,6 @@ class WorkBrief(BaseModel):
     goal: str
     nodes: list[WorkBriefNode]
     assumptions: list[str] = []
-    is_sensitive: bool = False
 
     @model_validator(mode="after")
     def validate_graph(self) -> WorkBrief:
