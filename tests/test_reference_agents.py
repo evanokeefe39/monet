@@ -69,22 +69,44 @@ async def test_planner_triage_returns_json() -> None:
 
 
 async def test_planner_plan_returns_brief() -> None:
-    with patch(
-        "monet.agents.planner._get_model",
-        return_value=_mock(
-            '{"goal": "Test goal", "phases": [], "is_sensitive": false}'
-        ),
-    ):
+    payload = (
+        '{"goal": "Test goal",'
+        ' "nodes": ['
+        '{"id": "research", "depends_on": [],'
+        ' "agent_id": "researcher", "command": "deep",'
+        ' "task": "research it"}'
+        "],"
+        ' "is_sensitive": false}'
+    )
+    with patch("monet.agents.planner._get_model", return_value=_mock(payload)):
         result = await invoke_agent("planner", command="plan", task="plan a thing")
     assert result.success
-    assert isinstance(result.output, str) and "Test goal" in result.output
+    # Output is now a dict with artifact id + routing skeleton.
+    assert isinstance(result.output, dict)
+    assert "work_brief_artifact_id" in result.output
+    assert "routing_skeleton" in result.output
+    skeleton = result.output["routing_skeleton"]
+    assert skeleton["goal"] == "Test goal"
+    assert len(skeleton["nodes"]) == 1
+    assert skeleton["nodes"][0]["id"] == "research"
+    # Routing skeleton does NOT carry task content.
+    assert "task" not in skeleton["nodes"][0]
+    # Planner registers a keyed artifact.
+    assert len(result.artifacts) == 1
+    assert result.artifacts[0].get("key") == "work_brief"
 
 
 async def test_planner_plan_sensitive_raises_human_review() -> None:
-    with patch(
-        "monet.agents.planner._get_model",
-        return_value=_mock('{"goal": "Sensitive", "phases": [], "is_sensitive": true}'),
-    ):
+    payload = (
+        '{"goal": "Sensitive",'
+        ' "nodes": ['
+        '{"id": "review", "depends_on": [],'
+        ' "agent_id": "qa", "command": "fast",'
+        ' "task": "review"}'
+        "],"
+        ' "is_sensitive": true}'
+    )
+    with patch("monet.agents.planner._get_model", return_value=_mock(payload)):
         result = await invoke_agent("planner", command="plan", task="health advice")
     assert not result.success
     assert result.has_signal(SignalType.NEEDS_HUMAN_REVIEW)

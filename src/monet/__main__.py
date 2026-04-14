@@ -62,19 +62,20 @@ async def _main(message: str) -> None:
             print(json.dumps({"phase": "planning"}, indent=2))
             return
 
-        # Execution
+        # Execution — pointer-only DAG traversal
+        pointer = planning_state.get("work_brief_pointer")
+        skeleton = planning_state.get("routing_skeleton")
+        if pointer is None or skeleton is None:
+            print(json.dumps({"phase": "execution", "error": "no_plan"}, indent=2))
+            return
+
         execution = build_execution_graph().compile(checkpointer=checkpointer)
         await execution.ainvoke(  # type: ignore[call-overload]
             {
-                "work_brief": planning_state["work_brief"],
+                "work_brief_pointer": pointer,
+                "routing_skeleton": skeleton,
                 "trace_id": thread_id,
                 "run_id": thread_id,
-                "current_phase_index": 0,
-                "current_wave_index": 0,
-                "wave_results": [],
-                "wave_reflections": [],
-                "completed_phases": [],
-                "revision_count": 0,
             },
             config={"configurable": {"thread_id": f"{thread_id}-execution"}},
         )

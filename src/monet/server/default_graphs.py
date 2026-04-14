@@ -56,17 +56,17 @@ def _create_queue() -> TaskQueue:
     """
     backend = os.getenv("MONET_QUEUE_BACKEND", "memory")
     if backend == "redis":
-        from monet.core.queue_redis import RedisTaskQueue
+        from monet.queue.backends.redis import RedisTaskQueue
 
-        return RedisTaskQueue(os.environ["REDIS_URI"])  # type: ignore[return-value]
+        return RedisTaskQueue(os.environ["REDIS_URI"])
     if backend == "sqlite":
-        from monet.core.queue_sqlite import SQLiteTaskQueue
+        from monet.queue.backends.sqlite import SQLiteTaskQueue
 
-        return SQLiteTaskQueue(os.getenv("MONET_QUEUE_DB", ".monet/queue.db"))  # type: ignore[return-value]
+        return SQLiteTaskQueue(os.getenv("MONET_QUEUE_DB", ".monet/queue.db"))
     if backend == "upstash":
-        from monet.core.queue_upstash import UpstashTaskQueue
+        from monet.queue.backends.upstash import UpstashTaskQueue
 
-        return UpstashTaskQueue()  # type: ignore[return-value]
+        return UpstashTaskQueue()
     return InMemoryTaskQueue()  # type: ignore[no-any-return]
 
 

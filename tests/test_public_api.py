@@ -8,6 +8,7 @@ def test_monet_root_exports() -> None:
 
     expected = {
         "agent",
+        "AgentManifestHandle",
         "AgentMeta",
         "AgentResult",
         "AgentRunContext",
@@ -23,10 +24,12 @@ def test_monet_root_exports() -> None:
         "RECOVERABLE",
         "ROUTING",
         "AgentStream",
+        "find_artifact",
         "log_handler",
         "on_hook",
         "webhook_handler",
         "write_artifact",
+        "get_agent_manifest",
         "get_run_context",
         "get_run_logger",
         "get_catalogue",

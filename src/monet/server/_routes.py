@@ -99,6 +99,19 @@ class HealthResponse(BaseModel):
 
 # -- Router ----------------------------------------------------------------
 
+
+def _build_artifact_pointer(raw: dict[str, Any]) -> ArtifactPointer:
+    """Construct ArtifactPointer preserving optional key field."""
+    pointer = ArtifactPointer(
+        artifact_id=raw.get("artifact_id", ""),
+        url=raw.get("url", ""),
+    )
+    key = raw.get("key")
+    if isinstance(key, str):
+        pointer["key"] = key
+    return pointer
+
+
 router = APIRouter(prefix="/api/v1")
 
 
@@ -195,13 +208,7 @@ async def complete_task(
     result = AgentResult(
         success=body.success,
         output=body.output,
-        artifacts=tuple(
-            ArtifactPointer(
-                artifact_id=a.get("artifact_id", ""),
-                url=a.get("url", ""),
-            )
-            for a in body.artifacts
-        ),
+        artifacts=tuple(_build_artifact_pointer(a) for a in body.artifacts),
         signals=tuple(
             Signal(
                 type=s.get("type", ""),
@@ -228,6 +235,25 @@ async def fail_task(
 ) -> dict[str, str]:
     """Post a failure for a claimed task."""
     await queue.fail(task_id, body.error)
+    return {"status": "ok"}
+
+
+@router.post(
+    "/tasks/{task_id}/progress",
+    dependencies=[Depends(require_api_key)],
+)
+async def post_progress(
+    task_id: str,
+    body: dict[str, Any],
+    queue: Queue,
+) -> dict[str, str]:
+    """Post a progress event from a remote worker to the server queue.
+
+    The server queue fans events out to any active subscribers via
+    ``subscribe_progress``. The server's ``invoke_agent`` forwards those
+    events into the active LangGraph stream.
+    """
+    await queue.publish_progress(task_id, body)
     return {"status": "ok"}
 
 

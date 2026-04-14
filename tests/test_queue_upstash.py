@@ -1,3 +1,4 @@
+# mypy: disable-error-code="return-value,comparison-overlap,arg-type,misc"
 """Tests for the Upstash Redis-backed task queue.
 
 Requires:
@@ -53,7 +54,7 @@ def _require_credentials() -> tuple[str, str]:
 async def queue():  # type: ignore[no-untyped-def]
     """Provide an UpstashTaskQueue with a unique prefix per test."""
     url, token = _require_credentials()
-    from monet.core.queue_upstash import UpstashTaskQueue
+    from monet.queue import UpstashTaskQueue
 
     # Unique prefix per test run to avoid collisions.
     prefix = f"monet-test-{uuid.uuid4().hex[:8]}"
@@ -181,7 +182,7 @@ async def test_fail_task(queue) -> None:  # type: ignore[no-untyped-def]
 async def test_prefix_isolation(queue) -> None:  # type: ignore[no-untyped-def]
     """Two queues with different prefixes do not interfere."""
     url, token = _require_credentials()
-    from monet.core.queue_upstash import UpstashTaskQueue
+    from monet.queue import UpstashTaskQueue
 
     other_prefix = f"monet-test-other-{uuid.uuid4().hex[:8]}"
     other = UpstashTaskQueue(

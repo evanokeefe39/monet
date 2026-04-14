@@ -161,6 +161,9 @@ class TestHookRegistry:
 class TestOnHook:
     def test_registers_to_default_registry(self) -> None:
         with default_hook_registry.hook_scope():
+            # Clear baseline registrations (e.g. inject_plan_context from
+            # monet.hooks) so this test asserts exact-count behavior.
+            default_hook_registry.clear()
 
             @on_hook("before_agent", match="test-agent")
             async def my_hook(

@@ -1,6 +1,7 @@
 """monet — multi-agent orchestration SDK."""
 
 from ._run import run
+from .core.agent_manifest import AgentManifestHandle, get_agent_manifest
 from .core.catalogue import CatalogueHandle, get_catalogue
 from .core.context import get_run_context, get_run_logger
 from .core.context_resolver import resolve_context
@@ -18,6 +19,7 @@ from .types import (
     ArtifactPointer,
     Signal,
     SignalType,
+    find_artifact,
 )
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "INFORMATIONAL",
     "RECOVERABLE",
     "ROUTING",
+    "AgentManifestHandle",
     "AgentMeta",
     "AgentResult",
     "AgentRunContext",
@@ -42,6 +45,8 @@ __all__ = [
     "agent",
     "emit_progress",
     "emit_signal",
+    "find_artifact",
+    "get_agent_manifest",
     "get_catalogue",
     "get_run_context",
     "get_run_logger",

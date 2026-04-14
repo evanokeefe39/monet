@@ -10,10 +10,9 @@ import pytest
 
 from monet.catalogue import InMemoryCatalogueClient, configure_catalogue
 from monet.core.manifest import default_manifest
-from monet.core.queue_memory import InMemoryTaskQueue
-from monet.core.queue_worker import run_worker
 from monet.core.registry import default_registry
 from monet.orchestration._invoke import configure_queue
+from monet.queue import InMemoryTaskQueue, run_worker
 
 if TYPE_CHECKING:
     from monet.types import AgentRunContext

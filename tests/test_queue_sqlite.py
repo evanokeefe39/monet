@@ -6,8 +6,7 @@ import asyncio
 
 import pytest
 
-from monet.core.queue_sqlite import SQLiteTaskQueue
-from monet.queue import TaskStatus
+from monet.queue import SQLiteTaskQueue, TaskStatus
 from monet.types import (
     AgentResult,
     AgentRunContext,

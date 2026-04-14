@@ -206,3 +206,70 @@ async def test_signal_accumulation_through_decorator() -> None:
     result = await signal_agent(ctx)
     assert result.success is True
     assert result.has_signal(SignalType.LOW_CONFIDENCE) is True
+
+
+# --- Key field tests ---
+
+
+async def test_write_with_key() -> None:
+    """get_catalogue().write() with key includes key in returned pointer."""
+
+    @agent(agent_id="key-writer")
+    async def key_writer(task: str) -> str:
+        ptr = await get_catalogue().write(
+            content=b"brief data",
+            content_type="application/json",
+            summary="Work brief",
+            confidence=1.0,
+            completeness="complete",
+            key="work_brief",
+        )
+        return f"wrote: {ptr['artifact_id']}"
+
+    ctx = _ctx(task="test", agent_id="key-writer")
+    result = await key_writer(ctx)
+    assert result.success is True
+    assert len(result.artifacts) == 1
+    assert result.artifacts[0].get("key") == "work_brief"
+
+
+async def test_write_without_key() -> None:
+    """get_catalogue().write() without key omits key from pointer."""
+
+    @agent(agent_id="no-key-writer")
+    async def no_key_writer(task: str) -> str:
+        ptr = await get_catalogue().write(
+            content=b"data",
+            content_type="text/plain",
+            summary="No key",
+            confidence=0.5,
+            completeness="complete",
+        )
+        return f"wrote: {ptr['artifact_id']}"
+
+    ctx = _ctx(task="test", agent_id="no-key-writer")
+    result = await no_key_writer(ctx)
+    assert result.success is True
+    assert len(result.artifacts) == 1
+    assert "key" not in result.artifacts[0]
+
+
+async def test_write_artifact_key_passthrough() -> None:
+    """write_artifact() passes key through to catalogue."""
+    from monet import write_artifact
+
+    @agent(agent_id="stub-key-writer")
+    async def stub_key_writer(task: str) -> str:
+        ptr = await write_artifact(
+            content=b"brief",
+            content_type="application/json",
+            summary="Brief",
+            key="work_brief",
+        )
+        return f"wrote: {ptr['artifact_id']}"
+
+    ctx = _ctx(task="test", agent_id="stub-key-writer")
+    result = await stub_key_writer(ctx)
+    assert result.success is True
+    assert len(result.artifacts) == 1
+    assert result.artifacts[0].get("key") == "work_brief"

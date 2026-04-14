@@ -14,42 +14,15 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from monet.types import AgentResult, AgentRunContext
 
 __all__ = [
-    "InMemoryTaskQueue",  # noqa: F822
-    "RedisTaskQueue",  # noqa: F822
-    "SQLiteTaskQueue",  # noqa: F822
     "TaskQueue",
     "TaskRecord",
     "TaskStatus",
-    "UpstashTaskQueue",  # noqa: F822
-    "run_worker",  # noqa: F822
 ]
-
-
-def __getattr__(name: str) -> Any:
-    if name == "InMemoryTaskQueue":
-        from monet.core.queue_memory import InMemoryTaskQueue
-
-        return InMemoryTaskQueue
-    if name == "SQLiteTaskQueue":
-        from monet.core.queue_sqlite import SQLiteTaskQueue
-
-        return SQLiteTaskQueue
-    if name == "RedisTaskQueue":
-        from monet.core.queue_redis import RedisTaskQueue
-
-        return RedisTaskQueue
-    if name == "UpstashTaskQueue":
-        from monet.core.queue_upstash import UpstashTaskQueue
-
-        return UpstashTaskQueue
-    if name == "run_worker":
-        from monet.core.queue_worker import run_worker
-
-        return run_worker
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class TaskStatus(StrEnum):
@@ -145,5 +118,24 @@ class TaskQueue(Protocol):
 
         Workers should check for cancellation and skip execution.
         If the task is already completed or failed, this is a no-op.
+        """
+        ...
+
+    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+        """Publish a progress event for a task.
+
+        Best-effort — implementations must NOT raise on backpressure,
+        serialisation errors, or transport failures. The worker-side
+        emit_progress fan-out uses this to forward events to subscribers.
+        """
+        ...
+
+    def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
+        """Yield progress events for a task until it completes.
+
+        Server-side only. RemoteQueue implementations raise
+        NotImplementedError — remote progress flows via POST
+        /api/v1/tasks/{task_id}/progress from the worker, not a pull
+        subscription.
         """
         ...

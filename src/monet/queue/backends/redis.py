@@ -539,3 +539,27 @@ class RedisTaskQueue:
             "claimed_at": claimed_at,
             "completed_at": completed_at,
         }
+
+    # --- Progress streaming ---
+
+    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+        """No-op: cross-process Redis progress requires pub/sub wiring.
+
+        Implemented as a follow-on task. In the meantime, workers that
+        need progress fan-out should use InMemoryTaskQueue (monolith) or
+        POST to the server's /progress route via RemoteQueue.
+        """
+        return
+
+    def subscribe_progress(self, task_id: str) -> Any:
+        """Raise NotImplementedError.
+
+        See ``publish_progress`` note — pub/sub subscription is a
+        follow-on task. ``_forward_progress`` in ``invoke_agent``
+        suppresses this exception.
+        """
+        raise NotImplementedError(
+            "subscribe_progress is not yet implemented for RedisTaskQueue. "
+            "Use InMemoryTaskQueue for progress streaming, or route "
+            "workers through the server's POST /progress endpoint."
+        )

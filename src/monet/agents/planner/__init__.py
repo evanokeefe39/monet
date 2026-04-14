@@ -8,9 +8,17 @@ import os
 from pathlib import Path
 from typing import Any
 
-from monet import agent, emit_progress, get_run_logger
-from monet.core.manifest import default_manifest
+from pydantic import ValidationError
+
+from monet import (
+    agent,
+    emit_progress,
+    get_agent_manifest,
+    get_run_logger,
+    write_artifact,
+)
 from monet.exceptions import NeedsHumanReview
+from monet.orchestration._state import WorkBrief
 
 from .._prompts import extract_text, make_env
 
@@ -39,6 +47,19 @@ def _strip_json_fence(text: str) -> str:
     return text.strip()
 
 
+def _build_roster() -> list[dict[str, Any]]:
+    """Return all declared agents sorted by (agent_id, command).
+
+    Planner self-exclusion is applied at prompt-render time by filtering
+    on ``agent_id``. Keeping the manifest read unfiltered means the
+    manifest stays a dumb service — business logic lives in the planner.
+    """
+    return sorted(
+        (dict(cap) for cap in get_agent_manifest().list_agents()),
+        key=lambda c: (c["agent_id"], c["command"]),
+    )
+
+
 planner = agent("planner")
 
 
@@ -49,14 +70,7 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
     emit_progress({"status": "triaging", "agent": "planner"})
     log.info("planner/fast triaging: %s", task[:80])
 
-    roster = sorted(
-        (
-            cap
-            for cap in default_manifest.capabilities()
-            if cap["agent_id"] not in _PLANNER_EXCLUDE
-        ),
-        key=lambda c: (c["agent_id"], c["command"]),
-    )
+    roster = [cap for cap in _build_roster() if cap["agent_id"] not in _PLANNER_EXCLUDE]
     prompt = _env.get_template("triage.j2").render(
         task=task,
         context=context or [],
@@ -69,8 +83,17 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
 
 
 @planner(command="plan")
-async def planner_plan(task: str, context: list[dict[str, Any]] | None = None) -> str:
-    """Build a structured work brief. Returns JSON."""
+async def planner_plan(
+    task: str, context: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Build a structured work brief with flat routing DAG.
+
+    Returns inline output with ``work_brief_artifact_id`` (keyed artifact
+    in the catalogue) and ``routing_skeleton`` (flat DAG for the
+    execution graph). The orchestrator never reads the full brief —
+    workers resolve it via the inject_plan_context hook at invocation
+    time.
+    """
     emit_progress({"status": "planning", "agent": "planner"})
 
     feedback = ""
@@ -79,14 +102,7 @@ async def planner_plan(task: str, context: list[dict[str, Any]] | None = None) -
             feedback = entry.get("content", "")
             break
 
-    roster = sorted(
-        (
-            cap
-            for cap in default_manifest.capabilities()
-            if cap["agent_id"] not in _PLANNER_EXCLUDE
-        ),
-        key=lambda c: (c["agent_id"], c["command"]),
-    )
+    roster = [cap for cap in _build_roster() if cap["agent_id"] not in _PLANNER_EXCLUDE]
     prompt = _env.get_template("plan.j2").render(
         task=task,
         context=context or [],
@@ -98,12 +114,34 @@ async def planner_plan(task: str, context: list[dict[str, Any]] | None = None) -
     )
     raw = _strip_json_fence(extract_text(response))
     try:
-        brief = json.loads(raw)
-    except json.JSONDecodeError:
-        brief = {"goal": task, "phases": [], "assumptions": []}
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        msg = f"Planner returned non-JSON output: {exc}"
+        raise ValueError(msg) from exc
 
-    if brief.get("is_sensitive"):
-        goal = brief.get("goal", task)
-        raise NeedsHumanReview(reason=f"Topic may be sensitive: {goal}")
+    # Validate shape before writing anything. WorkBrief validation guarantees
+    # to_routing_skeleton() succeeds without its own validation pass.
+    try:
+        work_brief = WorkBrief.model_validate(payload)
+    except ValidationError as exc:
+        msg = f"Planner output failed WorkBrief validation: {exc}"
+        raise ValueError(msg) from exc
 
-    return json.dumps(brief, separators=(",", ":"))
+    if work_brief.is_sensitive:
+        raise NeedsHumanReview(reason=f"Topic may be sensitive: {work_brief.goal}")
+
+    routing_skeleton = work_brief.to_routing_skeleton()
+
+    pointer = await write_artifact(
+        content=work_brief.model_dump_json().encode(),
+        content_type="application/json",
+        summary=f"Work brief: {work_brief.goal[:100]}",
+        confidence=1.0,
+        completeness="complete",
+        key="work_brief",
+    )
+
+    return {
+        "work_brief_artifact_id": pointer["artifact_id"],
+        "routing_skeleton": routing_skeleton.model_dump(),
+    }

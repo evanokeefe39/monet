@@ -10,9 +10,7 @@ import logging
 
 import pytest  # noqa: TC002
 
-from monet.core.queue_memory import InMemoryTaskQueue
-from monet.core.queue_sqlite import SQLiteTaskQueue
-from monet.queue import TaskStatus
+from monet.queue import InMemoryTaskQueue, SQLiteTaskQueue, TaskStatus
 from monet.types import AgentResult, AgentRunContext
 
 

@@ -1,5 +1,10 @@
 """Planning graph — iterative work brief construction with HITL approval.
 
+The orchestrator is pointer-only: planning state carries a ``work_brief_pointer``
+(catalogue artifact) and a ``routing_skeleton`` (flat DAG of agent invocations).
+The full work brief artifact is never read on the orchestration side — workers
+resolve it via the ``inject_plan_context`` hook at invocation time.
+
 Resume after interrupt via:
     Command(resume={"approved": bool, "feedback": str | None})
 
@@ -8,7 +13,6 @@ Returns an uncompiled StateGraph.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import (
@@ -16,24 +20,26 @@ from langchain_core.runnables import (
 )
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
+from opentelemetry import trace
+from pydantic import ValidationError
 
-from monet import get_catalogue
 from monet.core.tracing import attached_trace, extract_carrier_from_config
+from monet.types import find_artifact
 
 from ._invoke import invoke_agent
-from ._result_parser import ParseFailure, parse_json_output
 from ._retry_budget import check_budget, increment_budget
-from ._state import PlanningState
-from ._validate import _assert_registered
+from ._state import PlanningState, RoutingSkeleton
 
 if TYPE_CHECKING:
     from monet.core.hooks import GraphHookRegistry
 
 MAX_REVISIONS = 3
 
+_tracer = trace.get_tracer("monet.orchestration.planning")
+
 
 async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str, Any]:
-    """Call planner/plan to produce a work brief."""
+    """Call planner/plan, store pointer + skeleton. Never read catalogue content."""
     context_entries: list[dict[str, Any]] = []
     for entry in state.get("planning_context") or []:
         context_entries.append(
@@ -59,30 +65,85 @@ async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str
             run_id=state.get("run_id", ""),
         )
 
-    parsed = parse_json_output(result)
-    if isinstance(parsed, ParseFailure):
-        # Fallback: check catalogue artifacts for the brief.
-        if result.artifacts:
-            pointer = result.artifacts[0]
-            content_bytes, _meta = await get_catalogue().read(pointer["artifact_id"])
-            brief: dict[str, Any] = json.loads(content_bytes.decode())
-        else:
-            brief = {}
-    else:
-        brief = parsed
+    if not result.success:
+        reasons = "; ".join(
+            (s.get("reason") or "").splitlines()[0][:200]
+            for s in result.signals
+            if s.get("reason")
+        )
+        return {
+            "work_brief_pointer": None,
+            "routing_skeleton": None,
+            "planner_error": (
+                f"Planner failed: {reasons}" if reasons else "Planner failed"
+            ),
+        }
 
-    return {"work_brief": brief}
+    pointer = find_artifact(result.artifacts, "work_brief")
+    if pointer is None:
+        return {
+            "work_brief_pointer": None,
+            "routing_skeleton": None,
+            "planner_error": (
+                f"Planner did not produce a work_brief artifact. "
+                f"{len(result.artifacts)} artifact(s) returned."
+            ),
+        }
+
+    inline = result.output if isinstance(result.output, dict) else {}
+
+    # Cross-check artifact id reported inline against the keyed artifact.
+    reported_id = inline.get("work_brief_artifact_id")
+    if reported_id and reported_id != pointer["artifact_id"]:
+        return {
+            "work_brief_pointer": None,
+            "routing_skeleton": None,
+            "planner_error": (
+                f"Planner reported artifact_id '{reported_id}' "
+                f"but keyed artifact has '{pointer['artifact_id']}'."
+            ),
+        }
+
+    # Validate the routing skeleton from inline output.
+    skeleton_raw = inline.get("routing_skeleton")
+    if not skeleton_raw:
+        return {
+            "work_brief_pointer": None,
+            "routing_skeleton": None,
+            "planner_error": "Planner did not return routing_skeleton in output.",
+        }
+    try:
+        RoutingSkeleton.model_validate(skeleton_raw)
+    except ValidationError as exc:
+        return {
+            "work_brief_pointer": None,
+            "routing_skeleton": None,
+            "planner_error": f"Routing skeleton invalid: {exc}",
+        }
+
+    return {
+        "work_brief_pointer": pointer,
+        "routing_skeleton": skeleton_raw,
+        "planner_error": None,
+    }
 
 
 async def human_approval_node(state: PlanningState) -> dict[str, Any]:
-    """Interrupt for human approval."""
-    brief = state.get("work_brief") or {}
-    summary = {
-        "goal": brief.get("goal", ""),
-        "phases": [p.get("name", "") for p in brief.get("phases", [])],
-        "assumptions": brief.get("assumptions", []),
-    }
-    decision = interrupt(summary)
+    """Interrupt for human approval.
+
+    Passes both the work brief pointer and the routing skeleton to the
+    interrupt payload so UIs can render plan structure without a
+    catalogue read.
+    """
+    pointer = state.get("work_brief_pointer")
+    if not pointer:
+        return {"plan_approved": False}
+    decision = interrupt(
+        {
+            "work_brief_pointer": pointer,
+            "routing_skeleton": state.get("routing_skeleton"),
+        }
+    )
 
     approved = decision.get("approved", False) if isinstance(decision, dict) else False
     feedback = decision.get("feedback") if isinstance(decision, dict) else None
@@ -98,10 +159,25 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
     return {"plan_approved": False}
 
 
+async def planning_failed_node(state: PlanningState) -> dict[str, Any]:
+    """Terminal node for planning failures — emits OTel span."""
+    error = state.get("planner_error") or "Unknown planning failure"
+    with _tracer.start_as_current_span(
+        "planning.failed",
+        attributes={
+            "monet.run_id": state.get("run_id", ""),
+            "monet.error": error[:500],
+        },
+    ):
+        pass
+    return {"plan_approved": False}
+
+
 def route_from_planner(state: PlanningState) -> str:
-    if state.get("work_brief"):
-        return "human_approval"
-    return END
+    """Exhaustive routing from planner: either approval or failure."""
+    if state.get("work_brief_pointer") is None:
+        return "planning_failed"
+    return "human_approval"
 
 
 def route_from_approval(state: PlanningState) -> str:
@@ -120,10 +196,8 @@ def build_planning_graph(
     Args:
         hooks: Optional graph hook registry. Fires ``before_planning``
             with the planning state before the planner runs, and
-            ``after_planning`` with the work brief after planning.
+            ``after_planning`` with the planner update after planning.
     """
-    _assert_registered("planner", "plan")
-
     _planner_inner = planner_node
 
     async def _planner_with_hooks(
@@ -132,10 +206,8 @@ def build_planning_graph(
         if hooks:
             state = await hooks.run("before_planning", state)
         update = await _planner_inner(state, config)
-        if hooks and update.get("work_brief"):
-            update["work_brief"] = await hooks.run(
-                "after_planning", update["work_brief"]
-            )
+        if hooks and update.get("routing_skeleton"):
+            update = await hooks.run("after_planning", update)
         return update
 
     node = _planner_with_hooks if hooks else planner_node
@@ -143,11 +215,18 @@ def build_planning_graph(
     graph = StateGraph(PlanningState)
     graph.add_node("planner", node)
     graph.add_node("human_approval", human_approval_node)
+    graph.add_node("planning_failed", planning_failed_node)
     graph.set_entry_point("planner")
     graph.add_conditional_edges(
-        "planner", route_from_planner, {"human_approval": "human_approval", END: END}
+        "planner",
+        route_from_planner,
+        {
+            "human_approval": "human_approval",
+            "planning_failed": "planning_failed",
+        },
     )
     graph.add_conditional_edges(
         "human_approval", route_from_approval, {"planner": "planner", END: END}
     )
+    graph.add_edge("planning_failed", END)
     return graph
