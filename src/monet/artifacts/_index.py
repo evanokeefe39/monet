@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import Float, Integer, String, Text, select
+from sqlalchemy import Float, Index, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -32,6 +32,16 @@ class ArtifactRecord(Base):
     trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[str] = mapped_column(Text, default="{}")  # JSON string
     created_at: Mapped[str] = mapped_column(String)
+
+    # Secondary indexes for the catalogue query patterns; the composite
+    # on (run_id, created_at) supports "chronological artifacts for a
+    # run" without a filesort.
+    __table_args__ = (
+        Index("ix_artifacts_run_id", "run_id"),
+        Index("ix_artifacts_agent_id", "agent_id"),
+        Index("ix_artifacts_trace_id", "trace_id"),
+        Index("ix_artifacts_run_created", "run_id", "created_at"),
+    )
 
 
 def _is_in_memory(db_url: str) -> bool:

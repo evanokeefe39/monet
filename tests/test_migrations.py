@@ -36,8 +36,46 @@ def _tables(path: Path) -> set[str]:
     return {row[0] for row in rows}
 
 
-def test_head_revision_is_baseline() -> None:
-    assert head_revision() == "0001_baseline"
+def test_head_revision_is_latest() -> None:
+    assert head_revision() == "0002_artifact_indexes"
+
+
+def test_artifacts_table_has_secondary_indexes(tmp_path: Path) -> None:
+    """Regression guard for DA-53 — catalogue query patterns must be
+    backed by indexes after the 0002 migration lands."""
+    db_path = tmp_path / "index.db"
+    apply_migrations(_file_url(db_path))
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='artifacts'"
+        ).fetchall()
+    finally:
+        conn.close()
+    names = {row[0] for row in rows}
+    assert {
+        "ix_artifacts_run_id",
+        "ix_artifacts_agent_id",
+        "ix_artifacts_trace_id",
+        "ix_artifacts_run_created",
+    }.issubset(names)
+
+
+def test_query_by_run_uses_index(tmp_path: Path) -> None:
+    """EXPLAIN QUERY PLAN must confirm the run_id index is chosen."""
+    db_path = tmp_path / "index.db"
+    apply_migrations(_file_url(db_path))
+    conn = sqlite3.connect(db_path)
+    try:
+        # SQLite picks either the run_id-only or composite index for this query;
+        # either satisfies the rule.
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM artifacts WHERE run_id = 'x'"
+        ).fetchall()
+    finally:
+        conn.close()
+    detail = " ".join(str(row) for row in plan)
+    assert "ix_artifacts_run" in detail, detail
 
 
 def test_apply_migrations_creates_tables(tmp_path: Path) -> None:
@@ -81,7 +119,7 @@ def test_stamp_head_marks_existing_db(tmp_path: Path) -> None:
     url = _file_url(db_path)
     stamp_head(url)
     assert check_at_head(url) is True
-    assert current_revision(url) == "0001_baseline"
+    assert current_revision(url) == head_revision()
 
 
 async def test_sqlite_index_initialise_in_memory_uses_create_all() -> None:
