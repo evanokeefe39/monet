@@ -1,0 +1,11 @@
+[project]
+name = "monet-chat-extended"
+version = "0.0.0"
+description = "monet chat with user-defined @agent capabilities surfaced as slash commands."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }

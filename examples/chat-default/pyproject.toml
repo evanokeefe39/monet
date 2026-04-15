@@ -1,0 +1,11 @@
+[project]
+name = "monet-chat-default"
+version = "0.0.0"
+description = "monet chat example — stock conversational REPL backed by Aegra threads."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }
