@@ -61,4 +61,9 @@ def test_auto_approve_happy_path(monet_dev_server: str) -> None:
         k = ev.get("event") or ev.get("type")
         if isinstance(k, str):
             kinds.add(k)
-    assert any("RunComplete" in k for k in kinds), f"no RunComplete in events: {kinds}"
+    # Event types serialise to snake_case. Pipeline may short-circuit at
+    # simple triage before planning runs; either way, run_complete proves
+    # the graph reached END without crashing mid-stream.
+    assert any("run_complete" in k for k in kinds), (
+        f"no run_complete in events: {kinds}"
+    )
