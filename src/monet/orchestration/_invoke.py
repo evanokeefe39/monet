@@ -15,15 +15,18 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import httpx
 from opentelemetry import trace
 
-from monet.config import OrchestrationConfig
+from monet.config import AuthConfig, OrchestrationConfig, QueueConfig
 from monet.queue import TaskStatus
 from monet.queue.backends.memory import InMemoryTaskQueue
 from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+from monet.server._auth import task_hmac
 
 if TYPE_CHECKING:
     from monet.queue import TaskQueue, TaskRecord
+    from monet.server._config import PoolConfig
     from monet.types import AgentResult, AgentRunContext
 
 _log = logging.getLogger("monet.orchestration")
@@ -32,6 +35,27 @@ _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"
 
 # Module-level queue — set via configure_queue() or bootstrap().
 _task_queue: TaskQueue | None = None
+
+# Module-level httpx client for push-dispatch POSTs. Lazy-init on first
+# use; closed by close_dispatch_client() on server shutdown.
+_dispatch_client: httpx.AsyncClient | None = None
+
+
+async def get_dispatch_client() -> httpx.AsyncClient:
+    """Return the process-wide httpx client used for push dispatch."""
+    global _dispatch_client
+    if _dispatch_client is None:
+        timeout = QueueConfig.load().push_dispatch_timeout
+        _dispatch_client = httpx.AsyncClient(timeout=timeout)
+    return _dispatch_client
+
+
+async def close_dispatch_client() -> None:
+    """Close the push-dispatch httpx client. Called from server shutdown."""
+    global _dispatch_client
+    if _dispatch_client is not None:
+        await _dispatch_client.aclose()
+        _dispatch_client = None
 
 
 def configure_queue(queue: TaskQueue | None) -> None:
@@ -154,7 +178,14 @@ async def invoke_agent(
             "monet.run_id": resolved_run_id,
         },
     ) as span:
+        # Register the task with the queue so wait_completion has state
+        # to observe. Push pools additionally POST to the provider
+        # webhook — pull pools rely on a worker's claim loop.
         await _task_queue.enqueue(record)
+        pool_cfg = _load_push_pool(pool)
+        if pool_cfg is not None:
+            await _dispatch_push(task_id, record, pool_cfg)
+            span.set_attribute("agent.pool.type", "push")
         # Forward worker-side progress into the current LangGraph stream
         # via emit_progress. Runs concurrently with wait_completion.
         progress_task = asyncio.create_task(_forward_progress(_task_queue, task_id))
@@ -168,6 +199,67 @@ async def invoke_agent(
             progress_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await progress_task
+
+
+def _load_push_pool(pool: str) -> PoolConfig | None:
+    """Return the pool's ``PoolConfig`` when ``type="push"``, else None.
+
+    A missing monet.toml or unconfigured pool name falls through as
+    ``None`` so local/pull pools skip the push branch transparently.
+    """
+    from monet.server._config import load_config
+
+    try:
+        pools = load_config()
+    except (ValueError, FileNotFoundError):
+        return None
+    cfg = pools.get(pool)
+    if cfg is None or cfg.type != "push":
+        return None
+    return cfg
+
+
+async def _dispatch_push(
+    task_id: str, record: TaskRecord, pool_cfg: PoolConfig
+) -> None:
+    """POST the dispatch envelope to a push-pool webhook."""
+    from monet.config import MONET_SERVER_URL
+    from monet.config._env import read_str
+    from monet.core._serialization import serialize_task_record
+
+    if pool_cfg.url is None:
+        msg = f"Push pool {pool_cfg.name!r} has no URL configured"
+        raise RuntimeError(msg)
+    api_key = AuthConfig.load().api_key
+    if not api_key:
+        msg = "MONET_API_KEY must be set for push-pool HMAC token derivation"
+        raise RuntimeError(msg)
+    api_url = read_str(MONET_SERVER_URL)
+    if not api_url:
+        msg = (
+            "MONET_SERVER_URL must be set so push workers know where to "
+            "POST progress and completion callbacks"
+        )
+        raise RuntimeError(msg)
+
+    token = task_hmac(api_key, task_id)
+    envelope = {
+        "task_id": task_id,
+        "token": token,
+        "callback_url": f"{api_url.rstrip('/')}/api/v1/tasks/{task_id}",
+        "payload": serialize_task_record(record),
+    }
+    headers = {}
+    if pool_cfg.dispatch_secret:
+        headers["Authorization"] = f"Bearer {pool_cfg.dispatch_secret}"
+    client = await get_dispatch_client()
+    resp = await client.post(pool_cfg.url, json=envelope, headers=headers)
+    if resp.status_code >= 400:
+        msg = (
+            f"Push dispatch to {pool_cfg.url} for task {task_id} returned "
+            f"HTTP {resp.status_code}: {resp.text[:200]}"
+        )
+        raise RuntimeError(msg)
 
 
 async def _forward_progress(queue: TaskQueue, task_id: str) -> None:

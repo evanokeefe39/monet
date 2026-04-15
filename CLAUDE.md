@@ -6,6 +6,9 @@ monet is a multi-agent orchestration SDK for Python. MIT licensed, solo maintain
 
 Known issues (bugs, deprecations, standards violations, design gaps) live in `ISSUES.md`. Roadmap features live under `## Roadmap` below. Check `ISSUES.md` before picking maintenance work — do not duplicate or paper over listed issues without explicit scope.
 
+## Commits
+use /caveman:commits for git commits
+
 ## Layout
 
 - `src/monet/` — package source (src layout)
@@ -111,7 +114,7 @@ Six shapes. Full descriptions, wiring, and matrix in `docs/architecture/deployme
 
 - **S1 local all-in-one** — `monet dev` on a laptop, Docker-backed Postgres/Redis, `pool="local"` runs in-server. Tutorials and examples.
 - **S2 self-hosted production** — `aegra serve` + managed Postgres/Redis on user infra, `monet worker --server-url ...` processes, shared `MONET_API_KEY`. Single tenant. `examples/deployed/server/` + `examples/deployed/worker/`.
-- **S3 split fleet** — S2 with N worker pools across regions/hardware via `monet.toml [pools]`. Push pools declared but dispatcher unimplemented (see `## Roadmap` Priority 2). `examples/split-fleet/` ships both compose and Railway variants.
+- **S3 split fleet** — S2 with N worker pools across regions/hardware via `monet.toml [pools]`. Pull pools today; push pools ship via webhook to `pool.url` (see queue Phase 4). `examples/split-fleet/` ships both compose and Railway variants.
 - **S4 workers-only** — `monet worker` with no server URL, `InMemoryTaskQueue`. Test/library only; no pipeline composition.
 - **S5 SaaS** — vendor-hosted orchestrator, customer-hosted workers. Queue plane already compatible; control-plane primitives (pluggable auth, tenant ID, credential passthrough) pending. Productization (accounts, billing, UI) lives in a separate downstream repo that imports `monet`. See `## Roadmap` Priority 1.
 - **S6 embedded / no-server** — removed with `_run.py` and `__main__.py`. Trigger to reintroduce: library-only use case. See `## Deferred from client-decoupling refactor`.
@@ -137,8 +140,7 @@ Per-example `.monet/docker-compose.yml` files are pre-baked in the example direc
 
 ## Unimplemented
 
-- Push pool dispatch: `_config.py` declares a `push` pool type (for Cloud Run, Vercel Functions, Lambda) with URL + auth config, but no dispatch implementation exists. `invoke_agent` always enqueues to the task queue for pull-based workers. Implementing push requires a dispatcher in the orchestration layer that POSTs tasks to the pool's configured URL instead of enqueuing.
-- End-to-end integration tests: the test suite covers unit and component tests, but has no E2E coverage across deployment topologies. Needs tests for: (1) `monet dev` → `monet run` full pipeline with HITL approve/revise/reject, (2) `aegra serve` with external Postgres, (3) multiple concurrent `monet worker` instances claiming from the same server, (4) `MONET_QUEUE_BACKEND=redis` and `sqlite` queue backends under load, (5) custom graph registration via `aegra.json` with non-monet graphs driven via `--graph`, (6) worker reconnection after server restart, (7) the `monet run --auto-approve` happy path end-to-end.
+- End-to-end integration tests: the test suite covers unit and component tests, but has no E2E coverage across deployment topologies. Needs tests for: (1) `monet dev` → `monet run` full pipeline with HITL approve/revise/reject, (2) `aegra serve` with external Postgres, (3) multiple concurrent `monet worker` instances claiming from the same server, (4) `RedisStreamsTaskQueue` under load against a real Redis, (5) custom graph registration via `aegra.json` with non-monet graphs driven via `--graph`, (6) worker reconnection after server restart, (7) the `monet run --auto-approve` happy path end-to-end, (8) push pool round trip with a live Cloud Run Service / Lambda Function URL.
 
 ## Deferred from client-decoupling refactor
 
@@ -163,14 +165,18 @@ Queue plane is already SaaS-compatible (all backends pull-only, no worker inboun
 - **Tenant-scoped queries**: runs, threads, artifacts, pending decisions filter by `tenant_id` when present; unscoped when absent — `src/monet/server/_routes.py`, `src/monet/client/_wire.py`, `src/monet/artifacts/_service.py`.
 - **Credential passthrough on clients**: `MonetClient(url, api_key=...)` and `WorkerClient(api_key=...)` carry an opaque bearer; server decides how to validate.
 - **Server-side pool-claim validation** against tenant context — prevents cross-tenant task stealing on shared Redis/Upstash.
+- **Tenant-scoped stream keys** (`work:{tenant}:{pool}`) — trigger: Priority 1 lands. The current `work:{pool}` shape maps cleanly — one segment insertion, no protocol change.
+- **Per-tenant rate limits on `/progress` and `/complete`** — trigger: Priority 1 lands and brings tenant context to request handling.
 
-### Priority 2 — Push pool dispatch (enables Cloud Run / Lambda / Vercel workers)
+### Priority 2 — Push pool dispatch (shipped) + follow-ons
 
-Config schema already declares `type = "push"` in `[pools.<name>]` but `src/monet/orchestration/_invoke.py` silently enqueues for all pool types. Need:
+**Shipped in queue Phase 4** (commit log): `src/monet/orchestration/_invoke.py` now branches on `PoolConfig.type == "push"` and POSTs `{task_id, token, callback_url, payload}` directly to the pool's webhook URL via `httpx`. Workers run `monet worker --push` to stand up a FastAPI `POST /dispatch` endpoint (Cloud Run Service / Lambda Function URL / Azure Container Apps). Auth is HMAC-derived per task (`HMAC_SHA256(MONET_API_KEY, task_id)`) — no new signing-key env var. Batch providers (Cloud Run Jobs, ECS Fargate Task) use the public `monet.core.push_handler.handle_dispatch(...)` helper in a ~10-line user entry script. `handle_dispatch` is shared between the shipped FastAPI app and user scripts so there is no code duplication.
 
-- Forwarding worker that claims push-pool tasks and POSTs to the pool's configured URL with auth.
-- Lease TTL + sweeper so crashed push tasks requeue.
-- Removes push pool from `## Unimplemented` once shipped.
+Follow-ons to pick up when a concrete user surfaces them:
+
+- **Retry / circuit breaker on provider API failures** — today a webhook POST 5xx raises `RuntimeError`; there is no backoff + retry. Trigger: first observed transient throttling event on a real Cloud Run / Lambda integration.
+- **Convenience provider extras** `monet[gcp]` / `monet[aws]` / `monet[azure]` / `monet[all-providers]` — typed FastAPI handlers wrapping common cloud-side patterns (Cloud Run Jobs forwarder, ECS `RunTask` forwarder, Lambda native-event handler). Trigger: first user request for provider glue code inside monet. Until then, users write the ~10-line forwarder themselves.
+- **Long-running job suspend pattern** — `invoke_agent` currently stays alive waiting on `wait_completion` for the full `agent_timeout` duration regardless of pool type. Trigger: measured Aegra worker-thread pressure from jobs exceeding 5 minutes wall time.
 
 ### Priority 3 — Scheduled runs
 
@@ -197,6 +203,17 @@ Out of scope here: human-friendly schedule editors, calendar UIs, retry semantic
 - **E2E integration tests** across deployment topologies — see `## Unimplemented`.
 - **Optional summarizer agent** — framework-inserted wave context condensation; see `docs/architecture/roadmap.md`.
 - **Memory service** — first-class long-lived agent memory, peer of the artifact store. All agents can write memories; all agents receive relevant memories via hook injection or tool query. Memories are agent- and system-facing; artifacts are user-facing. Full design spec in `docs/architecture/memory-service.md`. Trigger: concrete user request for cross-run agent memory.
+
+### Queue Phase 4 — deferred items
+
+Deferred by the queue refactor (`queue-push-pull-system-update.md` v3) with explicit triggers. Each item is standalone; none blocks routine work.
+
+- **Multi-replica Aegra completion handling** — today `result:{task_id}` strings are written by the single Aegra replica that handles each run. Trigger: second replica added — needs leader election or per-replica consumer-group splits for the `/pools/{pool}/claim` XREADGROUP so two replicas do not hand the same task to two workers.
+- **JWT task tokens with `kid` + `exp`** — HMAC-derived bearers rotate with `MONET_API_KEY` (desired blast radius). Trigger: HMAC proves insufficient for cross-tenant revocation without rotating the whole API key.
+- **`schema_version` envelope field** — `serialize_task_record` is a single-version blob. Trigger: first incompatible change to `TaskRecord` or `AgentResult` shape.
+- **`MAXLEN` tuning from measurement** — `QueueConfig.work_stream_maxlen` defaults to unset (no trim). Trigger: first production observation at 100 users — pick numbers from observed `XLEN`, not round defaults.
+- **`monet queue stats` / `monet queue reclaim` CLI inspectors** — operator-facing introspection. Trigger: first operator page for reclaim storm or completion backlog.
+- **Backup / restore for `result:{task_id}` strings or stream contents** — TTL-bound strings self-expire; streams self-trim via `MAXLEN`. Trigger: a customer needs run replay across Redis primary failover.
 
 ## Refactor history
 
