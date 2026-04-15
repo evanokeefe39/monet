@@ -6,8 +6,10 @@ from pathlib import Path
 
 import click
 
+from monet.config._env import GEMINI_API_KEY, GROQ_API_KEY
+
 # Keys that qualify as LLM provider configuration.
-_LLM_KEYS = ("GEMINI_API_KEY", "GROQ_API_KEY")
+_LLM_KEYS: tuple[str, ...] = (GEMINI_API_KEY, GROQ_API_KEY)
 
 
 def check_env() -> None:

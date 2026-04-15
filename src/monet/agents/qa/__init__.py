@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 from monet import Signal, SignalType, agent, emit_progress, emit_signal, resolve_context
+from monet.config._env import agent_model
 from monet.exceptions import SemanticError
 
 from .._prompts import extract_text, make_env
@@ -24,7 +24,7 @@ def _get_model(model_string: str) -> Any:
 
 
 def _model_string() -> str:
-    return os.environ.get("MONET_QA_MODEL", "groq:llama-3.3-70b-versatile")
+    return agent_model("qa", "groq:llama-3.3-70b-versatile")
 
 
 qa = agent("qa")

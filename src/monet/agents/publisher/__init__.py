@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import functools
-import os
 from pathlib import Path
 from typing import Any
 
 from monet import agent, emit_progress, get_artifacts, resolve_context
+from monet.config._env import agent_model
 
 from .._prompts import extract_text, make_env
 
@@ -22,7 +22,7 @@ def _get_model(model_string: str) -> Any:
 
 
 def _model_string() -> str:
-    return os.environ.get("MONET_PUBLISHER_MODEL", "google_genai:gemini-2.5-flash")
+    return agent_model("publisher", "google_genai:gemini-2.5-flash")
 
 
 publisher = agent("publisher")
