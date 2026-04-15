@@ -1994,6 +1994,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
+    { name = "alembic" },
     { name = "click" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -2048,6 +2049,7 @@ requires-dist = [
     { name = "aegra-cli", marker = "extra == 'examples'", specifier = ">=0.9" },
     { name = "aiofiles", specifier = ">=23.0" },
     { name = "aiosqlite", specifier = ">=0.19" },
+    { name = "alembic", specifier = ">=1.13" },
     { name = "click", specifier = ">=8.0" },
     { name = "exa-py", marker = "extra == 'examples'", specifier = ">=1.0" },
     { name = "fastapi", specifier = ">=0.115" },

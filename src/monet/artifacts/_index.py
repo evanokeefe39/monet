@@ -34,6 +34,11 @@ class ArtifactRecord(Base):
     created_at: Mapped[str] = mapped_column(String)
 
 
+def _is_in_memory(db_url: str) -> bool:
+    """True for SQLite URLs that resolve to an ephemeral in-memory DB."""
+    return ":memory:" in db_url
+
+
 class SQLiteIndex:
     """SQLite-backed metadata index using async SQLAlchemy.
 
@@ -41,12 +46,43 @@ class SQLiteIndex:
     """
 
     def __init__(self, db_url: str = "sqlite+aiosqlite:///.artifacts/index.db") -> None:
+        self._db_url = db_url
         self._engine = create_async_engine(db_url)
 
     async def initialise(self) -> None:
-        """Create tables. Call once at startup."""
-        async with self._engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        """Bring the schema up to date, or fail fast.
+
+        In-memory SQLite databases (tests, ephemeral dev) are set up
+        directly via ``Base.metadata.create_all`` — migrations add no
+        value for DBs that do not survive a process restart.
+
+        Persistent databases must already be at alembic head before the
+        service starts. Migrations are applied out of band via
+        ``monet db migrate`` so the deploy pipeline controls when schema
+        changes land; ``initialise`` only verifies the DB is at head and
+        raises with an actionable message otherwise. This keeps the hot
+        boot path synchronous and avoids the nested-event-loop problem
+        of driving alembic from inside an asyncio coroutine.
+        """
+        if _is_in_memory(self._db_url):
+            async with self._engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            return
+        from monet.artifacts._migrations import (
+            check_at_head,
+            current_revision,
+            head_revision,
+        )
+
+        if not check_at_head(self._db_url):
+            current = current_revision(self._db_url)
+            head = head_revision()
+            raise RuntimeError(
+                f"Artifact index at {self._db_url!r} is not at alembic head "
+                f"(current={current!r}, head={head!r}). Run `monet db migrate` "
+                "to apply pending migrations, or `monet db stamp` if this is "
+                "a legacy database created by Base.metadata.create_all."
+            )
 
     async def put(self, metadata: ArtifactMetadata) -> None:
         """Insert artifact metadata into the index.
