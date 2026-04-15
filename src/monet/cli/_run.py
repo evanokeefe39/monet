@@ -288,7 +288,9 @@ async def _default_pipeline_run(
 
                 if decision == "approve":
                     await approve_plan(client, run_id)
-                    return await _resume_pipeline(client, run_id, mode)
+                    return await _resume_pipeline(
+                        client, run_id, mode, abort_run, retry_wave
+                    )
                 if decision == "revise":
                     feedback = click.prompt("Feedback")
                     await revise_plan(client, run_id, feedback)
@@ -327,20 +329,54 @@ async def _resume_pipeline(
     client: MonetClient,
     run_id: str,
     mode: str,
+    abort_fn: object,
+    retry_fn: object,
 ) -> int:
-    """After approving a plan, observe the run to completion.
+    """After approving a plan, drive execution to completion.
 
-    ``approve_plan`` dispatched the resume; now poll the run's state
-    until it completes or hits another interrupt. We don't re-stream
-    planning — execution is a separate thread the adapter creates
-    when planning finishes. For now we exit with success after plan
-    approval; the user can use ``monet runs`` to observe execution.
+    ``approve_plan`` already dispatched the resume; this iterates
+    :func:`continue_after_plan_approval`, emits each event via the
+    active mode's renderer, and handles execution interrupts and
+    terminal events the same way the main loop does.
     """
-    # TODO(pipeline-runtime): after approve, the default-pipeline
-    # adapter should observe plan completion server-side and auto-
-    # launch execution. Until that's wired, we acknowledge and let
-    # ``monet runs`` pick up the run.
-    click.secho("Plan approved — execution launching.", fg="green")
+    from monet.client import RunComplete, RunFailed
+    from monet.pipelines.default import (
+        ExecutionInterrupt,
+        continue_after_plan_approval,
+    )
+    from monet.pipelines.default.render import render_pipeline_event
+
+    def _emit(event: object) -> None:
+        if mode == "json":
+            click.echo(serialize_event(event))  # type: ignore[arg-type]
+        elif isinstance(event, RunComplete | RunFailed):
+            render_event(event)
+        else:
+            render_pipeline_event(event)  # type: ignore[arg-type]
+
+    try:
+        async for event in continue_after_plan_approval(client, run_id):
+            _emit(event)
+
+            if isinstance(event, ExecutionInterrupt):
+                if mode == "json":
+                    return _EXIT_SUCCESS
+                return await _handle_execution_interrupt(
+                    client, run_id, mode, abort_fn, retry_fn
+                )
+
+            if isinstance(event, RunFailed):
+                return _EXIT_AGENT_ERROR
+
+            if isinstance(event, RunComplete):
+                return _EXIT_SUCCESS
+    except (ConnectionError, OSError) as exc:
+        click.echo(f"Connection error: {exc}", err=True)
+        return _EXIT_CONNECTION_ERROR
+    except Exception as exc:
+        click.echo(f"Unexpected error: {exc}", err=True)
+        return _EXIT_AGENT_ERROR
+
     return _EXIT_SUCCESS
 
 

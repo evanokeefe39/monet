@@ -25,7 +25,7 @@ from monet.pipelines.default._hitl import (
     retry_wave,
     revise_plan,
 )
-from monet.pipelines.default.adapter import run
+from monet.pipelines.default.adapter import continue_after_plan_approval, run
 from monet.pipelines.default.events import (
     DefaultInterruptTag,
     DefaultPipelineEvent,
@@ -60,6 +60,7 @@ __all__ = [
     "WaveComplete",
     "abort_run",
     "approve_plan",
+    "continue_after_plan_approval",
     "reject_plan",
     "retry_wave",
     "revise_plan",
