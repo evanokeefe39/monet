@@ -16,11 +16,7 @@ if TYPE_CHECKING:
     from monet.client import MonetClient
 
 from monet._ports import STANDARD_DEV_PORT
-from monet.cli._render import (
-    prompt_execution_decision,
-    prompt_plan_decision,
-    render_run_table,
-)
+from monet.cli._render import render_run_table
 from monet.cli._setup import check_env
 from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
@@ -42,7 +38,15 @@ from monet.config import MONET_API_KEY, MONET_SERVER_URL
 @click.option("--list", "list_sessions", is_flag=True, help="List saved conversations.")
 @click.option("--resume", "resume_id", default=None, help="Resume a specific thread.")
 @click.option("--session", "session_name", default=None, help="Named session.")
-@click.option("--graph", "graph_override", default=None, help="Chat graph ID.")
+@click.option(
+    "--graph",
+    "graph_override",
+    default=None,
+    help=(
+        "Name of a declared entrypoint in monet.toml "
+        "(e.g. 'chat'), or a raw graph id. Omit to use the default chat graph."
+    ),
+)
 def chat(
     url: str,
     api_key: str | None,
@@ -80,10 +84,16 @@ async def _chat_main(
     graph_override: str | None,
 ) -> None:
     from monet.client import MonetClient
-    from monet.config import load_graph_roles
+    from monet.config import load_entrypoints, load_graph_roles
 
+    entrypoints = load_entrypoints()
     graph_ids = load_graph_roles()
-    if graph_override:
+
+    key = graph_override or "chat"
+    ep = entrypoints.get(key)
+    if ep is not None:
+        graph_ids["chat"] = ep["graph"]
+    elif graph_override:
         graph_ids["chat"] = graph_override
 
     client = MonetClient(url, api_key=api_key, graph_ids=graph_ids)
@@ -188,41 +198,9 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
         click.echo(f"Session renamed to '{arg}'.", err=True)
         return False
 
-    if cmd == "/run":
-        if not arg:
-            click.echo("Usage: /run <task>")
-            return False
-        await _handle_inline_run(client, thread_id, arg)
-        return False
-
     if cmd == "/runs":
         summaries = await client.list_runs()
         render_run_table(summaries)
-        return False
-
-    if cmd == "/attach":
-        if not arg:
-            click.echo("Usage: /attach <run_id>")
-            return False
-        try:
-            from monet.pipelines.default import DefaultPipelineRunDetail
-
-            detail = await client.get_run(arg)
-            view = DefaultPipelineRunDetail.from_run_detail(detail)
-            parts_list: list[str] = [f"Attached run {arg} (status: {detail.status})"]
-            if view.routing_skeleton:
-                goal = view.routing_skeleton.get("goal", "")
-                if goal:
-                    parts_list.append(f"Goal: {goal}")
-            for wr in view.wave_results:
-                agent = wr.get("agent_id", "?")
-                output = str(wr.get("output", ""))[:200]
-                parts_list.append(f"[{agent}] {output}")
-            summary = "\n".join(parts_list)
-            await client.send_context(thread_id, summary)
-            click.echo(f"Attached run {arg} to conversation.", err=True)
-        except Exception as exc:
-            click.echo(f"Error attaching run: {exc}", err=True)
         return False
 
     if cmd == "/graphs":
@@ -255,86 +233,5 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
         return False
 
     click.echo(f"Unknown command: {cmd}")
-    click.echo("Commands: /name, /run, /runs, /attach, /graphs, /history, /quit")
+    click.echo("Commands: /name, /runs, /graphs, /history, /quit")
     return False
-
-
-async def _handle_inline_run(client: MonetClient, thread_id: str, task: str) -> None:
-    """Dispatch a default-pipeline run inline from the chat REPL."""
-    from monet.client import RunComplete, RunFailed
-    from monet.pipelines.default import (
-        DefaultPipelineRunDetail,
-        ExecutionInterrupt,
-        PlanInterrupt,
-        abort_run,
-        approve_plan,
-        reject_plan,
-        retry_wave,
-        revise_plan,
-    )
-    from monet.pipelines.default import (
-        run as run_default,
-    )
-    from monet.pipelines.default.render import render_pipeline_event
-
-    click.echo(f"Running: {task}", err=True)
-    run_id: str | None = None
-
-    try:
-        async for event in run_default(client, task):
-            if isinstance(event, RunComplete | RunFailed):
-                from monet.cli._render import render_event
-
-                render_event(event)
-            else:
-                render_pipeline_event(event)
-
-            if run_id is None and hasattr(event, "run_id"):
-                run_id = event.run_id
-
-            if isinstance(event, PlanInterrupt) and run_id:
-                decision = prompt_plan_decision()
-                if decision == "approve":
-                    await approve_plan(client, run_id)
-                elif decision == "revise":
-                    feedback = click.prompt("Feedback")
-                    await revise_plan(client, run_id, feedback)
-                elif decision == "reject":
-                    await reject_plan(client, run_id)
-                    click.secho("Run rejected.", fg="red")
-                    return
-                break
-
-            if isinstance(event, ExecutionInterrupt) and run_id:
-                exec_decision = prompt_execution_decision()
-                if exec_decision == "retry":
-                    await retry_wave(client, run_id)
-                else:
-                    await abort_run(client, run_id)
-                    click.secho("Run aborted.", fg="red")
-                break
-
-            if isinstance(event, RunComplete | RunFailed):
-                break
-
-        if run_id:
-            try:
-                detail = await client.get_run(run_id)
-                view = DefaultPipelineRunDetail.from_run_detail(detail)
-                summary_parts: list[str] = [
-                    f"Completed run {run_id} (status: {detail.status})"
-                ]
-                if view.routing_skeleton:
-                    goal = view.routing_skeleton.get("goal", "")
-                    if goal:
-                        summary_parts.append(f"Goal: {goal}")
-                for wr in view.wave_results[:5]:
-                    agent = wr.get("agent_id", "?")
-                    output = str(wr.get("output", ""))[:200]
-                    summary_parts.append(f"[{agent}] {output}")
-                await client.send_context(thread_id, "\n".join(summary_parts))
-            except Exception:
-                pass
-
-    except Exception as exc:
-        click.echo(f"Run error: {exc}", err=True)

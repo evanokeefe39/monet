@@ -187,6 +187,34 @@ def test_read_toml_parses_file(tmp_path: Path) -> None:
     assert raw["graphs"]["entry"] == "custom"
 
 
+# ── Entrypoints ────────────────────────────────────────────────────────
+
+
+def test_default_entrypoints_include_run_and_chat() -> None:
+    """Both CLIs (``monet run`` / ``monet chat``) get defaults in-code."""
+    from monet.config import DEFAULT_ENTRYPOINTS
+
+    assert "default" in DEFAULT_ENTRYPOINTS
+    assert "chat" in DEFAULT_ENTRYPOINTS
+    assert DEFAULT_ENTRYPOINTS["default"]["graph"] == "entry"
+    assert DEFAULT_ENTRYPOINTS["chat"]["graph"] == "chat"
+
+
+def test_user_can_override_chat_entrypoint(tmp_path: Path) -> None:
+    """``[entrypoints.chat] graph = "..."`` in monet.toml wins over default."""
+    from monet.config import load_entrypoints
+
+    toml = tmp_path / "monet.toml"
+    toml.write_text(
+        '[entrypoints.chat]\ngraph = "my_chat"\n',
+        encoding="utf-8",
+    )
+    eps = load_entrypoints(toml)
+    assert eps["chat"]["graph"] == "my_chat"
+    # Default remains alongside override.
+    assert eps["default"]["graph"] == "entry"
+
+
 def test_read_toml_section_empty_when_section_missing(
     tmp_path: Path,
 ) -> None:

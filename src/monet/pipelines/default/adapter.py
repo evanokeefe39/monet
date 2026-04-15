@@ -152,6 +152,68 @@ async def run(
         yield RunFailed(run_id=rid, error=str(exc))
 
 
+async def continue_after_plan_approval(
+    client: MonetClient,
+    run_id: str,
+) -> AsyncIterator[DefaultPipelineEvent | RunComplete | RunFailed]:
+    """Resume the pipeline after the plan-approval interrupt was answered.
+
+    ``run()`` yields :class:`PlanInterrupt` and returns — the generator
+    cannot drive execution itself because it has already completed. The
+    caller is expected to answer the interrupt (via ``approve_plan`` /
+    ``revise_plan`` / ``reject_plan``) and then, if approved, iterate
+    this generator to observe execution.
+
+    The planning thread is re-read to extract the artifact pointer and
+    routing skeleton; if the plan was not approved the call yields
+    :class:`RunFailed` and returns without starting execution.
+    """
+    from monet.client._events import RunFailed
+
+    sdk = client._client
+    planning_thread = client._store.get_thread(run_id, "planning")
+    if planning_thread is None:
+        yield RunFailed(
+            run_id=run_id,
+            error="No planning thread cached for run — cannot resume.",
+        )
+        return
+
+    try:
+        values, _ = await get_state_values(sdk, planning_thread)
+
+        if not values.get("plan_approved"):
+            error = values.get("planner_error") or "plan not approved"
+            yield RunFailed(run_id=run_id, error=error)
+            return
+
+        pointer = values.get("work_brief_pointer")
+        skeleton = values.get("routing_skeleton") or {}
+        if not pointer or not skeleton:
+            yield RunFailed(
+                run_id=run_id,
+                error=(
+                    values.get("planner_error")
+                    or "planner produced no work_brief_pointer/routing_skeleton"
+                ),
+            )
+            return
+
+        yield PlanApproved(run_id=run_id)
+        yield PlanReady(
+            run_id=run_id,
+            goal=skeleton.get("goal", ""),
+            nodes=skeleton.get("nodes") or [],
+        )
+
+        async for ev in _drive_execution(client, run_id, pointer, skeleton):
+            yield ev
+
+    except Exception as exc:
+        _log.exception("default pipeline resume %s failed", run_id)
+        yield RunFailed(run_id=run_id, error=str(exc))
+
+
 async def _drive_execution(
     client: MonetClient,
     run_id: str,
@@ -287,4 +349,4 @@ async def _drain(
             raise RuntimeError(f"server error: {data}")
 
 
-__all__ = ["run"]
+__all__ = ["continue_after_plan_approval", "run"]

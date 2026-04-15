@@ -15,9 +15,11 @@ import pytest
 from monet.client import MonetClient, RunFailed
 from monet.client._run_state import _RunStore
 from monet.pipelines.default import (
+    PlanApproved,
     PlanInterrupt,
     PlanReady,
     WaveComplete,
+    continue_after_plan_approval,
 )
 from monet.pipelines.default import (
     run as run_default,
@@ -177,6 +179,79 @@ async def test_adapter_fails_when_planner_omits_skeleton() -> None:
     failed = next((e for e in events if isinstance(e, RunFailed)), None)
     assert failed is not None
     assert "work_brief_pointer" in failed.error or "routing_skeleton" in failed.error
+
+
+# ── continue_after_plan_approval ────────────────────────────────────
+
+
+async def test_continue_fails_when_planning_thread_missing() -> None:
+    """No cached planning thread — resume generator yields RunFailed cleanly."""
+    client = _bare_client([])
+    events = [e async for e in continue_after_plan_approval(client, "no-such-run")]
+    failed = next((e for e in events if isinstance(e, RunFailed)), None)
+    assert failed is not None
+    assert "No planning thread cached" in failed.error
+
+
+async def test_continue_fails_when_plan_not_approved() -> None:
+    """Planning thread exists but plan not approved — yield RunFailed."""
+    states: list[dict[str, Any]] = [
+        {"plan_approved": False, "planner_error": "user rejected"},
+    ]
+    client = _bare_client(states)
+    client._client.threads._state_idx["t-planning"] = 0  # type: ignore[attr-defined]
+    client._store.put_thread("run-x", "planning", "t-planning")
+
+    events = [e async for e in continue_after_plan_approval(client, "run-x")]
+    failed = next((e for e in events if isinstance(e, RunFailed)), None)
+    assert failed is not None
+    assert "user rejected" in failed.error
+
+
+async def test_continue_drives_execution_after_approval() -> None:
+    """Happy path: resume post-approval yields PlanApproved + PlanReady + waves."""
+    pointer = {"artifact_id": "b", "url": "mem://b", "key": "work_brief"}
+    skeleton = {
+        "goal": "Test goal",
+        "nodes": [
+            {"id": "n1", "agent_id": "a", "command": "fast", "depends_on": []},
+        ],
+    }
+    states: list[dict[str, Any]] = [
+        {
+            "plan_approved": True,
+            "work_brief_pointer": pointer,
+            "routing_skeleton": skeleton,
+        },
+        {
+            "wave_results": [
+                {
+                    "node_id": "n1",
+                    "agent_id": "a",
+                    "command": "fast",
+                    "success": True,
+                    "output": "ok",
+                    "signals": [],
+                    "artifacts": [],
+                },
+            ],
+            "wave_reflections": [],
+            "completed_node_ids": ["n1"],
+            "routing_skeleton": skeleton,
+        },
+    ]
+    client = _bare_client(states)
+    # Pre-register the existing planning thread at states[0].
+    # Next create() call (for execution) will map to states[1].
+    client._client.threads._state_idx["t-planning"] = 0  # type: ignore[attr-defined]
+    client._client.threads._counter = 1  # type: ignore[attr-defined]
+    client._store.put_thread("run-x", "planning", "t-planning")
+
+    events = [e async for e in continue_after_plan_approval(client, "run-x")]
+    assert any(isinstance(e, PlanApproved) for e in events)
+    plan_ready = next(e for e in events if isinstance(e, PlanReady))
+    assert plan_ready.goal == "Test goal"
+    assert any(isinstance(e, WaveComplete) for e in events)
 
 
 # ── Event dataclass shape regression ───────────────────────────────

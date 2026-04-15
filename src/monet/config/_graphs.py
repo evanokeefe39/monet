@@ -51,9 +51,13 @@ class Entrypoint(TypedDict):
 
 # Default entrypoints. ``planning`` and ``execution`` are deliberately
 # absent — they are internal subgraphs of the default pipeline, not
-# things a user can call directly.
+# things a user can call directly. ``monet run`` (no ``--graph``) uses
+# the ``default`` entrypoint; ``monet chat`` (no ``--graph``) uses
+# ``chat``. Override either by adding a ``[entrypoints.<name>]`` block
+# to ``monet.toml``.
 DEFAULT_ENTRYPOINTS: dict[str, Entrypoint] = {
     "default": {"graph": "entry"},
+    "chat": {"graph": "chat"},
 }
 
 

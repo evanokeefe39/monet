@@ -172,6 +172,7 @@ def test_default_pipeline_public_api() -> None:
         WaveComplete,
         abort_run,
         approve_plan,
+        continue_after_plan_approval,
         reject_plan,
         retry_wave,
         revise_plan,
