@@ -35,14 +35,12 @@ def configure_lazy_worker(queue: TaskQueue) -> None:
     _worker_task: asyncio.Task[Any] | None = None
     _orig_enqueue = queue.enqueue
 
-    async def _lazy_enqueue(
-        agent_id: str, command: str, ctx: Any, pool: str = "local"
-    ) -> str:
+    async def _lazy_enqueue(task: Any) -> str:
         nonlocal _worker_task
         if _worker_task is None or _worker_task.done():
             _worker_task = asyncio.create_task(run_worker(queue, default_registry))
             _worker_task.add_done_callback(_on_worker_done)
-        return await _orig_enqueue(agent_id, command, ctx, pool=pool)
+        return await _orig_enqueue(task)
 
     def _on_worker_done(task: asyncio.Task[Any]) -> None:
         if task.cancelled():

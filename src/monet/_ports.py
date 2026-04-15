@@ -8,6 +8,7 @@ previous stack on entry (see ``src/monet/cli/_dev.py``).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 # ── Standard local ports ────────────────────────────────────────────
 
@@ -15,6 +16,15 @@ STANDARD_POSTGRES_PORT = 5432
 STANDARD_REDIS_PORT = 6379
 STANDARD_DEV_PORT = 2026
 STANDARD_LANGFUSE_PORT = 3000
+
+
+# ── Wire limits ─────────────────────────────────────────────────────
+
+# Upper bound on inline payloads (serialized TaskRecord, progress events,
+# AgentResult) across the queue and HTTP boundaries. 950 KiB chosen to
+# stay under Upstash's 1 MiB per-entry limit with headroom. Larger
+# payloads must reference an ``ArtifactPointer`` instead of inlining.
+MAX_INLINE_PAYLOAD_BYTES: Final[int] = 950_000
 
 
 # ── monet state directory ───────────────────────────────────────────
@@ -37,6 +47,7 @@ def state_file() -> Path:
 
 
 __all__ = [
+    "MAX_INLINE_PAYLOAD_BYTES",
     "STANDARD_DEV_PORT",
     "STANDARD_LANGFUSE_PORT",
     "STANDARD_POSTGRES_PORT",

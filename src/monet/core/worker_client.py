@@ -21,7 +21,7 @@ from monet.core._retry import retry_with_backoff
 if TYPE_CHECKING:
     from monet.core.manifest import AgentCapability
     from monet.queue import TaskRecord
-    from monet.types import AgentResult, AgentRunContext
+    from monet.types import AgentResult
 
 __all__ = ["RemoteQueue", "WorkerClient"]
 
@@ -221,28 +221,24 @@ class RemoteQueue:
     """TaskQueue adapter wrapping :class:`WorkerClient`.
 
     Implements the consumer side of the ``TaskQueue`` protocol (claim,
-    complete, fail) so ``run_worker()`` can use a remote server
-    transparently. Producer methods (enqueue, poll_result) raise
-    ``NotImplementedError`` — they are server-side concerns.
+    complete, fail, publish_progress) so ``run_worker()`` can use a
+    remote server transparently. Producer methods raise
+    ``NotImplementedError`` — enqueue is a server-side concern.
     """
 
     def __init__(self, client: WorkerClient, pool: str) -> None:
         self._client = client
         self._pool = pool
 
-    async def enqueue(
-        self,
-        agent_id: str,
-        command: str,
-        ctx: AgentRunContext,
-        pool: str = "local",
-    ) -> str:
+    async def enqueue(self, task: TaskRecord) -> str:
         raise NotImplementedError("enqueue is a server-side operation")
 
-    async def poll_result(self, task_id: str, timeout: float = 600.0) -> AgentResult:
-        raise NotImplementedError("poll_result is a server-side operation")
-
-    async def claim(self, pool: str) -> TaskRecord | None:
+    async def claim(
+        self, pool: str, consumer_id: str, block_ms: int
+    ) -> TaskRecord | None:
+        # consumer_id + block_ms wire up to the server in Phase 3; for
+        # now the server route ignores both and returns immediately.
+        del consumer_id, block_ms
         return await self._client.claim(pool)
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
@@ -251,18 +247,11 @@ class RemoteQueue:
     async def fail(self, task_id: str, error: str) -> None:
         await self._client.fail(task_id, error)
 
-    async def cancel(self, task_id: str) -> None:
-        pass  # Server handles cancellation
-
-    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
-        """POST a progress event to the server's progress endpoint.
-
-        Best-effort — failures are logged at debug and dropped so worker
-        execution continues.
-        """
+    async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
+        """POST a progress event to the server's progress endpoint."""
         try:
             resp = await self._client._client.post(
-                f"/tasks/{task_id}/progress", json=data
+                f"/tasks/{task_id}/progress", json=event
             )
             resp.raise_for_status()
         except Exception:

@@ -3,24 +3,43 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from monet.queue import InMemoryTaskQueue
+from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus
 from monet.types import AgentResult, AgentRunContext
 
 
-def _ctx() -> AgentRunContext:
+def _ctx(agent_id: str = "a", command: str = "fast") -> AgentRunContext:
     return AgentRunContext(
         task="",
         context=[],
-        command="fast",
+        command=command,
         trace_id="t",
         run_id="r",
-        agent_id="a",
+        agent_id=agent_id,
         skills=[],
     )
+
+
+def _make_task(
+    agent_id: str = "a", command: str = "fast", pool: str = "local"
+) -> TaskRecord:
+    return {
+        "task_id": str(uuid.uuid4()),
+        "agent_id": agent_id,
+        "command": command,
+        "pool": pool,
+        "context": _ctx(agent_id=agent_id, command=command),
+        "status": TaskStatus.PENDING,
+        "result": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "claimed_at": None,
+        "completed_at": None,
+    }
 
 
 # --- InMemoryTaskQueue round-trip ---
@@ -29,7 +48,7 @@ def _ctx() -> AgentRunContext:
 async def test_publish_subscribe_round_trip() -> None:
     """Published events reach subscribers."""
     queue = InMemoryTaskQueue()
-    task_id = await queue.enqueue("a", "fast", _ctx(), pool="local")
+    task_id = await queue.enqueue(_make_task())
 
     events: list[dict[str, Any]] = []
 
@@ -55,7 +74,7 @@ async def test_publish_subscribe_round_trip() -> None:
 async def test_subscribe_cleanup_after_iteration() -> None:
     """Subscribers removed from internal tracking after terminal state."""
     queue = InMemoryTaskQueue()
-    task_id = await queue.enqueue("a", "fast", _ctx(), pool="local")
+    task_id = await queue.enqueue(_make_task())
 
     async def consumer() -> None:
         async for _ in queue.subscribe_progress(task_id):
@@ -73,7 +92,7 @@ async def test_subscribe_cleanup_after_iteration() -> None:
 async def test_publish_drops_on_full_subscriber() -> None:
     """Publishing more than the subscriber queue max drops silently."""
     queue = InMemoryTaskQueue()
-    task_id = await queue.enqueue("a", "fast", _ctx(), pool="local")
+    task_id = await queue.enqueue(_make_task())
 
     # Create a stalled subscriber by not reading.
     sub_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=2)
@@ -91,7 +110,7 @@ async def test_publish_drops_on_full_subscriber() -> None:
 async def test_subscribe_on_terminated_task_returns_immediately() -> None:
     """Subscribing after task termination returns zero events."""
     queue = InMemoryTaskQueue()
-    task_id = await queue.enqueue("a", "fast", _ctx(), pool="local")
+    task_id = await queue.enqueue(_make_task())
     await queue.complete(task_id, AgentResult(success=True, output="done"))
 
     events: list[dict[str, Any]] = []
@@ -108,7 +127,7 @@ async def test_sleep_zero_flush_before_return() -> None:
     must still be drained by the sleep(0) dance in subscribe_progress.
     """
     queue = InMemoryTaskQueue()
-    task_id = await queue.enqueue("a", "fast", _ctx(), pool="local")
+    task_id = await queue.enqueue(_make_task())
 
     received: list[dict[str, Any]] = []
 
@@ -177,7 +196,7 @@ async def test_worker_publishes_emit_progress_events() -> None:
     registry.register("my-agent", "go", my_agent)
 
     events: list[dict[str, Any]] = []
-    task_id = await queue.enqueue("my-agent", "go", _ctx(), pool="local")
+    task_id = await queue.enqueue(_make_task(agent_id="my-agent", command="go"))
 
     async def consumer() -> None:
         async for ev in queue.subscribe_progress(task_id):
@@ -189,8 +208,10 @@ async def test_worker_publishes_emit_progress_events() -> None:
     worker_task = asyncio.create_task(run_worker(queue, registry, pool="local"))
     import contextlib
 
+    from monet.orchestration._invoke import wait_completion
+
     try:
-        result = await queue.poll_result(task_id, timeout=5.0)
+        result = await wait_completion(queue, task_id, timeout=5.0)
         await asyncio.wait_for(consumer_task, timeout=2.0)
     finally:
         worker_task.cancel()

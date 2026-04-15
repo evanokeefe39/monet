@@ -187,9 +187,10 @@ async def claim_task(
     """Claim the next pending task in a pool.
 
     Returns the task record on success or 204 No Content when the pool
-    is empty.
+    is empty. Phase 3 replaces this with ``POST /api/v1/pools/{pool}/claim``
+    that takes a body with ``consumer_id`` and ``block_ms``.
     """
-    record = await queue.claim(pool)
+    record = await queue.claim(pool, consumer_id="server", block_ms=0)
     if record is None:
         response.status_code = 204
         return None

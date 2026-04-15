@@ -47,7 +47,6 @@ __all__ = [
     "MONET_DISTRIBUTED",
     "MONET_ENV_VARS",
     "MONET_QUEUE_BACKEND",
-    "MONET_QUEUE_DB",
     "MONET_SERVER_URL",
     "MONET_TRACE_FILE",
     "MONET_WORKER_AGENTS",
@@ -61,10 +60,9 @@ __all__ = [
     "OTEL_SERVICE_NAME",
     "REDIS_URI",
     "TAVILY_API_KEY",
-    "UPSTASH_REDIS_REST_TOKEN",
-    "UPSTASH_REDIS_REST_URL",
     "ConfigError",
     "agent_model_env",
+    "dispatch_secret_env",
     "graph_role_env",
     "pool_auth_env",
     "pool_url_env",
@@ -103,7 +101,6 @@ MONET_ARTIFACTS_DIR: Final[str] = "MONET_ARTIFACTS_DIR"
 MONET_DISTRIBUTED: Final[str] = "MONET_DISTRIBUTED"
 MONET_AGENT_TIMEOUT: Final[str] = "MONET_AGENT_TIMEOUT"
 MONET_QUEUE_BACKEND: Final[str] = "MONET_QUEUE_BACKEND"
-MONET_QUEUE_DB: Final[str] = "MONET_QUEUE_DB"
 MONET_TRACE_FILE: Final[str] = "MONET_TRACE_FILE"
 MONET_WORKER_POOL: Final[str] = "MONET_WORKER_POOL"
 MONET_WORKER_CONCURRENCY: Final[str] = "MONET_WORKER_CONCURRENCY"
@@ -123,7 +120,6 @@ MONET_ENV_VARS: Final[tuple[str, ...]] = (
     MONET_DISTRIBUTED,
     MONET_AGENT_TIMEOUT,
     MONET_QUEUE_BACKEND,
-    MONET_QUEUE_DB,
     MONET_TRACE_FILE,
     MONET_WORKER_POOL,
     MONET_WORKER_CONCURRENCY,
@@ -152,6 +148,17 @@ def pool_auth_env(pool: str) -> str:
     return f"MONET_POOL_{pool.upper()}_AUTH"
 
 
+def dispatch_secret_env(pool: str) -> str:
+    """Return the env var name that supplies a push pool's dispatch secret.
+
+    The dispatch secret protects the push worker's ``POST /dispatch``
+    endpoint so random internet traffic cannot trigger jobs. It is
+    separate from ``MONET_API_KEY``, which protects worker → server
+    traffic (progress, complete, fail callbacks).
+    """
+    return f"MONET_POOL_{pool.upper()}_DISPATCH_SECRET"
+
+
 def agent_model_env(agent: str) -> str:
     """Return the env var name that overrides a reference agent's model."""
     return f"MONET_{agent.upper()}_MODEL"
@@ -160,8 +167,6 @@ def agent_model_env(agent: str) -> str:
 # --- External vendor names that monet also reads --------------------------
 
 REDIS_URI: Final[str] = "REDIS_URI"
-UPSTASH_REDIS_REST_URL: Final[str] = "UPSTASH_REDIS_REST_URL"
-UPSTASH_REDIS_REST_TOKEN: Final[str] = "UPSTASH_REDIS_REST_TOKEN"
 LANGFUSE_PUBLIC_KEY: Final[str] = "LANGFUSE_PUBLIC_KEY"
 LANGFUSE_SECRET_KEY: Final[str] = "LANGFUSE_SECRET_KEY"
 LANGFUSE_HOST: Final[str] = "LANGFUSE_HOST"

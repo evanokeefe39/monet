@@ -2,14 +2,33 @@
 
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from monet.queue import TaskRecord, TaskStatus
 from tests.conftest import make_ctx
 
 API_KEY = "test-secret-key"
+
+
+def _make_task(agent_id: str, command: str, pool: str) -> TaskRecord:
+    ctx = make_ctx(agent_id=agent_id, command=command)
+    return {
+        "task_id": str(uuid.uuid4()),
+        "agent_id": agent_id,
+        "command": command,
+        "pool": pool,
+        "context": ctx,
+        "status": TaskStatus.PENDING,
+        "result": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "claimed_at": None,
+        "completed_at": None,
+    }
 
 
 @pytest.fixture
@@ -190,8 +209,7 @@ async def test_complete_task(
     headers = _auth_headers()
     queue = app.state.queue
 
-    ctx = make_ctx(agent_id="a1", command="run")
-    task_id = await queue.enqueue("a1", "run", ctx, pool="test")
+    task_id = await queue.enqueue(_make_task("a1", "run", "test"))
 
     claim_resp = await client.get("/api/v1/tasks/claim/test", headers=headers)
     assert claim_resp.status_code == 200
@@ -222,8 +240,7 @@ async def test_fail_task(
     headers = _auth_headers()
     queue = app.state.queue
 
-    ctx = make_ctx(agent_id="a2", command="run")
-    task_id = await queue.enqueue("a2", "run", ctx, pool="fail-pool")
+    task_id = await queue.enqueue(_make_task("a2", "run", "fail-pool"))
 
     await client.get("/api/v1/tasks/claim/fail-pool", headers=headers)
 
