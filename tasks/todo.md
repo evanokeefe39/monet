@@ -61,4 +61,26 @@ Each item is a small independent commit.
 
 ## Review
 
-(add after completion)
+### Shipped
+
+- **Phase 0** `5e049c1` — `build_artifact_pointer` extracted to `monet.types`; shared codec for queue serialisation + HTTP route. ST-04 closed. Tests: `test_artifact_pointer_key_round_trip`, `test_artifact_pointer_without_key_round_trip`, plus 4 helper tests in `test_types.py`.
+- **Phase A1** `28f3de8` — alembic shipped as `src/monet/_migrations/` package data. Baseline revision `0001_baseline`. `monet.artifacts._migrations` exposes programmatic API. `monet db migrate | current | stamp | check` CLI. `SQLiteIndex.initialise` fail-fasts on persistent DBs not at head; `artifacts_from_env()` auto-applies migrations for dev ergonomics. RR-22 closed. 17 migration tests.
+- **Phase A2** `d0637dc` — `ArtifactRecord.__table_args__` carries 4 indexes: run_id, agent_id, trace_id, composite (run_id, created_at). Revision `0002_artifact_indexes`. DA-53 closed. `EXPLAIN QUERY PLAN` test pins index selection.
+- **Phase A3a** `f5f87f5` — root `.dockerignore`, `descriptors.py` deleted (+ its test), reference agents + `cli/_setup.py` use `agent_model()` helper and `EXA_API_KEY`/`TAVILY_API_KEY`/`GEMINI_API_KEY`/`GROQ_API_KEY` Final constants from `config/_env.py`. ST-03/15, ST-06 (agents part), DO-11 closed.
+- **Phase A3b** `ec22716` — HEALTHCHECK on deployed/server + split-fleet Dockerfiles hitting `/api/v1/health`. `${MONET_IMAGE_TAG:-dev}` replaces `:latest` tags in split-fleet compose. All three deployed Dockerfiles switched to `uv sync --frozen --no-dev --extra examples` for reproducible builds from `uv.lock`. DO-06, DO-08, DO-15 closed.
+- **Phase A3c** `7f29b88` — `.github/workflows/security.yml` runs `pip-audit --strict` on PR + weekly. `.github/dependabot.yml` covers pip + github-actions + docker ecosystems. `.github/workflows/digest-bump.yml` auto-refreshes base image digests weekly via skopeo. DO-03, DO-35 closed.
+
+### Out of scope (per clarifications)
+
+- RR-30 agent idempotency — agent-implementation concern.
+- DO-50 token/cost capture — agent emits Langfuse directly, black-box contract.
+
+### Remaining architecture findings (non-blocking, triggered work)
+
+- DO-34 `/health` PING-Postgres — queue ADR only added Redis PING. Low prio; if Postgres outage manifests as cryptic 500s on state reads, add.
+- DO-38 rate limiting on public endpoints — Priority 1 tenant work.
+- DO-40 explicit CORS policy — no browser client yet.
+- RR-14 audit logs on critical-path mutations in `_routes.py`, `_deployment.py`, `execution_graph.py`.
+- RR-22 deployments table migration — still uses `CREATE TABLE IF NOT EXISTS`. Rebuilds from heartbeats each boot so low risk; revisit when capabilities column schema evolves.
+- RR-24 `wave_results` / `wave_reflections` unbounded growth — revisit when long-DAG run hits memory pressure.
+- ST-07 `adapter.py` reaches `client._client` / `client._store` privates — formalise adapter API on `MonetClient` next time a second pipeline adapter lands in tree.
