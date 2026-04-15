@@ -110,6 +110,10 @@ def create_app(
                     await queue_sweeper_task
             if isinstance(queue, RedisStreamsTaskQueue):
                 await queue.close()
+            from monet.orchestration._invoke import close_dispatch_client
+
+            with contextlib.suppress(Exception):
+                await close_dispatch_client()
             await deployments.close()
 
     app = _FastAPI(lifespan=lifespan)

@@ -82,9 +82,10 @@ monet run --url http://localhost:2026 "AI trends in healthcare"
    `examples/deployed/worker`. Set `MONET_SERVER_URL` to the server
    service's public URL.
 7. Set shared env vars on both services: `MONET_API_KEY`,
-   `MONET_QUEUE_BACKEND=redis`, `REDIS_URL` (from the plugin),
-   `GEMINI_API_KEY`, `GROQ_API_KEY`. Server also needs `DATABASE_URL`
-   from the Postgres plugin.
+   `MONET_QUEUE_BACKEND=redis`, `REDIS_URI` (from the plugin, Upstash
+   TCP string, or any Redis 7+ endpoint), `GEMINI_API_KEY`,
+   `GROQ_API_KEY`. Server also needs `DATABASE_URL` from the Postgres
+   plugin.
 8. Deploy.
 
 ## Pool names

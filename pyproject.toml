@@ -151,3 +151,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "fakeredis.*"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "respx.*"
+ignore_missing_imports = true
