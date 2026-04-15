@@ -1,8 +1,7 @@
 """Terminal rendering and NDJSON serialization for monet run events.
 
 Renders the graph-agnostic core events (:mod:`monet.client._events`).
-Default-pipeline domain events render via
-:mod:`monet.pipelines.default.render`.
+Form-schema interrupts render via :func:`render_interrupt_form`.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ import dataclasses
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 import click
 
@@ -59,26 +58,108 @@ def render_event(event: RunEvent) -> None:
         click.secho(f"Failed: {event.error}", fg="red", bold=True)
 
 
-def prompt_plan_decision() -> Literal["approve", "revise", "reject"]:
-    """Prompt the user for a plan approval decision."""
-    click.echo()
-    choice = click.prompt(
-        "Action",
-        type=click.Choice(["approve", "revise", "reject"], case_sensitive=False),
-        default="approve",
-    )
-    return choice  # type: ignore[no-any-return]
+def render_interrupt_form(values: dict[str, Any]) -> dict[str, Any]:
+    """Render an interrupt form-schema envelope and collect a resume payload.
+
+    Walks ``values["fields"]`` and prompts per-type. If ``values`` does
+    not match the form-schema convention (no ``fields`` key), falls back
+    to a JSON dump and a free-text JSON prompt — every interrupt remains
+    answerable, just with degraded UX.
+
+    Returns the dict to pass as the resume payload.
+    """
+    if not isinstance(values, dict) or "fields" not in values:
+        click.echo()
+        click.secho("Interrupt payload (no form schema):", fg="yellow", bold=True)
+        click.echo(json.dumps(values, indent=2, default=str, ensure_ascii=False))
+        raw = click.prompt("Resume payload (JSON)", default="{}")
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return {}
+
+    if prompt_text := values.get("prompt"):
+        click.echo()
+        click.secho(prompt_text, bold=True)
+
+    context = values.get("context")
+    if isinstance(context, dict) and context:
+        click.secho("Context:", dim=True)
+        click.echo(json.dumps(context, indent=2, default=str, ensure_ascii=False))
+        click.echo()
+
+    payload: dict[str, Any] = {}
+    for field_spec in values.get("fields") or []:
+        if not isinstance(field_spec, dict):
+            continue
+        name = field_spec.get("name")
+        if not isinstance(name, str):
+            continue
+        payload[name] = _prompt_field(field_spec)
+    return payload
 
 
-def prompt_execution_decision() -> Literal["retry", "abort"]:
-    """Prompt the user for an execution interrupt decision."""
-    click.echo()
-    choice = click.prompt(
-        "Action",
-        type=click.Choice(["retry", "abort"], case_sensitive=False),
-        default="retry",
-    )
-    return choice  # type: ignore[no-any-return]
+def _prompt_field(spec: dict[str, Any]) -> Any:
+    """Prompt for one field per its declared type."""
+    ftype = spec.get("type", "text")
+    label = spec.get("label") or spec.get("name", "value")
+    required = spec.get("required", True)
+    default = spec.get("default")
+
+    if ftype == "hidden":
+        return spec.get("value")
+
+    if ftype == "bool":
+        bool_default = bool(default) if default is not None else True
+        return click.confirm(label, default=bool_default)
+
+    if ftype == "int":
+        prompt_kwargs: dict[str, Any] = {"type": int}
+        if default is not None:
+            prompt_kwargs["default"] = int(default)
+        elif not required:
+            prompt_kwargs["default"] = 0
+        return click.prompt(label, **prompt_kwargs)
+
+    if ftype in ("radio", "select"):
+        options = spec.get("options") or []
+        choices = [o.get("value") for o in options if isinstance(o, dict)]
+        if not choices:
+            return None
+        for i, opt in enumerate(options, 1):
+            click.echo(f"  {i}. {opt.get('label') or opt.get('value')}")
+        idx = click.prompt(
+            label,
+            type=click.IntRange(1, len(choices)),
+            default=1,
+        )
+        return choices[idx - 1]
+
+    if ftype == "checkbox":
+        options = spec.get("options") or []
+        for i, opt in enumerate(options, 1):
+            click.echo(f"  {i}. {opt.get('label') or opt.get('value')}")
+        raw = click.prompt(f"{label} (comma-separated indices, e.g. 1,3)", default="")
+        picked: list[str] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part.isdigit():
+                continue
+            i = int(part)
+            if 1 <= i <= len(options):
+                value = options[i - 1].get("value")
+                if isinstance(value, str):
+                    picked.append(value)
+        return picked
+
+    # text / textarea / unknown → freeform string
+    prompt_kwargs = {"default": default if default is not None else ""}
+    if not required:
+        prompt_kwargs["show_default"] = False
+    return click.prompt(label, **prompt_kwargs)
 
 
 # ── NDJSON serialization ───────────────────────────────────────────

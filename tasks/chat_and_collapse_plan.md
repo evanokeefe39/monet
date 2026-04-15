@@ -64,13 +64,13 @@ CI opt-in: keep `e2e` out of the default `pytest` job. Add a separate
 opt-in workflow gated on repository secrets (outside scope for scaffold
 commit).
 
-## Track B — subgraph-as-node collapse
+## Track B — subgraph-as-node collapse [DONE]
 
 One PR per ST-18 (docs + code + tests land together).
 
 ### B.1 State schema
 
-- [ ] Define `RunState` TypedDict in `src/monet/orchestration/_state.py` (new exported name). Fields: `task`, `run_id`, `trace_id`, `triage`, `work_brief_pointer`, `routing_skeleton`, `wave_results` (Annotated reducer), `abort_reason`
+- [x] Define `RunState` TypedDict in `src/monet/orchestration/_state.py` (new exported name). Fields: `task`, `run_id`, `trace_id`, `triage`, `work_brief_pointer`, `routing_skeleton`, `wave_results` (Annotated reducer), `abort_reason`
 - [ ] Keep `EntryState`, `PlanningState`, `ExecutionState` as private (drop from `__all__` if exported)
 - [ ] Export `RunState` from `monet.orchestration.__init__`
 - [ ] Test: `RunState` passes mypy strict

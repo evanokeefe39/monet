@@ -1,10 +1,17 @@
-"""monet run — run a topic against a monet server with hybrid output.
+"""monet run — drive any declared entrypoint against a monet server.
 
 Output modes (controlled by --output, default auto):
 
 - text: human-readable colored events to stdout
 - json: NDJSON event stream to stdout, errors to stderr
 - auto: text if stdout is a TTY, json if piped
+
+Every entrypoint is a single graph (post-Track-B collapse). HITL is
+LangGraph-native: when a graph hits ``interrupt(...)``, the client
+yields a generic :class:`monet.client.Interrupt`; the CLI renders the
+form-schema envelope (or a raw-JSON fallback) and resumes via
+``client.resume(run_id, tag, payload)``. There is no pipeline-specific
+event projection in this module.
 """
 
 from __future__ import annotations
@@ -16,18 +23,20 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
-    from monet.client import MonetClient
     from monet.config import Entrypoint
 
 from monet._ports import STANDARD_DEV_PORT
-from monet.cli._render import render_event, serialize_event
+from monet.cli._render import (
+    render_event,
+    render_interrupt_form,
+    serialize_event,
+)
 from monet.cli._setup import check_env
 from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
 _EXIT_SUCCESS = 0
 _EXIT_AGENT_ERROR = 1
 _EXIT_CONNECTION_ERROR = 2
-_EXIT_USAGE_ERROR = 3
 
 
 def _resolve_entrypoint(name: str | None) -> Entrypoint:
@@ -81,7 +90,7 @@ def _read_topic_from_stdin() -> str | None:
     "--auto-approve",
     is_flag=True,
     default=False,
-    help="Auto-approve plans without prompting.",
+    help="Auto-approve form-schema interrupts (picks the first 'approve'-like choice).",
 )
 @click.option(
     "--output",
@@ -109,14 +118,10 @@ def run(
 ) -> None:
     """Run a topic through a declared entrypoint.
 
-    With no ``--graph`` (or ``--graph default``), drives the default
-    pipeline (entry → planning → execution) with HITL plan approval.
-
-    With ``--graph <name>``, invokes that entrypoint's graph as a
-    single-graph stream. Internal subgraphs like ``planning`` and
-    ``execution`` are not declared entrypoints and cannot be invoked.
-
-    When piped, defaults to NDJSON event stream on stdout.
+    Drives the entrypoint's graph as a single stream and renders events
+    to stdout. When the graph pauses on ``interrupt()``, prompts for the
+    resume payload using the form-schema convention. When piped,
+    defaults to NDJSON event stream on stdout.
     """
     check_env()
     mode = _resolve_output_mode(output_mode)
@@ -131,17 +136,13 @@ def run(
         auto_approve = True
 
     ep = _resolve_entrypoint(entrypoint_name)
-    is_default = entrypoint_name is None or entrypoint_name == "default"
 
     try:
-        if is_default:
-            exit_code = asyncio.run(
-                _default_pipeline_run(resolved_topic, url, api_key, auto_approve, mode)
+        exit_code = asyncio.run(
+            _drive_entrypoint(
+                resolved_topic, url, api_key, mode, ep["graph"], auto_approve
             )
-        else:
-            exit_code = asyncio.run(
-                _single_graph_run(resolved_topic, url, api_key, mode, ep["graph"])
-            )
+        )
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     except (ConnectionError, OSError) as exc:
@@ -151,15 +152,16 @@ def run(
     raise SystemExit(exit_code)
 
 
-async def _single_graph_run(
+async def _drive_entrypoint(
     topic: str,
     url: str,
     api_key: str | None,
     mode: str,
     graph_id: str,
+    auto_approve: bool,
 ) -> int:
-    """Drive one graph directly and stream typed core events."""
-    from monet.client import MonetClient, RunComplete, RunFailed
+    """Stream a graph to completion, handling interrupts via form schema."""
+    from monet.client import Interrupt, MonetClient, RunComplete, RunFailed
     from monet.client._wire import task_input
 
     preflight_error = await _preflight_server(url, api_key)
@@ -169,27 +171,106 @@ async def _single_graph_run(
 
     client = MonetClient(url, api_key=api_key)
     run_id: str | None = None
-    try:
-        async for event in client.run(graph_id, task_input(topic, "")):
-            if run_id is None and hasattr(event, "run_id"):
-                run_id = event.run_id
-                click.echo(f"Run {run_id}", err=True)
-            if mode == "json":
-                click.echo(serialize_event(event))
-            else:
-                render_event(event)
-            if isinstance(event, RunFailed):
-                return _EXIT_AGENT_ERROR
-            if isinstance(event, RunComplete):
-                return _EXIT_SUCCESS
-    except (ConnectionError, OSError) as exc:
-        click.echo(f"Connection error: {exc}", err=True)
-        return _EXIT_CONNECTION_ERROR
-    except Exception as exc:
-        click.echo(f"Unexpected error: {exc}", err=True)
-        return _EXIT_AGENT_ERROR
 
-    return _EXIT_SUCCESS
+    def _emit(event: object) -> None:
+        if mode == "json":
+            click.echo(serialize_event(event))
+        else:
+            render_event(event)  # type: ignore[arg-type]
+
+    initial_input: dict[str, object] | None = task_input(topic, "")
+    while True:
+        try:
+            async for event in client.run(graph_id, initial_input):
+                if run_id is None and hasattr(event, "run_id"):
+                    run_id = event.run_id
+                    click.echo(f"Run {run_id}", err=True)
+                _emit(event)
+
+                if isinstance(event, Interrupt) and run_id:
+                    if mode == "json":
+                        return _EXIT_SUCCESS
+                    payload = _resolve_interrupt_payload(event, auto_approve)
+                    if payload is None:
+                        click.secho("Run aborted by user.", fg="red", err=True)
+                        return _EXIT_AGENT_ERROR
+                    await client.resume(run_id, event.tag, payload)
+                    # Loop back to keep streaming after resume.
+                    initial_input = None
+                    break
+
+                if isinstance(event, RunFailed):
+                    return _EXIT_AGENT_ERROR
+                if isinstance(event, RunComplete):
+                    return _EXIT_SUCCESS
+            else:
+                # Stream ended without a terminal event or interrupt.
+                return _EXIT_SUCCESS
+        except (ConnectionError, OSError) as exc:
+            click.echo(f"Connection error: {exc}", err=True)
+            return _EXIT_CONNECTION_ERROR
+        except Exception as exc:
+            click.echo(f"Unexpected error: {exc}", err=True)
+            return _EXIT_AGENT_ERROR
+
+
+def _resolve_interrupt_payload(
+    event: object,
+    auto_approve: bool,
+) -> dict[str, object] | None:
+    """Build a resume payload for an Interrupt event.
+
+    Returns None to signal user abort. With ``auto_approve``, picks the
+    first option whose ``id`` looks like an approval (``approve``,
+    ``ok``, ``yes``, ``retry``, or the first option as fallback).
+    Without auto-approve, prompts via :func:`render_interrupt_form`.
+    """
+    values = getattr(event, "values", {}) or {}
+    if auto_approve:
+        return _auto_approve_payload(values)
+    return render_interrupt_form(values)
+
+
+def _auto_approve_payload(values: dict[str, object]) -> dict[str, object]:
+    """Pick a sensible auto-approve payload from a form-schema envelope."""
+    payload: dict[str, object] = {}
+    if not isinstance(values, dict):
+        return payload
+    fields = values.get("fields") or []
+    if not isinstance(fields, list):
+        return payload
+    for field_spec in fields:
+        if not isinstance(field_spec, dict):
+            continue
+        name = field_spec.get("name")
+        if not isinstance(name, str):
+            continue
+        ftype = field_spec.get("type")
+        if ftype in ("radio", "select"):
+            options = field_spec.get("options") or []
+            if not isinstance(options, list) or not options:
+                continue
+            picked = _pick_approval_option(options)
+            if picked is not None:
+                payload[name] = picked
+        # Other field types are skipped — auto-approve answers the
+        # primary action only and leaves optional fields blank.
+    return payload
+
+
+def _pick_approval_option(options: list[object]) -> object:
+    """Choose the option that looks most like an approval."""
+    approval_aliases = ("approve", "ok", "yes", "retry", "accept", "continue")
+    for opt in options:
+        if isinstance(opt, dict):
+            value = opt.get("value")
+            if isinstance(value, str) and value.lower() in approval_aliases:
+                return value
+    # Fall back to the first option's value.
+    first = options[0]
+    if isinstance(first, dict):
+        return first.get("value")
+    return first
 
 
 async def _preflight_server(url: str, api_key: str | None = None) -> str | None:
@@ -225,177 +306,3 @@ async def _preflight_server(url: str, api_key: str | None = None) -> str | None:
     except (httpx.ConnectError, httpx.TimeoutException, OSError):
         return f"Cannot reach monet server at {url}. Is `monet dev` running?"
     return None
-
-
-async def _default_pipeline_run(
-    topic: str,
-    url: str,
-    api_key: str | None,
-    auto_approve: bool,
-    mode: str,
-) -> int:
-    """Drive the default pipeline with output mode routing and HITL."""
-    from monet.cli._render import prompt_plan_decision
-    from monet.client import MonetClient, RunComplete, RunFailed
-    from monet.pipelines.default import (
-        ExecutionInterrupt,
-        PlanInterrupt,
-        abort_run,
-        approve_plan,
-        reject_plan,
-        retry_wave,
-        revise_plan,
-    )
-    from monet.pipelines.default import (
-        run as run_default_pipeline,
-    )
-    from monet.pipelines.default.render import render_pipeline_event
-
-    preflight_error = await _preflight_server(url, api_key)
-    if preflight_error is not None:
-        click.echo(preflight_error, err=True)
-        return _EXIT_CONNECTION_ERROR
-
-    try:
-        client = MonetClient(url, api_key=api_key)
-    except (ConnectionError, OSError) as exc:
-        click.echo(f"Connection error: {exc}", err=True)
-        return _EXIT_CONNECTION_ERROR
-
-    run_id: str | None = None
-
-    def _emit(event: object) -> None:
-        if mode == "json":
-            click.echo(serialize_event(event))  # type: ignore[arg-type]
-        else:
-            if isinstance(event, RunComplete | RunFailed):
-                render_event(event)
-            else:
-                render_pipeline_event(event)  # type: ignore[arg-type]
-
-    try:
-        async for event in run_default_pipeline(
-            client, topic, auto_approve=auto_approve
-        ):
-            if run_id is None and hasattr(event, "run_id"):
-                run_id = event.run_id
-                click.echo(f"Run {run_id}", err=True)
-
-            _emit(event)
-
-            if isinstance(event, PlanInterrupt) and run_id and mode == "text":
-                decision = prompt_plan_decision()
-
-                if decision == "approve":
-                    await approve_plan(client, run_id)
-                    return await _resume_pipeline(
-                        client, run_id, mode, abort_run, retry_wave
-                    )
-                if decision == "revise":
-                    feedback = click.prompt("Feedback")
-                    await revise_plan(client, run_id, feedback)
-                    return _EXIT_SUCCESS
-                if decision == "reject":
-                    await reject_plan(client, run_id)
-                    click.secho("Run rejected.", fg="red")
-                    return _EXIT_AGENT_ERROR
-
-                return _EXIT_SUCCESS
-
-            if isinstance(event, ExecutionInterrupt) and run_id:
-                if mode == "json":
-                    return _EXIT_SUCCESS
-                return await _handle_execution_interrupt(
-                    client, run_id, mode, abort_run, retry_wave
-                )
-
-            if isinstance(event, RunFailed):
-                return _EXIT_AGENT_ERROR
-
-            if isinstance(event, RunComplete):
-                return _EXIT_SUCCESS
-
-    except (ConnectionError, OSError) as exc:
-        click.echo(f"Connection error: {exc}", err=True)
-        return _EXIT_CONNECTION_ERROR
-    except Exception as exc:
-        click.echo(f"Unexpected error: {exc}", err=True)
-        return _EXIT_AGENT_ERROR
-
-    return _EXIT_SUCCESS
-
-
-async def _resume_pipeline(
-    client: MonetClient,
-    run_id: str,
-    mode: str,
-    abort_fn: object,
-    retry_fn: object,
-) -> int:
-    """After approving a plan, drive execution to completion.
-
-    ``approve_plan`` already dispatched the resume; this iterates
-    :func:`continue_after_plan_approval`, emits each event via the
-    active mode's renderer, and handles execution interrupts and
-    terminal events the same way the main loop does.
-    """
-    from monet.client import RunComplete, RunFailed
-    from monet.pipelines.default import (
-        ExecutionInterrupt,
-        continue_after_plan_approval,
-    )
-    from monet.pipelines.default.render import render_pipeline_event
-
-    def _emit(event: object) -> None:
-        if mode == "json":
-            click.echo(serialize_event(event))  # type: ignore[arg-type]
-        elif isinstance(event, RunComplete | RunFailed):
-            render_event(event)
-        else:
-            render_pipeline_event(event)  # type: ignore[arg-type]
-
-    try:
-        async for event in continue_after_plan_approval(client, run_id):
-            _emit(event)
-
-            if isinstance(event, ExecutionInterrupt):
-                if mode == "json":
-                    return _EXIT_SUCCESS
-                return await _handle_execution_interrupt(
-                    client, run_id, mode, abort_fn, retry_fn
-                )
-
-            if isinstance(event, RunFailed):
-                return _EXIT_AGENT_ERROR
-
-            if isinstance(event, RunComplete):
-                return _EXIT_SUCCESS
-    except (ConnectionError, OSError) as exc:
-        click.echo(f"Connection error: {exc}", err=True)
-        return _EXIT_CONNECTION_ERROR
-    except Exception as exc:
-        click.echo(f"Unexpected error: {exc}", err=True)
-        return _EXIT_AGENT_ERROR
-
-    return _EXIT_SUCCESS
-
-
-async def _handle_execution_interrupt(
-    client: MonetClient,
-    run_id: str,
-    mode: str,
-    abort_fn: object,
-    retry_fn: object,
-) -> int:
-    """Prompt for retry/abort on an execution interrupt."""
-    from monet.cli._render import prompt_execution_decision
-
-    decision = prompt_execution_decision()
-
-    if decision == "retry":
-        await retry_fn(client, run_id)  # type: ignore[operator]
-        return _EXIT_SUCCESS
-
-    await abort_fn(client, run_id)  # type: ignore[operator]
-    click.secho("Run aborted.", fg="red")
-    return _EXIT_AGENT_ERROR

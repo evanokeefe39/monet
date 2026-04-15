@@ -129,28 +129,58 @@ async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str
 
 
 async def human_approval_node(state: PlanningState) -> dict[str, Any]:
-    """Interrupt for human approval.
+    """Interrupt for human approval of the plan.
 
-    Passes both the work brief pointer and the routing skeleton to the
-    interrupt payload so UIs can render plan structure without a
-    artifact read.
+    Emits a form-schema envelope (``prompt``/``fields``/``context``) so
+    any consumer — CLI, web UI, REPL — can render the pause uniformly.
+    The ``context`` carries the work brief pointer and routing skeleton
+    for display without an artifact read.
+
+    Resume payload shape::
+
+        {"action": "approve" | "revise" | "reject",
+         "feedback": str | None}
     """
     pointer = state.get("work_brief_pointer")
     if not pointer:
         return {"plan_approved": False}
     decision = interrupt(
         {
-            "work_brief_pointer": pointer,
-            "routing_skeleton": state.get("routing_skeleton"),
+            "prompt": "Approve this plan?",
+            "fields": [
+                {
+                    "name": "action",
+                    "type": "radio",
+                    "label": "Decision",
+                    "options": [
+                        {"value": "approve", "label": "Approve"},
+                        {"value": "revise", "label": "Request changes"},
+                        {"value": "reject", "label": "Reject"},
+                    ],
+                },
+                {
+                    "name": "feedback",
+                    "type": "textarea",
+                    "label": "Feedback (for revise)",
+                    "required": False,
+                },
+            ],
+            "context": {
+                "work_brief_pointer": pointer,
+                "routing_skeleton": state.get("routing_skeleton"),
+            },
         }
     )
 
-    approved = decision.get("approved", False) if isinstance(decision, dict) else False
-    feedback = decision.get("feedback") if isinstance(decision, dict) else None
+    if not isinstance(decision, dict):
+        return {"plan_approved": False}
 
-    if approved:
+    action = decision.get("action", "reject")
+    feedback = decision.get("feedback")
+
+    if action == "approve":
         return {"plan_approved": True}
-    if feedback and check_budget(state, MAX_REVISIONS):
+    if action == "revise" and feedback and check_budget(state, MAX_REVISIONS):
         return {
             "plan_approved": False,
             "human_feedback": feedback,

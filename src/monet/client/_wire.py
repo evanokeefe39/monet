@@ -1,22 +1,17 @@
 """Transport helpers for the LangGraph SDK — public adapter API.
 
 These wrap the ``langgraph_sdk`` client for thread management,
-streaming, and state inspection. ``MonetClient`` and pipeline
-adapters (e.g. ``monet.pipelines.default.adapter``) both import from
-here. The underscore prefix on this module is historical — the symbols
-it exports are stable for adapter authors.
+streaming, and state inspection. ``MonetClient`` is the canonical
+consumer; the underscore prefix is historical — the symbols here are
+stable for graph and tooling authors who need direct SDK access.
 
-Stable adapter API:
+Stable API:
 
 - :func:`make_client`, :func:`create_thread`
 - :func:`stream_run`, :func:`drain_stream`, :func:`get_state_values`
 - :func:`task_input`, :func:`chat_input`
 - :data:`MONET_RUN_ID_KEY`, :data:`MONET_GRAPH_KEY`, :data:`MONET_CHAT_NAME_KEY`
 - :data:`TRACE_CARRIER_METADATA_KEY`
-
-Pipeline-specific input builders (e.g. ``planning_input``,
-``execution_input``) live next to their pipeline — see
-``monet.pipelines.default._inputs``.
 """
 
 from __future__ import annotations

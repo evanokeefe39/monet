@@ -3,8 +3,7 @@
 Composes the three pipeline subgraphs as nodes under a single parent
 ``StateGraph[RunState]`` with one thread, one checkpointer, and
 LangGraph's native ``interrupt()`` / ``Command(resume=...)`` for HITL.
-Replaces the three-thread adapter that previously lived in
-``monet.pipelines.default.adapter``.
+Replaces the prior three-thread composition.
 
 Extension pattern for self-hosting users::
 
