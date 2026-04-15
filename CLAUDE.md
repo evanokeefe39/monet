@@ -7,7 +7,7 @@ monet is a multi-agent orchestration SDK for Python. MIT licensed, solo maintain
 Known issues (bugs, deprecations, standards violations, design gaps) live in `ISSUES.md`. Roadmap features live under `## Roadmap` below. Check `ISSUES.md` before picking maintenance work — do not duplicate or paper over listed issues without explicit scope.
 
 ## Commits
-use /caveman:commits for git commits
+Always use the `caveman:caveman-commit` skill to generate commit message subject + body. Do not hand-write commit messages. Invoke via the Skill tool (`skill: "caveman:caveman-commit"`) before running `git commit`.
 
 ## Layout
 
@@ -61,16 +61,22 @@ Dev: pytest, pytest-asyncio, hypothesis, httpx, ruff, mypy, mkdocs-material, pre
 
 ## Code navigation
 
-SymDex MCP is installed and the repo is registered (`~/.symdex/monet.db`). Prefer symdex tools over Read/Grep/Glob when locating, tracing, or understanding existing code:
+SymDex MCP is installed and the repo is registered (`~/.symdex/monet.db`). Its tools are **deferred** — their schemas are not loaded by default. For ANY symbol lookup, callgraph trace, file outline, or semantic search against `src/monet/**`, you **MUST** first load schemas with `ToolSearch` using:
 
-- `mcp__symdex__search_symbols` / `get_symbol` — find functions, classes, methods by name with exact byte offsets
-- `mcp__symdex__semantic_search` — find code by intent rather than exact name
-- `mcp__symdex__get_callers` / `get_callees` — trace call graph
+```
+query: "select:mcp__symdex__search_symbols,mcp__symdex__semantic_search,mcp__symdex__get_callers,mcp__symdex__get_callees,mcp__symdex__get_file_outline,mcp__symdex__get_repo_outline,mcp__symdex__search_routes,mcp__symdex__get_index_status"
+```
+
+Then use the tools. Only fall back to Read/Grep/Glob on `src/` when symdex returns nothing. Full-file `Read` remains correct for non-code files (toml/md/json/yaml) and when complete file context is required. The `symdex-code-search` skill documents the full tool surface.
+
+Tool map:
+
+- `mcp__symdex__search_symbols` / `get_symbol` — functions, classes, methods by name with exact byte offsets
+- `mcp__symdex__semantic_search` — code by intent, not exact name
+- `mcp__symdex__get_callers` / `get_callees` — call graph trace
 - `mcp__symdex__get_file_outline` / `get_repo_outline` — structure without reading full files
-- `mcp__symdex__search_routes` — list HTTP endpoints across the codebase
-- `mcp__symdex__get_index_status` — check freshness at session start; reindex via `index_repo` if stale (watcher is off by default)
-
-Full-file `Read` is still correct for non-code files (toml/md/json) or when complete file context is required. The `symdex-code-search` skill documents the full tool surface.
+- `mcp__symdex__search_routes` — HTTP endpoints across the codebase
+- `mcp__symdex__get_index_status` — freshness at session start; reindex via `index_repo` if stale (watcher off by default)
 
 ## Style
 
@@ -192,7 +198,7 @@ Out of scope here: human-friendly schedule editors, calendar UIs, retry semantic
 - **Reference agent quality pass** — `src/monet/agents/` (planner, researcher, writer, qa, publisher) are functional but minimal: short prompts, thin tool use, limited signal coverage, no few-shot anchoring, no structured-output validation beyond basic pydantic. They are the first thing users read when copying patterns, so their quality sets the perceived ceiling of the SDK. Scope: improve prompting, broaden signal emission (cover `RECOVERABLE` / `AUDIT` groups, not just happy path), add few-shot examples, tighten output schemas, add retry-aware tool calls, document the decision in each agent module. Not a spec-gated change — incremental improvement as patterns are validated. Guardrail: do not promote these to "production-grade" reference implementations; they remain illustrative. Production agents live in user code. Three concrete migrations already specced under this umbrella: **researcher → GPT Researcher + constrained writer with source registry** (`docs/architecture/researcher-migration.md`, driven by the independent evaluation in `~/repos/agent-researcher`), **planner structured output via `with_structured_output` with validation-retry** (`docs/architecture/planner-structured-output.md`, exploratory), and **writer → section-level composite-document editing** (`docs/architecture/writer-migration.md`, context-engineering-driven; replaces single-shot `writer/deep` with `outline`/`draft_section`/`edit_section`/`compose`/`review_document` commands for long-form output).
 - **AgentStream transport examples** — `AgentStream.cli() / .sse() / .http() / .http_post() / .sse_post()` constructors all ship today (`src/monet/streams.py:57-114`), but examples only cover `.cli()`. Add examples for (a) `.sse()` — browser or dashboard consuming a live agent's signals + progress via SSE; (b) `.http()` / `.http_post()` — webhook-driven agent where a callback URL delivers events to an external service. Each example should cover the full loop: agent emits, transport routes, external consumer renders. Lives under `examples/` alongside existing ones, respects the one-example-running-at-a-time lifecycle.
 - **Queryable telemetry and meta-agents** — primitives that let agents (or external tooling) read completed-run telemetry: agent invocations, emitted signals, artifact pointers, wave timings, retry counts, token usage where captured. Unlocks two patterns explicitly: (a) **manager-agent** — one agent measures other agents' performance across runs, emits scores or escalations; (b) **self-learning agent** — an agent reads its own prior-run telemetry and adjusts behavior (e.g. prompt variants, tool selection). Decisions required before picking up: query surface (SDK helper vs. HTTP route vs. both), persistence source (OTel backend query vs. a monet-owned metrics store backed by SQLite/Postgres vs. both), whether agents get read-only access to other runs' artifact pointers, and the policy boundary for tenant-scoped queries once Priority 1 lands. Speculative until a concrete manager-agent prototype lands in `examples/` or a downstream project. Note: OTel spans are already emitted today; what's missing is a *queryable* surface agents can consume.
-- **Graph extension points (slots)** — design deferred. Named, typed injection points in `entry` / `planning` / `execution` (plus an adapter-level `post_run`) that host user-supplied subgraphs. Covers the ultraplan pre-planner case and review-gate-with-replan loop. Full spec in `graph-extension-points.md`. Trigger: first concrete user request for injection at a specific published slot with a concrete subgraph to plug in. Phase 1 is adapter-level `post_run` only — cheapest validation of the model and directly solves the replan-loop case.
+- **Graph extension points (slots)** — design deferred. Named, typed injection points in `entry` / `planning` / `execution` (plus an adapter-level `post_run`) that host user-supplied subgraphs. Covers the ultraplan pre-planner case and review-gate-with-replan loop. Full spec in `docs/architecture/graph-extension-points.md`. Trigger: first concrete user request for injection at a specific published slot with a concrete subgraph to plug in. Phase 1 is adapter-level `post_run` only — cheapest validation of the model and directly solves the replan-loop case.
 - **In-process driver reintroduction (`_run.py`)** — trigger: concrete need for library-only usage (e.g. notebook example). See `## Deferred items`. `src/monet/__main__.py` was deleted with `_run.py`; if a driver returns, `python -m monet` can be routed through it.
 - **E2E integration tests** across deployment topologies — see `## Unimplemented`. Scaffold lives in `tests/e2e/` (Track D); fill in the remaining scenarios as topologies stabilise.
 - **Optional summarizer agent** — framework-inserted wave context condensation; see `docs/architecture/roadmap.md`.
@@ -200,7 +206,7 @@ Out of scope here: human-friendly schedule editors, calendar UIs, retry semantic
 
 ### Queue Phase 4 — deferred items
 
-Deferred by the queue refactor (`queue-push-pull-system-update.md` v3) with explicit triggers. Each item is standalone; none blocks routine work.
+Deferred by the queue refactor (`docs/architecture/adr-002-queue-backend-consolidation.md`) with explicit triggers. Each item is standalone; none blocks routine work.
 
 - **Multi-replica Aegra completion handling** — today `result:{task_id}` strings are written by the single Aegra replica that handles each run. Trigger: second replica added — needs leader election or per-replica consumer-group splits for the `/pools/{pool}/claim` XREADGROUP so two replicas do not hand the same task to two workers.
 - **JWT task tokens with `kid` + `exp`** — HMAC-derived bearers rotate with `MONET_API_KEY` (desired blast radius). Trigger: HMAC proves insufficient for cross-tenant revocation without rotating the whole API key.
