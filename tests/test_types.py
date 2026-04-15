@@ -8,6 +8,7 @@ from monet.types import (
     ArtifactPointer,
     Signal,
     SignalType,
+    build_artifact_pointer,
     find_artifact,
 )
 
@@ -104,6 +105,35 @@ def test_find_artifact_without_key_field() -> None:
     """Artifacts without a key field are skipped."""
     ptrs: tuple[ArtifactPointer, ...] = (ArtifactPointer(artifact_id="a1", url="u1"),)
     assert find_artifact(ptrs, "work_brief") is None
+
+
+# --- build_artifact_pointer ---
+
+
+def test_build_artifact_pointer_preserves_key() -> None:
+    raw = {"artifact_id": "a1", "url": "u1", "key": "work_brief"}
+    pointer = build_artifact_pointer(raw)
+    assert pointer["artifact_id"] == "a1"
+    assert pointer["url"] == "u1"
+    assert pointer.get("key") == "work_brief"
+
+
+def test_build_artifact_pointer_missing_key() -> None:
+    raw = {"artifact_id": "a1", "url": "u1"}
+    pointer = build_artifact_pointer(raw)
+    assert "key" not in pointer
+
+
+def test_build_artifact_pointer_non_string_key_dropped() -> None:
+    raw = {"artifact_id": "a1", "url": "u1", "key": 42}
+    pointer = build_artifact_pointer(raw)
+    assert "key" not in pointer
+
+
+def test_build_artifact_pointer_missing_required_fields() -> None:
+    pointer = build_artifact_pointer({})
+    assert pointer["artifact_id"] == ""
+    assert pointer["url"] == ""
 
 
 # --- AgentRunContext (TypedDict) ---

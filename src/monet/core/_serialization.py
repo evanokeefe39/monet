@@ -13,7 +13,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from monet.types import AgentResult, ArtifactPointer, Signal
+from monet.types import AgentResult, Signal, build_artifact_pointer
 
 if TYPE_CHECKING:
     from monet.queue import TaskRecord
@@ -60,10 +60,7 @@ def deserialize_result(raw: str) -> AgentResult:
     return AgentResult(
         success=d["success"],
         output=d.get("output"),
-        artifacts=tuple(
-            ArtifactPointer(artifact_id=a["artifact_id"], url=a["url"])
-            for a in d.get("artifacts", ())
-        ),
+        artifacts=tuple(build_artifact_pointer(a) for a in d.get("artifacts", ())),
         signals=tuple(
             Signal(type=s["type"], reason=s["reason"], metadata=s.get("metadata"))
             for s in d.get("signals", ())

@@ -13,7 +13,7 @@ from monet.queue import TaskQueue
 from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._deployment import DeploymentStore
-from monet.types import AgentResult, ArtifactPointer, Signal
+from monet.types import AgentResult, Signal, build_artifact_pointer
 
 __all__ = ["router"]
 
@@ -108,18 +108,6 @@ class HealthResponse(BaseModel):
 
 
 # -- Router ----------------------------------------------------------------
-
-
-def _build_artifact_pointer(raw: dict[str, Any]) -> ArtifactPointer:
-    """Construct ArtifactPointer preserving optional key field."""
-    pointer = ArtifactPointer(
-        artifact_id=raw.get("artifact_id", ""),
-        url=raw.get("url", ""),
-    )
-    key = raw.get("key")
-    if isinstance(key, str):
-        pointer["key"] = key
-    return pointer
 
 
 router = APIRouter(prefix="/api/v1")
@@ -246,7 +234,7 @@ async def complete_task(
     result = AgentResult(
         success=body.success,
         output=body.output,
-        artifacts=tuple(_build_artifact_pointer(a) for a in body.artifacts),
+        artifacts=tuple(build_artifact_pointer(a) for a in body.artifacts),
         signals=tuple(
             Signal(
                 type=s.get("type", ""),

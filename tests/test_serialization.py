@@ -75,6 +75,32 @@ def test_round_trip_none_output() -> None:
     assert restored.output is None
 
 
+def test_artifact_pointer_key_round_trip() -> None:
+    """The optional semantic ``key`` field must survive queue serialization.
+
+    Regression guard for ST-04: a prior deserializer dropped the field,
+    breaking ``find_artifact(..., "work_brief")`` on any distributed
+    deployment where results traverse the queue path.
+    """
+    pointer = ArtifactPointer(
+        artifact_id="a-xyz", url="file:///tmp/brief", key="work_brief"
+    )
+    original = AgentResult(success=True, output=None, artifacts=(pointer,))
+    restored = deserialize_result(serialize_result(original))
+    assert len(restored.artifacts) == 1
+    assert restored.artifacts[0]["artifact_id"] == "a-xyz"
+    assert restored.artifacts[0].get("key") == "work_brief"
+
+
+def test_artifact_pointer_without_key_round_trip() -> None:
+    """Pointers written without ``key`` must still round-trip cleanly."""
+    pointer = ArtifactPointer(artifact_id="a1", url="file:///tmp/a1")
+    original = AgentResult(success=True, output=None, artifacts=(pointer,))
+    restored = deserialize_result(serialize_result(original))
+    assert len(restored.artifacts) == 1
+    assert "key" not in restored.artifacts[0]
+
+
 # --- deserialize_result error cases ---
 
 
