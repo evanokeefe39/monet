@@ -32,8 +32,12 @@ if TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 QUICKSTART_DIR = REPO_ROOT / "examples" / "quickstart"
+SERVER_LOG_FILE = QUICKSTART_DIR / ".monet" / "e2e-dev-server.log"
 HEALTH_URL = f"http://localhost:{STANDARD_DEV_PORT}/health"
-BOOT_TIMEOUT_SECONDS = 90.0
+# Cold Postgres container creation + Aegra startup can exceed 90s on
+# Windows. Allow plenty of headroom; the fast-boot case still yields
+# in a few seconds.
+BOOT_TIMEOUT_SECONDS = 180.0
 HEALTH_POLL_INTERVAL = 1.0
 
 
@@ -82,16 +86,27 @@ def monet_dev_server() -> Iterator[str]:
     if monet_bin is None:
         pytest.skip("'monet' script not on PATH — install the package first")
 
+    # Route stdout to a file so (a) the kernel pipe buffer cannot fill
+    # and block the Aegra subprocess mid-boot, and (b) the server's log
+    # is inspectable when a test fails.
+    SERVER_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = SERVER_LOG_FILE.open("wb")
     proc = subprocess.Popen(
         [monet_bin, "dev"],
         cwd=QUICKSTART_DIR,
-        stdout=subprocess.PIPE,
+        stdout=log_fh,
         stderr=subprocess.STDOUT,
     )
     try:
-        _wait_for_health(BOOT_TIMEOUT_SECONDS)
+        try:
+            _wait_for_health(BOOT_TIMEOUT_SECONDS)
+        except RuntimeError as exc:
+            tail = _read_tail(SERVER_LOG_FILE, max_bytes=4096)
+            msg = f"{exc}\n\n--- monet dev log tail ---\n{tail}"
+            raise RuntimeError(msg) from None
         yield f"http://localhost:{STANDARD_DEV_PORT}"
     finally:
+        log_fh.close()
         subprocess.run(
             [monet_bin, "dev", "down"],
             cwd=QUICKSTART_DIR,
@@ -104,3 +119,15 @@ def monet_dev_server() -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+def _read_tail(path: Path, max_bytes: int = 4096) -> str:
+    """Return the last ``max_bytes`` of ``path`` as text, or a hint."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - max_bytes))
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"(could not read {path}: {exc})"
