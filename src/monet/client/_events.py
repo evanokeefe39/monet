@@ -215,6 +215,22 @@ class PendingDecision:
     detail: dict[str, Any] = field(default_factory=dict)
 
 
+class Capability(TypedDict, total=False):
+    """A declared ``(agent_id, command)`` capability on the server.
+
+    Returned by :meth:`MonetClient.list_capabilities`. Drives dynamic
+    ``/<agent_id>:<command>`` slash-command discovery in ``monet chat``
+    and resolves the target for ``monet run <agent_id>:<command>``
+    direct invocation.
+    """
+
+    agent_id: str
+    command: str
+    description: NotRequired[str]
+    pool: NotRequired[str]
+    worker_id: NotRequired[str | None]
+
+
 @dataclass(frozen=True)
 class ChatSummary:
     """Lightweight chat session record returned by ``list_chats``."""

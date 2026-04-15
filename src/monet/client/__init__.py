@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from monet.client._errors import (
     AlreadyResolved,
@@ -34,6 +34,7 @@ from monet.client._errors import (
 )
 from monet.client._events import (
     AgentProgress,
+    Capability,
     ChatSummary,
     Field,
     FieldOption,
@@ -74,6 +75,7 @@ __all__ = [
     "AgentProgress",
     "AlreadyResolved",
     "AmbiguousInterrupt",
+    "Capability",
     "ChatSummary",
     "Field",
     "FieldOption",
@@ -167,6 +169,8 @@ class MonetClient:
         cfg = ClientConfig.load()
         resolved_url = url if url is not None else cfg.server_url
         resolved_key = api_key if api_key is not None else cfg.api_key
+        self._url = resolved_url
+        self._api_key = resolved_key
         self._client: LangGraphClient = make_client(resolved_url, api_key=resolved_key)
         self._store = _RunStore()
         self._entrypoints = load_entrypoints()
@@ -313,6 +317,63 @@ class MonetClient:
                 raise RuntimeError(f"server error: {data}")
 
     # ── Queries ─────────────────────────────────────────────────
+
+    async def invoke_agent(
+        self,
+        agent_id: str,
+        command: str,
+        *,
+        task: str = "",
+        context: list[dict[str, Any]] | None = None,
+        skills: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run a single ``agent_id:command`` invocation on the server.
+
+        Bypasses graphs entirely — good for direct calls (``monet run
+        <agent>:<command>``, chat REPL slash commands). The server
+        dispatches via its configured queue and returns the resulting
+        ``AgentResult`` as a dict.
+        """
+        import httpx
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + f"/api/v1/agents/{agent_id}/{command}/invoke"
+        payload: dict[str, Any] = {"task": task}
+        if context is not None:
+            payload["context"] = context
+        if skills is not None:
+            payload["skills"] = skills
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(600.0, connect=10.0)
+        ) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        return dict(data) if isinstance(data, dict) else {}
+
+    async def list_capabilities(self) -> list[Capability]:
+        """List every ``(agent_id, command)`` declared on the server.
+
+        Drives dynamic slash-command discovery in ``monet chat`` and
+        resolves the target for ``monet run <agent>:<command>`` direct
+        invocation. Returns an empty list if the server has no manifest
+        entries.
+        """
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + "/api/v1/agents"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        if not isinstance(data, list):
+            return []
+        return [cast("Capability", item) for item in data if isinstance(item, dict)]
 
     async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
         """List recent runs with status and completed stages.
