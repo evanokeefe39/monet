@@ -61,6 +61,13 @@ from ._env import (
     read_path,
     read_str,
 )
+from ._graphs import (
+    DEFAULT_ENTRYPOINTS,
+    DEFAULT_GRAPH_ROLES,
+    Entrypoint,
+    load_entrypoints,
+    load_graph_roles,
+)
 from ._load import default_config_path, read_toml, read_toml_section
 from ._schema import (
     ArtifactsConfig,
@@ -76,6 +83,8 @@ from ._schema import (
 )
 
 __all__ = [
+    "DEFAULT_ENTRYPOINTS",
+    "DEFAULT_GRAPH_ROLES",
     "EXA_API_KEY",
     "GEMINI_API_KEY",
     "GROQ_API_KEY",
@@ -114,6 +123,7 @@ __all__ = [
     "CLIDevConfig",
     "ClientConfig",
     "ConfigError",
+    "Entrypoint",
     "ObservabilityConfig",
     "OrchestrationConfig",
     "QueueBackend",
@@ -123,6 +133,8 @@ __all__ = [
     "agent_model_env",
     "default_config_path",
     "graph_role_env",
+    "load_entrypoints",
+    "load_graph_roles",
     "pool_auth_env",
     "pool_url_env",
     "read_bool",

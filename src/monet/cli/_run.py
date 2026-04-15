@@ -16,10 +16,10 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
-    from monet._graph_config import Entrypoint
     from monet.client import MonetClient
+    from monet.config import Entrypoint
 
-from monet._constants import STANDARD_DEV_PORT
+from monet._ports import STANDARD_DEV_PORT
 from monet.cli._render import render_event, serialize_event
 from monet.cli._setup import check_env
 from monet.config import MONET_API_KEY, MONET_SERVER_URL
@@ -32,7 +32,7 @@ _EXIT_USAGE_ERROR = 3
 
 def _resolve_entrypoint(name: str | None) -> Entrypoint:
     """Look up the ``monet run`` entrypoint by name (or ``default``)."""
-    from monet._graph_config import load_entrypoints
+    from monet.config import load_entrypoints
 
     entrypoints = load_entrypoints()
     key = name or "default"

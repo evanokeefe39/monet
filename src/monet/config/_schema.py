@@ -34,7 +34,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .._constants import STANDARD_DEV_PORT, STANDARD_LANGFUSE_PORT
+from .._ports import STANDARD_DEV_PORT, STANDARD_LANGFUSE_PORT
 from ._env import (
     EXA_API_KEY,
     GEMINI_API_KEY,

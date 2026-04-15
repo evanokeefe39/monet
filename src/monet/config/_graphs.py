@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, TypedDict
 
-from monet.config import default_config_path, graph_role_env, read_str, read_toml
+from ._env import graph_role_env, read_str
+from ._load import default_config_path, read_toml
 
 if TYPE_CHECKING:
     from pathlib import Path
