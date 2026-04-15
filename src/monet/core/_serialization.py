@@ -1,8 +1,9 @@
 """Shared serialization helpers for queue backends.
 
-Provides JSON serialization/deserialization for AgentResult and common
-time utilities. All queue backends (Redis, SQLite, Upstash) use these
-to ensure a single source of truth for the wire format.
+Provides JSON serialization/deserialization for AgentResult and
+TaskRecord, plus common time utilities. The Redis Streams backend and
+any third-party backend use these to ensure a single source of truth
+for the wire format.
 """
 
 from __future__ import annotations
@@ -10,15 +11,20 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from monet.types import AgentResult, ArtifactPointer, Signal
 
+if TYPE_CHECKING:
+    from monet.queue import TaskRecord
+
 __all__ = [
     "deserialize_result",
+    "deserialize_task_record",
     "now_iso",
     "safe_parse_context",
     "serialize_result",
+    "serialize_task_record",
 ]
 
 _log = logging.getLogger(__name__)
@@ -65,6 +71,56 @@ def deserialize_result(raw: str) -> AgentResult:
         trace_id=d.get("trace_id", ""),
         run_id=d.get("run_id", ""),
     )
+
+
+def serialize_task_record(record: TaskRecord) -> str:
+    """Serialize a TaskRecord to a JSON string for queue storage.
+
+    The embedded ``AgentResult`` (if present) is serialised via
+    :func:`serialize_result` so enum/datetime/tuple shapes survive the
+    round-trip; all other fields are JSON-native.
+    """
+    result = record.get("result")
+    return json.dumps(
+        {
+            "task_id": record["task_id"],
+            "agent_id": record["agent_id"],
+            "command": record["command"],
+            "pool": record["pool"],
+            "context": record["context"],
+            "status": str(record["status"]),
+            "result": serialize_result(result) if result is not None else None,
+            "created_at": record["created_at"],
+            "claimed_at": record["claimed_at"],
+            "completed_at": record["completed_at"],
+        }
+    )
+
+
+def deserialize_task_record(raw: str) -> TaskRecord:
+    """Deserialize a TaskRecord from a JSON string.
+
+    Raises:
+        json.JSONDecodeError: if ``raw`` is not valid JSON.
+        KeyError: if required fields are missing.
+    """
+    from monet.queue import TaskStatus
+
+    d: dict[str, Any] = json.loads(raw)
+    raw_result = d.get("result")
+    record: dict[str, Any] = {
+        "task_id": d["task_id"],
+        "agent_id": d["agent_id"],
+        "command": d["command"],
+        "pool": d["pool"],
+        "context": d["context"],
+        "status": TaskStatus(d["status"]),
+        "result": deserialize_result(raw_result) if raw_result else None,
+        "created_at": d["created_at"],
+        "claimed_at": d.get("claimed_at"),
+        "completed_at": d.get("completed_at"),
+    }
+    return cast("TaskRecord", record)
 
 
 def safe_parse_context(raw: str | None, *, source: str = "") -> dict[str, Any] | None:

@@ -20,6 +20,7 @@ from opentelemetry import trace
 from monet.config import OrchestrationConfig
 from monet.queue import TaskStatus
 from monet.queue.backends.memory import InMemoryTaskQueue
+from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 
 if TYPE_CHECKING:
     from monet.queue import TaskQueue, TaskRecord
@@ -66,7 +67,7 @@ async def wait_completion(
         TimeoutError: if ``timeout`` seconds elapse without a result.
         TypeError: if the queue backend does not support completion waits.
     """
-    if isinstance(queue, InMemoryTaskQueue):
+    if isinstance(queue, InMemoryTaskQueue | RedisStreamsTaskQueue):
         return await queue._await_completion(task_id, timeout)
     msg = f"wait_completion not supported for {type(queue).__name__}"
     raise TypeError(msg)

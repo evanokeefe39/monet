@@ -55,11 +55,13 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
         queue: TaskQueue = InMemoryTaskQueue()
         return queue
     if cfg.backend == "redis":
-        # RedisStreamsTaskQueue lands in Phase 2 of the queue refactor.
-        raise ConfigError(
-            MONET_QUEUE_BACKEND,
-            cfg.backend,
-            "backend=memory (Redis Streams backend lands in Phase 2)",
+        from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+
+        assert cfg.redis_uri is not None  # validated by cfg.validate_for_boot()
+        return RedisStreamsTaskQueue(
+            cfg.redis_uri,
+            work_stream_maxlen=cfg.work_stream_maxlen,
+            pool_size=cfg.redis_pool_size,
         )
     raise ConfigError(
         MONET_QUEUE_BACKEND,
