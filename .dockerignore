@@ -1,0 +1,52 @@
+# Version control
+.git/
+.gitattributes
+.gitignore
+
+# Bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.symdex/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Example-local runtime state (compose files + sqlite DBs live under .monet/)
+examples/*/.monet/
+.monet/
+.artifacts/
+.runs/
+
+# Tests + docs (not needed in runtime images)
+tests/
+docs/
+site/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
+# Logs + scratch
+*.log
+logs/
+scratch/
+
+# Node (docs tooling may pull node_modules)
+node_modules/
+
+# Plan files + tasks
+tasks/

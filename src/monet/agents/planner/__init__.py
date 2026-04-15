@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +16,7 @@ from monet import (
     get_run_logger,
     write_artifact,
 )
+from monet.config._env import agent_model
 from monet.orchestration._state import WorkBrief
 
 from .._prompts import extract_text, make_env
@@ -32,7 +32,7 @@ def _get_model(model_string: str, *, temperature: float = 0.0) -> Any:
 
 
 def _model_string() -> str:
-    return os.environ.get("MONET_PLANNER_MODEL", "google_genai:gemini-2.5-flash")
+    return agent_model("planner", "google_genai:gemini-2.5-flash")
 
 
 _PLANNER_EXCLUDE: tuple[str, ...] = ("planner",)

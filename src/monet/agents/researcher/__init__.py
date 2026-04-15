@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from monet import agent, emit_progress, get_artifacts, get_run_logger
+from monet.config._env import EXA_API_KEY, TAVILY_API_KEY, agent_model
 from monet.exceptions import EscalationRequired
 
 from .._prompts import extract_text, make_env
@@ -91,7 +92,7 @@ def _last_ai_message(messages: list[Any]) -> str:
 
 
 def _model_string() -> str:
-    return os.environ.get("MONET_RESEARCHER_MODEL", "google_genai:gemini-2.5-flash")
+    return agent_model("researcher", "google_genai:gemini-2.5-flash")
 
 
 async def _ainvoke_text(model_string: str, prompt: str) -> str:
@@ -126,12 +127,13 @@ async def _search(
     content: str | None = None
 
     # Path 1 — Exa semantic search + LLM synthesis
-    if os.environ.get("EXA_API_KEY"):
+    exa_key = os.environ.get(EXA_API_KEY)
+    if exa_key:
         try:
             from exa_py import Exa  # type: ignore[import-not-found]
 
             emit_progress({"status": "searching with Exa", "agent": "researcher"})
-            exa = Exa(api_key=os.environ["EXA_API_KEY"])
+            exa = Exa(api_key=exa_key)
             # exa_py uses synchronous HTTP internally. Under langgraph dev,
             # blockbuster intercepts sync socket calls on the event loop.
             # asyncio.to_thread moves the call to a thread pool.
@@ -156,7 +158,7 @@ async def _search(
             logger.warning("Exa search failed: %s — trying Tavily.", exc)
 
     # Path 2 — Tavily ReAct agent
-    if content is None and os.environ.get("TAVILY_API_KEY"):
+    if content is None and os.environ.get(TAVILY_API_KEY):
         try:
             react_agent = _get_react_agent(model_string)
             emit_progress({"status": "searching with Tavily", "agent": "researcher"})
@@ -175,15 +177,15 @@ async def _search(
     # Enumerate what we tried so the escalation message is actionable
     # for operators diagnosing API-key or service issues.
     providers_tried: list[str] = []
-    if os.environ.get("EXA_API_KEY"):
+    if os.environ.get(EXA_API_KEY):
         providers_tried.append("Exa")
-    if os.environ.get("TAVILY_API_KEY"):
+    if os.environ.get(TAVILY_API_KEY):
         providers_tried.append("Tavily")
 
     if not providers_tried:
         raise EscalationRequired(
-            "No search provider configured. Set EXA_API_KEY or "
-            "TAVILY_API_KEY. Research requires web search."
+            f"No search provider configured. Set {EXA_API_KEY} or "
+            f"{TAVILY_API_KEY}. Research requires web search."
         )
 
     if content is None or not content.strip():

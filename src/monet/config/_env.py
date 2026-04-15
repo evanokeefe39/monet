@@ -61,6 +61,7 @@ __all__ = [
     "REDIS_URI",
     "TAVILY_API_KEY",
     "ConfigError",
+    "agent_model",
     "agent_model_env",
     "dispatch_secret_env",
     "graph_role_env",
@@ -162,6 +163,16 @@ def dispatch_secret_env(pool: str) -> str:
 def agent_model_env(agent: str) -> str:
     """Return the env var name that overrides a reference agent's model."""
     return f"MONET_{agent.upper()}_MODEL"
+
+
+def agent_model(agent: str, default: str) -> str:
+    """Resolve a reference agent's model string from env, with a default.
+
+    Centralises the ``MONET_<AGENT>_MODEL`` lookup so the registered
+    env-var name comes from a single source and the agents do not each
+    re-roll the same ``os.environ.get`` call.
+    """
+    return os.environ.get(agent_model_env(agent)) or default
 
 
 # --- External vendor names that monet also reads --------------------------
