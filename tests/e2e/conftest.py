@@ -1,0 +1,106 @@
+"""End-to-end test fixtures.
+
+These tests exercise a real ``monet dev`` subprocess, which provisions
+Postgres via Docker and serves the compiled graphs through Aegra.
+Running them requires:
+
+- Docker running locally
+- ``MONET_E2E=1`` set in the environment
+- LLM provider credentials (``GEMINI_API_KEY`` or ``GROQ_API_KEY``)
+  reachable from the example working directory's ``.env``
+
+Tests are skipped by default so the standard ``pytest`` run stays fast
+and hermetic. Invoke explicitly with ``pytest -m e2e``.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import httpx
+import pytest
+
+from monet._ports import STANDARD_DEV_PORT
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+QUICKSTART_DIR = REPO_ROOT / "examples" / "quickstart"
+HEALTH_URL = f"http://localhost:{STANDARD_DEV_PORT}/health"
+BOOT_TIMEOUT_SECONDS = 90.0
+HEALTH_POLL_INTERVAL = 1.0
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Skip ``e2e`` tests unless ``MONET_E2E=1``."""
+    if os.environ.get("MONET_E2E") == "1":
+        return
+    skip = pytest.mark.skip(reason="E2E disabled — set MONET_E2E=1 to enable")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip)
+
+
+def _wait_for_health(timeout: float) -> None:
+    """Poll ``/health`` until 200 or timeout. Raises on timeout."""
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(HEALTH_URL, timeout=2.0)
+            if resp.status_code == 200:
+                return
+        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+            last_error = exc
+        time.sleep(HEALTH_POLL_INTERVAL)
+    msg = (
+        f"monet dev server did not become healthy within {timeout}s "
+        f"(last error: {last_error})"
+    )
+    raise RuntimeError(msg)
+
+
+@pytest.fixture(scope="session")
+def monet_dev_server() -> Iterator[str]:
+    """Start ``monet dev`` in the quickstart example; yield its URL.
+
+    Session-scoped so the Postgres container and Aegra process are
+    reused across all e2e tests in a run.
+    """
+    if not QUICKSTART_DIR.exists():
+        pytest.skip(f"quickstart example missing at {QUICKSTART_DIR}")
+    monet_bin = shutil.which("monet")
+    if monet_bin is None:
+        pytest.skip("'monet' script not on PATH — install the package first")
+
+    proc = subprocess.Popen(
+        [monet_bin, "dev"],
+        cwd=QUICKSTART_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        _wait_for_health(BOOT_TIMEOUT_SECONDS)
+        yield f"http://localhost:{STANDARD_DEV_PORT}"
+    finally:
+        subprocess.run(
+            [monet_bin, "dev", "down"],
+            cwd=QUICKSTART_DIR,
+            check=False,
+            timeout=30,
+        )
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)

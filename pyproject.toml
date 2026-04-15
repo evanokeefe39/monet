@@ -95,6 +95,7 @@ asyncio_mode = "auto"
 markers = [
     "integration: requires external services (docker-compose)",
     "llm_integration: requires LLM API keys (GEMINI_API_KEY, GROQ_API_KEY, TAVILY_API_KEY)",
+    "e2e: end-to-end against a real monet dev server (set MONET_E2E=1 to run)",
 ]
 
 [tool.ruff]
