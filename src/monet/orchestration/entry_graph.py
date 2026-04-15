@@ -47,10 +47,10 @@ async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, An
     return {"triage": triage}
 
 
-def build_entry_graph(
+def build_entry_subgraph(
     hooks: GraphHookRegistry | None = None,
 ) -> StateGraph[EntryState]:
-    """Build the triage graph. Returns uncompiled StateGraph.
+    """Build the triage subgraph. Returns uncompiled StateGraph.
 
     Args:
         hooks: Optional graph hook registry. Fires ``after_triage`` with

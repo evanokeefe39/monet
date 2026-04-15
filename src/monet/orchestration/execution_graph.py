@@ -343,10 +343,10 @@ def route_after_interrupt(state: ExecutionState) -> str:
     return "dispatch"
 
 
-def build_execution_graph(
+def build_execution_subgraph(
     hooks: GraphHookRegistry | None = None,
 ) -> StateGraph[ExecutionState]:
-    """Build the flat-DAG execution graph. Returns uncompiled StateGraph.
+    """Build the flat-DAG execution subgraph. Returns uncompiled StateGraph.
 
     Args:
         hooks: Optional graph hook registry. Fires ``before_wave`` before

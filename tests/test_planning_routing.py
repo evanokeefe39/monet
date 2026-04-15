@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
-from monet.orchestration import build_planning_graph
+from monet.orchestration import build_planning_subgraph
 from monet.orchestration.planning_graph import route_from_planner
 from monet.types import ArtifactPointer
 
@@ -79,7 +79,7 @@ _VALID_BRIEF = (
 
 async def test_planner_node_success_stores_pointer_and_skeleton(_reset: Any) -> None:
     with patch("monet.agents.planner._get_model", return_value=_mock(_VALID_BRIEF)):
-        graph = build_planning_graph().compile(checkpointer=MemorySaver())
+        graph = build_planning_subgraph().compile(checkpointer=MemorySaver())
         config = {"configurable": {"thread_id": "p-ok"}}
         await graph.ainvoke(
             {"task": "Write something", "revision_count": 0},
@@ -99,7 +99,7 @@ async def test_planner_node_success_stores_pointer_and_skeleton(_reset: Any) -> 
 async def test_planner_node_failure_routes_to_planning_failed(_reset: Any) -> None:
     # Invalid JSON will cause the planner to raise → result.success False.
     with patch("monet.agents.planner._get_model", return_value=_mock("not json")):
-        graph = build_planning_graph().compile(checkpointer=MemorySaver())
+        graph = build_planning_subgraph().compile(checkpointer=MemorySaver())
         config = {"configurable": {"thread_id": "p-fail"}}
         result = await graph.ainvoke(
             {"task": "Write something", "revision_count": 0},
@@ -122,7 +122,7 @@ async def test_planner_node_invalid_dag_routes_to_failed(_reset: Any) -> None:
         "]}"
     )
     with patch("monet.agents.planner._get_model", return_value=_mock(bad)):
-        graph = build_planning_graph().compile(checkpointer=MemorySaver())
+        graph = build_planning_subgraph().compile(checkpointer=MemorySaver())
         config = {"configurable": {"thread_id": "p-bad-dag"}}
         result = await graph.ainvoke(
             {"task": "x", "revision_count": 0},
@@ -155,7 +155,7 @@ async def test_planning_failed_emits_otel_span(_reset: Any) -> None:
     pg._tracer = provider.get_tracer("monet.orchestration.planning")
     try:
         with patch("monet.agents.planner._get_model", return_value=_mock("bad")):
-            graph = build_planning_graph().compile(checkpointer=MemorySaver())
+            graph = build_planning_subgraph().compile(checkpointer=MemorySaver())
             config = {"configurable": {"thread_id": "p-otel"}}
             await graph.ainvoke(
                 {"task": "x", "revision_count": 0},

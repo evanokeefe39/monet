@@ -188,10 +188,10 @@ def route_from_approval(state: PlanningState) -> str:
     return END
 
 
-def build_planning_graph(
+def build_planning_subgraph(
     hooks: GraphHookRegistry | None = None,
 ) -> StateGraph[PlanningState]:
-    """Build the planning graph with HITL approval. Returns uncompiled StateGraph.
+    """Build the planning subgraph with HITL approval. Returns uncompiled StateGraph.
 
     Args:
         hooks: Optional graph hook registry. Fires ``before_planning``

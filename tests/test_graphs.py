@@ -24,9 +24,9 @@ from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry  # internal: registry_scope fixture
 from monet.orchestration import (
-    build_entry_graph,
-    build_execution_graph,
-    build_planning_graph,
+    build_entry_subgraph,
+    build_execution_subgraph,
+    build_planning_subgraph,
 )
 
 
@@ -86,7 +86,7 @@ _QA = '{"verdict": "pass", "confidence": 0.9, "notes": "good"}'
 
 async def test_entry_graph_triage() -> None:
     with patch("monet.agents.planner._get_model", return_value=_mock(_TRIAGE)):
-        graph = build_entry_graph().compile(checkpointer=MemorySaver())
+        graph = build_entry_subgraph().compile(checkpointer=MemorySaver())
         config: RunnableConfig = {"configurable": {"thread_id": "t1"}}
         result = await graph.ainvoke(
             {"task": "Write a post", "trace_id": "t", "run_id": "r"},
@@ -97,7 +97,7 @@ async def test_entry_graph_triage() -> None:
 
 async def test_planning_hitl_approve() -> None:
     with patch("monet.agents.planner._get_model", return_value=_mock(_BRIEF)):
-        graph = build_planning_graph().compile(checkpointer=MemorySaver())
+        graph = build_planning_subgraph().compile(checkpointer=MemorySaver())
         config: RunnableConfig = {"configurable": {"thread_id": "p-approve"}}
         await graph.ainvoke(
             {"task": "Write something", "revision_count": 0}, config=config
@@ -117,7 +117,7 @@ async def test_planning_hitl_approve() -> None:
 
 async def test_planning_hitl_reject_then_approve() -> None:
     with patch("monet.agents.planner._get_model", return_value=_mock(_BRIEF)):
-        graph = build_planning_graph().compile(checkpointer=MemorySaver())
+        graph = build_planning_subgraph().compile(checkpointer=MemorySaver())
         config: RunnableConfig = {"configurable": {"thread_id": "p-reject"}}
         await graph.ainvoke(
             {"task": "Write something", "revision_count": 0}, config=config
@@ -173,7 +173,7 @@ async def test_execution_graph_runs_dag() -> None:
     """Execution graph runs a simple flat DAG to completion."""
     with patch("monet.agents.writer._get_model", return_value=_mock("Some content")):
         pointer = await _write_brief_artifact(_BRIEF)
-        graph = build_execution_graph().compile(checkpointer=MemorySaver())
+        graph = build_execution_subgraph().compile(checkpointer=MemorySaver())
         result = await graph.ainvoke(
             {
                 "work_brief_pointer": pointer,
@@ -206,7 +206,7 @@ async def test_execution_graph_blocking_signal_interrupts() -> None:
         return "Successful content on retry"
 
     pointer = await _write_brief_artifact(_BRIEF)
-    graph = build_execution_graph().compile(checkpointer=MemorySaver())
+    graph = build_execution_subgraph().compile(checkpointer=MemorySaver())
     config: RunnableConfig = {"configurable": {"thread_id": "exec-retry"}}
 
     # First pass: hits NEEDS_HUMAN_REVIEW → interrupt.
@@ -240,7 +240,7 @@ async def test_execution_graph_aborts_on_node_failure() -> None:
         raise RuntimeError("catastrophe")
 
     pointer = await _write_brief_artifact(_BRIEF)
-    graph = build_execution_graph().compile(checkpointer=MemorySaver())
+    graph = build_execution_subgraph().compile(checkpointer=MemorySaver())
     result = await graph.ainvoke(
         {
             "work_brief_pointer": pointer,
@@ -271,7 +271,7 @@ async def test_run_end_to_end() -> None:
         thread_id = "e2e-test"
 
         # Entry / triage
-        entry = build_entry_graph().compile(checkpointer=checkpointer)
+        entry = build_entry_subgraph().compile(checkpointer=checkpointer)
         entry_state = await entry.ainvoke(
             {
                 "task": "Write a post about AI",
@@ -283,7 +283,7 @@ async def test_run_end_to_end() -> None:
         assert entry_state.get("triage", {}).get("complexity") == "complex"
 
         # Planning with auto-approve
-        planning = build_planning_graph().compile(checkpointer=checkpointer)
+        planning = build_planning_subgraph().compile(checkpointer=checkpointer)
         planning_config: RunnableConfig = {
             "configurable": {"thread_id": f"{thread_id}-planning"}
         }
@@ -305,7 +305,7 @@ async def test_run_end_to_end() -> None:
         assert planning_state.get("routing_skeleton") is not None
 
         # Execution — pointer-only, DAG traversal.
-        execution = build_execution_graph().compile(checkpointer=checkpointer)
+        execution = build_execution_subgraph().compile(checkpointer=checkpointer)
         exec_state = await execution.ainvoke(
             {
                 "work_brief_pointer": planning_state["work_brief_pointer"],
