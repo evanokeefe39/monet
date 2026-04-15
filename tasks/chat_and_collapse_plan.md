@@ -170,7 +170,7 @@ Depends on A (chat decoupling) and B (no adapter coupling).
 - [ ] Chat direct-agent invocation: render `AgentResult` inline, append summary to thread via `send_context`
 - [ ] Tests for manifest endpoint + client method + REPL dispatch
 
-## Track E — examples
+## Track E — examples [DONE]
 
 Depend on respective prior tracks.
 

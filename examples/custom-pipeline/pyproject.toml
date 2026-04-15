@@ -1,0 +1,11 @@
+[project]
+name = "monet-custom-pipeline"
+version = "0.0.0"
+description = "Graph-level extension — MyRunState(RunState) + custom review node composed with the built-in subgraphs."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }

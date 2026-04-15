@@ -1,0 +1,6 @@
+# Declare a new entrypoint pointing at the user-defined graph so
+# `monet run reviewed "topic"` invokes it. The stock "default"
+# entrypoint (pointing at the built-in compound graph) stays reachable
+# via `monet run --graph default "topic"`.
+[entrypoints.reviewed]
+graph = "reviewed"
