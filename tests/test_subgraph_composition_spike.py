@@ -123,3 +123,149 @@ async def test_runstate_accepts_user_extension_at_type_level() -> None:
     state: _MyRunState = {"task": "x", "custom_field": "y"}
     assert state["task"] == "x"
     assert state["custom_field"] == "y"
+
+
+# ── Interrupt + resume across subgraph boundary ────────────────────
+
+
+class _InterruptSubState(TypedDict, total=False):
+    task: str
+    approved: bool | None
+
+
+def _build_interrupt_sub() -> StateGraph[_InterruptSubState]:
+    from langgraph.types import interrupt
+
+    async def _pause(state: _InterruptSubState) -> dict[str, Any]:
+        decision = interrupt({"prompt": "approve?"})
+        return {"approved": bool(decision.get("approved"))}
+
+    g: StateGraph[_InterruptSubState] = StateGraph(_InterruptSubState)
+    g.add_node("pause", _pause)
+    g.add_edge(START, "pause")
+    g.add_edge("pause", END)
+    return g
+
+
+class _InterruptParentState(TypedDict, total=False):
+    task: str
+    approved: bool | None
+    finalised: bool | None
+
+
+async def _finalise(state: _InterruptParentState) -> dict[str, Any]:
+    return {"finalised": state.get("approved") is True}
+
+
+async def test_interrupt_inside_subgraph_pauses_parent_and_resumes() -> None:
+    """Subgraph's interrupt() pauses the parent; Command(resume=...) continues
+    the subgraph from inside, then the parent proceeds to the next node.
+
+    This is the load-bearing property for Track B.3 — without it, the
+    compound-graph plan cannot use LangGraph's native HITL through a
+    subgraph node.
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.types import Command
+
+    parent: StateGraph[_InterruptParentState] = StateGraph(_InterruptParentState)
+    parent.add_node("phase", _build_interrupt_sub().compile())
+    parent.add_node("finalise", _finalise)
+    parent.add_edge(START, "phase")
+    parent.add_edge("phase", "finalise")
+    parent.add_edge("finalise", END)
+    graph = parent.compile(checkpointer=MemorySaver())
+
+    config = {"configurable": {"thread_id": "ir-1"}}
+
+    # First invocation runs the subgraph until interrupt() fires.
+    await graph.ainvoke({"task": "hi"}, config=config)  # type: ignore[call-overload]
+    state = await graph.aget_state(config)  # type: ignore[arg-type]
+    assert state.next, "expected parent paused mid-run"
+    # `finalise` must not have run yet — parent is still paused inside `phase`.
+    assert not state.values.get("finalised")
+
+    # Resume with approval. The subgraph's interrupt resolves and returns
+    # {"approved": True}; the parent proceeds to the finalise node.
+    result = await graph.ainvoke(  # type: ignore[call-overload]
+        Command(resume={"approved": True}),
+        config=config,
+    )
+    assert result["approved"] is True
+    assert result["finalised"] is True
+
+
+# ── Streaming through subgraph ─────────────────────────────────────
+
+
+class _StreamSubState(TypedDict, total=False):
+    task: str
+    output: str | None
+
+
+def _build_stream_sub() -> StateGraph[_StreamSubState]:
+    async def _work(state: _StreamSubState) -> dict[str, Any]:
+        return {"output": f"done:{state.get('task')}"}
+
+    g: StateGraph[_StreamSubState] = StateGraph(_StreamSubState)
+    g.add_node("work", _work)
+    g.add_edge(START, "work")
+    g.add_edge("work", END)
+    return g
+
+
+async def test_updates_stream_surfaces_subgraph_node_events() -> None:
+    """Updates-mode streaming at the parent must report the subgraph node's
+    state writes, so a client can observe progress happening *inside* a
+    compiled subgraph. Otherwise the collapse hides execution events.
+    """
+
+    class _StreamParentState(TypedDict, total=False):
+        task: str
+        output: str | None
+        finalised: bool | None
+
+    async def _finalise_s(state: _StreamParentState) -> dict[str, Any]:
+        return {"finalised": True}
+
+    parent: StateGraph[_StreamParentState] = StateGraph(_StreamParentState)
+    parent.add_node("phase", _build_stream_sub().compile())
+    parent.add_node("after", _finalise_s)
+    parent.add_edge(START, "phase")
+    parent.add_edge("phase", "after")
+    parent.add_edge("after", END)
+    graph = parent.compile()
+
+    updates: list[Any] = []
+    async for chunk in graph.astream(  # type: ignore[call-overload]
+        {"task": "hello"},
+        stream_mode="updates",
+        subgraphs=True,
+    ):
+        updates.append(chunk)
+
+    # Expect at least: phase node update (from subgraph) + after node update.
+    # The subgraph node update carries namespace info when subgraphs=True,
+    # so updates is a list of (namespace, {node_name: patch}) tuples.
+    # Flatten and verify both the subgraph's "work" write and parent
+    # "after" write are visible.
+    seen_writes: set[str] = set()
+    for item in updates:
+        if isinstance(item, tuple):
+            _ns, payload = item
+        else:
+            payload = item
+        if isinstance(payload, dict):
+            for node_name, patch in payload.items():
+                if isinstance(patch, dict):
+                    seen_writes.update(patch.keys())
+                    seen_writes.add(f"node:{node_name}")
+
+    # The subgraph's "work" node wrote "output"; the parent's "after"
+    # wrote "finalised". Both must be visible in the parent stream.
+    assert "output" in seen_writes, (
+        f"subgraph node's state write lost — saw {seen_writes}"
+    )
+    assert "finalised" in seen_writes, (
+        f"parent node's state write lost — saw {seen_writes}"
+    )

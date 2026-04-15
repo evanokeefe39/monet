@@ -207,6 +207,7 @@ class RunState(TypedDict, total=False):
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None
     wave_results: Annotated[list[dict[str, Any]], _append_reducer]
+    wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
     abort_reason: str | None
 
 
