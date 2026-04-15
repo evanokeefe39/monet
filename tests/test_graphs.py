@@ -106,7 +106,7 @@ async def test_planning_hitl_approve() -> None:
         assert "human_approval" in state.next
 
         result = await graph.ainvoke(
-            Command(resume={"approved": True, "feedback": None}), config=config
+            Command(resume={"action": "approve"}), config=config
         )
     assert result["plan_approved"] is True
     # Pointer-only state: the full brief lives in the artifact store, only
@@ -124,7 +124,7 @@ async def test_planning_hitl_reject_then_approve() -> None:
         )
         # Reject with feedback → triggers replan
         await graph.ainvoke(
-            Command(resume={"approved": False, "feedback": "more depth"}),
+            Command(resume={"action": "revise", "feedback": "more depth"}),
             config=config,
         )
         state = await graph.aget_state(config)
@@ -132,7 +132,7 @@ async def test_planning_hitl_reject_then_approve() -> None:
         assert "human_approval" in state.next
         # Approve revised plan
         result = await graph.ainvoke(
-            Command(resume={"approved": True, "feedback": None}), config=config
+            Command(resume={"action": "approve"}), config=config
         )
     assert result["plan_approved"] is True
 
@@ -297,7 +297,7 @@ async def test_run_end_to_end() -> None:
             config=planning_config,
         )
         planning_state = await planning.ainvoke(
-            Command(resume={"approved": True, "feedback": None}),
+            Command(resume={"action": "approve"}),
             config=planning_config,
         )
         assert planning_state.get("plan_approved") is True

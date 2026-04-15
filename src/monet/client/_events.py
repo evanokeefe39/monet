@@ -1,15 +1,84 @@
 """Typed events yielded by ``MonetClient.run()`` and query responses.
 
 These events are *graph-agnostic* — any LangGraph graph driven through
-:class:`~monet.client.MonetClient` produces them. Pipeline-specific
-events (e.g. ``TriageComplete``, ``PlanReady``, ``WaveComplete``) live
-next to their pipeline adapter — see ``monet.pipelines.default.events``.
+:class:`~monet.client.MonetClient` produces them. Domain semantics
+(triage outcome, wave structure, etc.) come through as :class:`NodeUpdate`
+deltas; consumers that want to display them inspect the update dict
+directly. Form-schema interrupts (see :class:`Form` / :class:`Field`)
+provide a uniform render contract for HITL pauses without typed event
+subclasses.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
+
+# ── Form-schema interrupt convention ────────────────────────────────
+#
+# When a graph calls ``interrupt(value)`` inside a node, the ``value``
+# dict is free-form. To let any consumer (CLI, web UI, REPL) render the
+# pause uniformly, monet ships a soft convention: if ``value`` has
+# ``prompt`` and ``fields`` keys in the shape below, renderers can
+# display a form and collect a resume payload keyed by ``field.name``.
+#
+# Graphs that don't follow the convention still work — the generic
+# ``Interrupt`` event is emitted and consumers can inspect the raw
+# dict directly. TypedDicts are opt-in type hints for graph authors
+# who want mypy coverage; no runtime enforcement.
+
+
+FieldType = Literal[
+    "text",
+    "textarea",
+    "radio",
+    "checkbox",
+    "select",
+    "int",
+    "bool",
+    "hidden",
+]
+
+
+class FieldOption(TypedDict, total=False):
+    """One selectable option for ``radio``/``checkbox``/``select`` fields."""
+
+    value: str
+    label: NotRequired[str]
+
+
+class Field(TypedDict, total=False):
+    """A single input in an interrupt form.
+
+    Required keys per type:
+
+    - ``text`` / ``textarea`` / ``int`` / ``bool``: ``name``, ``type``
+    - ``radio`` / ``checkbox`` / ``select``: ``name``, ``type``, ``options``
+    - ``hidden``: ``name``, ``type``, ``value`` (pass-through, not rendered)
+
+    Optional keys on every field: ``label`` (human-readable),
+    ``default``, ``required`` (default ``True``), ``help``.
+    """
+
+    name: str
+    type: FieldType
+    label: NotRequired[str]
+    options: NotRequired[list[FieldOption]]
+    default: NotRequired[Any]
+    required: NotRequired[bool]
+    help: NotRequired[str]
+    value: NotRequired[Any]
+
+
+class Form(TypedDict, total=False):
+    """An interrupt form envelope. Graphs pass this (or any dict) to
+    ``interrupt()``. Consumers check for ``fields`` to opt into rendering.
+    """
+
+    prompt: str
+    fields: list[Field]
+    context: NotRequired[dict[str, Any]]
+
 
 # ── Run stream events ───────────────────────────────────────────────
 

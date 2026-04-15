@@ -1,54 +1,49 @@
-"""E2E-02 — manual HITL variants.
+"""E2E-02 — manual HITL via form-schema interrupts.
 
-Drives the default pipeline against a real server via ``MonetClient``,
-exercising the three plan-decision verbs:
-
-- ``approve`` — pipeline runs to ``RunComplete`` after
-  ``continue_after_plan_approval`` drives execution.
-- ``revise`` — planning re-runs with feedback, then approves.
-- ``reject`` — pipeline stops; no execution.
-
-This test directly validates the fix for the ``_resume_pipeline`` stub.
+Drives the compound default graph against a real server via
+``MonetClient`` and exercises the three plan-decision options:
+``approve``, ``revise``, ``reject``. After Track B's collapse, the
+default pipeline is one graph on one thread — the client streams it
+end-to-end, pauses on the planning subgraph's ``interrupt(...)``,
+and resumes via ``client.resume(run_id, tag, {"action": ...})``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any
 
 import pytest
 
 from monet.client import Interrupt, MonetClient, RunComplete, RunFailed
-from monet.pipelines.default import (
-    PlanInterrupt,
-    approve_plan,
-    continue_after_plan_approval,
-    reject_plan,
-    revise_plan,
-)
-from monet.pipelines.default import (
-    run as run_default,
-)
+from monet.client._wire import task_input
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+TOPIC = "AI trends in healthcare"
 
 
-async def _drive_until_plan_interrupt(
+async def _drive_until_interrupt(
     client: MonetClient,
     topic: str,
-) -> tuple[str | None, AsyncIterator[object]]:
-    """Iterate run_default until a PlanInterrupt appears. Return run_id + gen."""
+) -> tuple[str, Interrupt]:
+    """Stream the default graph until an Interrupt event appears.
+
+    Returns the (run_id, interrupt). Raises if the run completes or
+    fails before any interrupt is seen.
+    """
     run_id: str | None = None
-    gen = run_default(client, topic, auto_approve=False)
-    async for ev in gen:
+    interrupt_event: Interrupt | None = None
+    async for ev in client.run("default", task_input(topic, "")):
         if run_id is None and hasattr(ev, "run_id"):
             run_id = ev.run_id
-        if isinstance(ev, PlanInterrupt):
-            return run_id, gen
-        if isinstance(ev, RunComplete | RunFailed | Interrupt):
+        if isinstance(ev, Interrupt):
+            interrupt_event = ev
             break
-    msg = "pipeline ended before PlanInterrupt — cannot exercise HITL"
-    raise AssertionError(msg)
+        if isinstance(ev, RunComplete | RunFailed):
+            break
+    if run_id is None:
+        raise AssertionError("never observed a run_id")
+    if interrupt_event is None:
+        raise AssertionError("pipeline ended before any Interrupt")
+    return run_id, interrupt_event
 
 
 @pytest.mark.e2e
@@ -56,61 +51,69 @@ async def test_approve_drives_execution_to_completion(
     monet_dev_server: str,
 ) -> None:
     client = MonetClient(monet_dev_server)
-    run_id, _ = await _drive_until_plan_interrupt(client, "AI trends in healthcare")
-    assert run_id is not None
+    run_id, ev = await _drive_until_interrupt(client, TOPIC)
 
-    await approve_plan(client, run_id)
+    await client.resume(run_id, ev.tag, {"action": "approve"})
 
     saw_complete = False
-    async for ev in continue_after_plan_approval(client, run_id):
-        if isinstance(ev, RunComplete):
+    async for ev2 in client.run("default", None):
+        if isinstance(ev2, RunComplete):
             saw_complete = True
             break
-        if isinstance(ev, RunFailed):
-            pytest.fail(f"run failed during execution: {ev.error}")
+        if isinstance(ev2, RunFailed):
+            pytest.fail(f"run failed during execution: {ev2.error}")
     assert saw_complete, "expected RunComplete after approve"
 
 
 @pytest.mark.e2e
 async def test_revise_then_approve(monet_dev_server: str) -> None:
     client = MonetClient(monet_dev_server)
-    run_id, _ = await _drive_until_plan_interrupt(client, "AI trends in healthcare")
-    assert run_id is not None
+    run_id, ev = await _drive_until_interrupt(client, TOPIC)
 
-    # First pass: ask for revision.
-    await revise_plan(client, run_id, "make the plan shorter")
+    await client.resume(
+        run_id,
+        ev.tag,
+        {"action": "revise", "feedback": "make the plan shorter"},
+    )
 
-    # The planning thread loops and re-emits an interrupt. Re-drive.
-    # NOTE: revise_plan dispatches the resume but doesn't wait for the
-    # next interrupt — the thread is paused again awaiting human
-    # approval. Approve and drive execution.
-    await approve_plan(client, run_id)
+    # Planning subgraph re-emits an interrupt after revision.
+    second: Interrupt | None = None
+    async for ev2 in client.run("default", None):
+        if isinstance(ev2, Interrupt):
+            second = ev2
+            break
+        if isinstance(ev2, RunComplete | RunFailed):
+            break
+    assert second is not None, "expected a second interrupt after revise"
+
+    await client.resume(run_id, second.tag, {"action": "approve"})
 
     saw_complete = False
-    async for ev in continue_after_plan_approval(client, run_id):
-        if isinstance(ev, RunComplete):
+    async for ev3 in client.run("default", None):
+        if isinstance(ev3, RunComplete):
             saw_complete = True
             break
-        if isinstance(ev, RunFailed):
-            pytest.fail(f"run failed: {ev.error}")
+        if isinstance(ev3, RunFailed):
+            pytest.fail(f"run failed: {ev3.error}")
     assert saw_complete, "expected RunComplete after revise → approve"
 
 
 @pytest.mark.e2e
 async def test_reject_halts_pipeline(monet_dev_server: str) -> None:
     client = MonetClient(monet_dev_server)
-    run_id, _ = await _drive_until_plan_interrupt(client, "AI trends in healthcare")
-    assert run_id is not None
+    run_id, ev = await _drive_until_interrupt(client, TOPIC)
 
-    await reject_plan(client, run_id)
+    await client.resume(run_id, ev.tag, {"action": "reject"})
 
-    # continue_after_plan_approval should yield RunFailed because the
-    # plan never got approved.
-    saw_failed = False
-    async for ev in continue_after_plan_approval(client, run_id):
-        if isinstance(ev, RunFailed):
-            saw_failed = True
+    # After rejection, the pipeline ends without execution.
+    final_state: dict[str, Any] | None = None
+    async for ev2 in client.run("default", None):
+        if isinstance(ev2, RunComplete):
+            final_state = dict(ev2.final_values)
             break
-        if isinstance(ev, RunComplete):
-            pytest.fail("RunComplete after reject — pipeline should halt")
-    assert saw_failed, "expected RunFailed after reject"
+        if isinstance(ev2, RunFailed):
+            final_state = {}
+            break
+    assert final_state is not None, "expected pipeline to terminate"
+    # plan_approved should be False, no wave_results.
+    assert not final_state.get("wave_results")

@@ -196,7 +196,7 @@ def test_default_entrypoints_include_run_and_chat() -> None:
 
     assert "default" in DEFAULT_ENTRYPOINTS
     assert "chat" in DEFAULT_ENTRYPOINTS
-    assert DEFAULT_ENTRYPOINTS["default"]["graph"] == "entry"
+    assert DEFAULT_ENTRYPOINTS["default"]["graph"] == "default"
     assert DEFAULT_ENTRYPOINTS["chat"]["graph"] == "chat"
 
 
@@ -212,7 +212,7 @@ def test_user_can_override_chat_entrypoint(tmp_path: Path) -> None:
     eps = load_entrypoints(toml)
     assert eps["chat"]["graph"] == "my_chat"
     # Default remains alongside override.
-    assert eps["default"]["graph"] == "entry"
+    assert eps["default"]["graph"] == "default"
 
 
 def test_read_toml_section_empty_when_section_missing(

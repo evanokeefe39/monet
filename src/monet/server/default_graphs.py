@@ -25,13 +25,7 @@ from monet.orchestration import (
     build_chat_graph as _build_chat_graph,
 )
 from monet.orchestration import (
-    build_entry_subgraph as _build_entry_subgraph,
-)
-from monet.orchestration import (
-    build_execution_subgraph as _build_execution_subgraph,
-)
-from monet.orchestration import (
-    build_planning_subgraph as _build_planning_subgraph,
+    build_default_graph as _build_default_graph,
 )
 from monet.orchestration import (
     configure_queue,
@@ -110,25 +104,13 @@ def build_chat_graph() -> StateGraph:  # type: ignore[type-arg]
     return _build_chat_graph()
 
 
-def build_entry_graph() -> StateGraph:  # type: ignore[type-arg]
+def build_default_graph() -> StateGraph:  # type: ignore[type-arg]
     """0-arg wrapper for Aegra compatibility."""
-    return _build_entry_subgraph()
-
-
-def build_planning_graph() -> StateGraph:  # type: ignore[type-arg]
-    """0-arg wrapper for Aegra compatibility."""
-    return _build_planning_subgraph()
-
-
-def build_execution_graph() -> StateGraph:  # type: ignore[type-arg]
-    """0-arg wrapper for Aegra compatibility."""
-    return _build_execution_subgraph()
+    return _build_default_graph()
 
 
 __all__ = [
     "build_chat_graph",
-    "build_entry_graph",
-    "build_execution_graph",
-    "build_planning_graph",
+    "build_default_graph",
     "queue",
 ]

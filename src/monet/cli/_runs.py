@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING
 
 import click
@@ -12,8 +13,7 @@ if TYPE_CHECKING:
 
 from monet._ports import STANDARD_DEV_PORT
 from monet.cli._render import (
-    prompt_execution_decision,
-    prompt_plan_decision,
+    render_interrupt_form,
     render_pending_table,
     render_run_table,
 )
@@ -95,24 +95,22 @@ async def _pending(url: str, api_key: str | None) -> None:
     help="API key for server auth.",
 )
 def inspect(run_id: str, url: str, api_key: str | None) -> None:
-    """Show full detail for a run: triage, plan, waves, artifacts."""
+    """Show full detail for a run: status, completed stages, raw values."""
     asyncio.run(_inspect(url, api_key, run_id))
 
 
 async def _inspect(url: str, api_key: str | None, run_id: str) -> None:
-    from monet.pipelines.default import DefaultPipelineRunDetail
-    from monet.pipelines.default.render import render_pipeline_run_detail
-
     client = _make_client(url, api_key)
     detail = await client.get_run(run_id)
-    # If the run's stages look like the default pipeline, render the typed view.
-    if any(s in detail.completed_stages for s in ("entry", "planning", "execution")):
-        render_pipeline_run_detail(DefaultPipelineRunDetail.from_run_detail(detail))
-    else:
-        click.secho(f"Run {detail.run_id}", bold=True)
-        click.echo(f"  Status: {detail.status}")
-        if detail.completed_stages:
-            click.echo(f"  Stages: {', '.join(detail.completed_stages)}")
+    click.secho(f"Run {detail.run_id}", bold=True)
+    click.echo(f"  Status: {detail.status}")
+    if detail.completed_stages:
+        click.echo(f"  Stages: {', '.join(detail.completed_stages)}")
+    if detail.values:
+        click.echo("  Values:")
+        click.echo(json.dumps(detail.values, indent=2, default=str, ensure_ascii=False))
+    if detail.pending_interrupt is not None:
+        click.secho(f"  Paused at: {detail.pending_interrupt.tag}", fg="yellow")
 
 
 @runs.command()
@@ -132,8 +130,10 @@ async def _inspect(url: str, api_key: str | None, run_id: str) -> None:
 def resume(run_id: str, url: str, api_key: str | None) -> None:
     """Resume an interrupted run.
 
-    Detects the pending interrupt's tag, prompts for a decision, and
-    dispatches the matching HITL verb.
+    Renders the pending interrupt's form-schema envelope, collects a
+    payload, and dispatches it via ``client.resume``. Falls back to a
+    raw-JSON prompt if the interrupt doesn't follow the form-schema
+    convention.
     """
     try:
         exit_code = asyncio.run(_resume(url, api_key, run_id))
@@ -143,14 +143,6 @@ def resume(run_id: str, url: str, api_key: str | None) -> None:
 
 
 async def _resume(url: str, api_key: str | None, run_id: str) -> int:
-    from monet.pipelines.default import (
-        abort_run,
-        approve_plan,
-        reject_plan,
-        retry_wave,
-        revise_plan,
-    )
-
     client = _make_client(url, api_key)
     detail = await client.get_run(run_id)
 
@@ -158,29 +150,7 @@ async def _resume(url: str, api_key: str | None, run_id: str) -> int:
         click.echo(f"Run {run_id} is not interrupted (status: {detail.status}).")
         return 0
 
-    tag = detail.pending_interrupt.tag
-
-    if tag == "human_approval":
-        decision = prompt_plan_decision()
-        if decision == "approve":
-            await approve_plan(client, run_id)
-        elif decision == "revise":
-            feedback = click.prompt("Feedback")
-            await revise_plan(client, run_id, feedback)
-        elif decision == "reject":
-            await reject_plan(client, run_id)
-            click.secho("Run rejected.", fg="red")
-            return 1
-        return 0
-
-    if tag == "human_interrupt":
-        exec_decision = prompt_execution_decision()
-        if exec_decision == "retry":
-            await retry_wave(client, run_id)
-            return 0
-        await abort_run(client, run_id)
-        click.secho("Run aborted.", fg="red")
-        return 1
-
-    click.echo(f"Run {run_id} is interrupted at unknown tag: {tag}")
-    return 1
+    pending_interrupt = detail.pending_interrupt
+    payload = render_interrupt_form(pending_interrupt.values)
+    await client.resume(run_id, pending_interrupt.tag, payload)
+    return 0

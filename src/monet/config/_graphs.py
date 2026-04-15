@@ -33,9 +33,7 @@ __all__ = [
 # Single source of truth for default graph IDs.
 # Matches the IDs in aegra.json.
 DEFAULT_GRAPH_ROLES: dict[str, str] = {
-    "entry": "entry",
-    "planning": "planning",
-    "execution": "execution",
+    "default": "default",
     "chat": "chat",
 }
 
@@ -56,7 +54,7 @@ class Entrypoint(TypedDict):
 # ``chat``. Override either by adding a ``[entrypoints.<name>]`` block
 # to ``monet.toml``.
 DEFAULT_ENTRYPOINTS: dict[str, Entrypoint] = {
-    "default": {"graph": "entry"},
+    "default": {"graph": "default"},
     "chat": {"graph": "chat"},
 }
 

@@ -1,9 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "entry": "monet.orchestration.entry_graph:build_entry_graph",
-    "planning": "monet.orchestration.planning_graph:build_planning_graph",
-    "execution": "monet.orchestration.execution_graph:build_execution_graph"
+    "chat": "monet.server.default_graphs:build_chat_graph",
+    "default": "monet.server.default_graphs:build_default_graph"
   },
   "env": ".env"
 }

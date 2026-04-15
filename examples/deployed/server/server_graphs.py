@@ -9,14 +9,10 @@ from __future__ import annotations
 
 from monet.server.default_graphs import (
     build_chat_graph,
-    build_entry_graph,
-    build_execution_graph,
-    build_planning_graph,
+    build_default_graph,
 )
 
 __all__ = [
     "build_chat_graph",
-    "build_entry_graph",
-    "build_execution_graph",
-    "build_planning_graph",
+    "build_default_graph",
 ]

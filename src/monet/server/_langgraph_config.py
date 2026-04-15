@@ -12,17 +12,16 @@ from typing import Any
 def default_config() -> dict[str, Any]:
     """Return the built-in Aegra config for monet's default graphs.
 
-    This config points to the three standard graphs (entry, planning,
-    execution) exported by ``monet.server.default_graphs``, and mounts
-    monet's worker/task routes via the ``http.app`` custom-routes field.
+    Serves two graphs: ``default`` (the compound entry→planning→
+    execution pipeline) and ``chat`` (the multi-turn conversational
+    graph). Also mounts monet's worker/task routes via the ``http.app``
+    custom-routes field.
     """
     return {
         "dependencies": ["."],
         "graphs": {
             "chat": "monet.server.default_graphs:build_chat_graph",
-            "entry": "monet.server.default_graphs:build_entry_graph",
-            "planning": "monet.server.default_graphs:build_planning_graph",
-            "execution": "monet.server.default_graphs:build_execution_graph",
+            "default": "monet.server.default_graphs:build_default_graph",
         },
         "http": {
             "app": "monet.server._aegra_routes:app",

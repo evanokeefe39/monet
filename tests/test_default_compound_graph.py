@@ -114,7 +114,9 @@ async def test_compound_graph_pauses_at_planning_interrupt() -> None:
         # payload, which UIs read for rendering.
         assert state.tasks, "expected paused task"
         interrupt_value = state.tasks[0].interrupts[0].value
-        assert interrupt_value["routing_skeleton"]["goal"] == "Test goal"
+        # Form-schema envelope: skeleton lives in context.
+        assert interrupt_value["fields"][0]["name"] == "action"
+        assert interrupt_value["context"]["routing_skeleton"]["goal"] == "Test goal"
 
 
 async def test_compound_graph_approves_and_drives_execution() -> None:
@@ -141,7 +143,7 @@ async def test_compound_graph_approves_and_drives_execution() -> None:
 
         # Resume with approval — execution subgraph drives the DAG.
         result = await graph.ainvoke(
-            Command(resume={"approved": True, "feedback": None}),
+            Command(resume={"action": "approve"}),
             config=config,
         )
 
@@ -168,7 +170,7 @@ async def test_compound_graph_ends_on_plan_rejection() -> None:
             config=config,
         )
         result = await graph.ainvoke(
-            Command(resume={"approved": False, "feedback": None}),
+            Command(resume={"action": "reject"}),
             config=config,
         )
 

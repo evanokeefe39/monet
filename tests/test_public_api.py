@@ -157,26 +157,15 @@ def test_client_public_api() -> None:
     )
 
 
-def test_default_pipeline_public_api() -> None:
-    """Default-pipeline surface — typed events and HITL verbs."""
-    from monet.pipelines.default import (  # noqa: F401
-        DefaultInterruptTag,
-        DefaultPipelineEvent,
-        DefaultPipelineRunDetail,
-        ExecutionInterrupt,
-        PlanApproved,
-        PlanInterrupt,
-        PlanReady,
-        ReflectionComplete,
-        TriageComplete,
-        WaveComplete,
-        abort_run,
-        approve_plan,
-        continue_after_plan_approval,
-        reject_plan,
-        retry_wave,
-        revise_plan,
-        run,
+def test_default_graph_public_api() -> None:
+    """Compound default graph + form-schema interrupt convention."""
+    from monet.client import Field, Form, Interrupt  # noqa: F401
+    from monet.orchestration import (  # noqa: F401
+        RunState,
+        build_default_graph,
+        build_entry_subgraph,
+        build_execution_subgraph,
+        build_planning_subgraph,
     )
 
 

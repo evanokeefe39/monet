@@ -2,22 +2,19 @@
 
 :class:`MonetClient` is graph-agnostic: it drives any graph declared in
 ``monet.toml [entrypoints]``, streams typed core events, and exposes
-generic HITL resume/abort. Pipeline-specific composition (the default
-entry → planning → execution flow) lives in
-:mod:`monet.pipelines.default`.
+generic HITL resume via :meth:`MonetClient.resume`. The default
+``entry → planning → execution`` pipeline ships as a single compound
+graph (``monet.orchestration.build_default_graph``) so a
+``client.run("default", ...)`` call drives it end-to-end on one
+thread, with native LangGraph ``interrupt()`` for HITL.
 
 Typical library usage::
 
     from monet.client import MonetClient
-    from monet.pipelines.default import run as run_default
+    from monet.client._wire import task_input
 
     client = MonetClient("http://localhost:2026")
-    async for event in run_default(client, "topic", auto_approve=True):
-        print(event)
-
-For single-graph invocations::
-
-    async for event in client.run("my-graph", {"task": "hello", "run_id": "abc"}):
+    async for event in client.run("default", task_input("topic", "")):
         print(event)
 """
 
@@ -38,6 +35,10 @@ from monet.client._errors import (
 from monet.client._events import (
     AgentProgress,
     ChatSummary,
+    Field,
+    FieldOption,
+    FieldType,
+    Form,
     Interrupt,
     NodeUpdate,
     PendingDecision,
@@ -74,6 +75,10 @@ __all__ = [
     "AlreadyResolved",
     "AmbiguousInterrupt",
     "ChatSummary",
+    "Field",
+    "FieldOption",
+    "FieldType",
+    "Form",
     "GraphNotInvocable",
     "Interrupt",
     "InterruptTagMismatch",
@@ -144,8 +149,10 @@ class MonetClient:
     - **Chat** — :meth:`create_chat`, :meth:`send_message`, etc. drive
       the chat graph resolved from ``monet.toml [graphs]``.
 
-    Pipeline-specific verbs (``approve_plan`` etc.) live on the
-    pipeline adapter modules (e.g. ``monet.pipelines.default``).
+    Interrupts surface as the generic :class:`Interrupt` event and are
+    answered with :meth:`resume`. Form-schema convention (see
+    :class:`Form` / :class:`Field`) lets any consumer render the pause
+    uniformly without pipeline-specific verbs.
     """
 
     def __init__(

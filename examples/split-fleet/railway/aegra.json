@@ -2,9 +2,7 @@
   "dependencies": ["."],
   "graphs": {
     "chat": "./railway/server_graphs.py:build_chat_graph",
-    "entry": "./railway/server_graphs.py:build_entry_graph",
-    "planning": "./railway/server_graphs.py:build_planning_graph",
-    "execution": "./railway/server_graphs.py:build_execution_graph",
+    "default": "./railway/server_graphs.py:build_default_graph",
     "demo": "./railway/server_graphs.py:build_demo_graph"
   },
   "http": {

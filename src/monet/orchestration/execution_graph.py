@@ -323,17 +323,42 @@ async def dispatch_node(state: ExecutionState) -> dict[str, Any]:
 
 
 async def human_interrupt(state: ExecutionState) -> dict[str, Any]:
-    """Pause for human decision after a blocking signal."""
+    """Pause for human decision after a blocking signal.
+
+    Emits a form-schema envelope. Resume payload::
+
+        {"action": "retry" | "abort", "feedback": str | None}
+    """
     results = state.get("wave_results") or []
     last = results[-1] if results else {}
     decision = interrupt(
         {
-            "reason": "Blocking signal from node execution",
-            "last_result": last,
+            "prompt": "Execution paused — retry or abort?",
+            "fields": [
+                {
+                    "name": "action",
+                    "type": "radio",
+                    "label": "Decision",
+                    "options": [
+                        {"value": "retry", "label": "Retry"},
+                        {"value": "abort", "label": "Abort"},
+                    ],
+                },
+                {
+                    "name": "feedback",
+                    "type": "textarea",
+                    "label": "Reason (optional)",
+                    "required": False,
+                },
+            ],
+            "context": {
+                "reason": "Blocking signal from node execution",
+                "last_result": last,
+            },
         }
     )
     if isinstance(decision, dict) and decision.get("action") == "abort":
-        return {"abort_reason": decision.get("feedback", "Aborted by human")}
+        return {"abort_reason": decision.get("feedback") or "Aborted by human"}
     return {}
 
 
