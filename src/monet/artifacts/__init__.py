@@ -43,6 +43,12 @@ def artifacts_from_env(*, default_root: Path | None = None) -> ArtifactService:
     (``MONET_ARTIFACTS_DIR`` env), falling back to ``default_root`` and
     finally to ``Path(".artifacts")``. Creates the directory if needed.
 
+    Applies pending alembic migrations eagerly — this is the developer-
+    ergonomic factory where "just works" is the contract. Production
+    deploys that want explicit control should construct :class:`SQLiteIndex`
+    directly and gate on ``monet db check`` in the deploy pipeline; the
+    direct constructor path fails fast if the DB is not at head.
+
     Args:
         default_root: Fallback path when ``MONET_ARTIFACTS_DIR`` is unset.
             Defaults to ``Path(".artifacts")``.
@@ -50,12 +56,16 @@ def artifacts_from_env(*, default_root: Path | None = None) -> ArtifactService:
     Returns:
         A configured :class:`ArtifactService`.
     """
+    from monet.artifacts._migrations import apply_migrations
+
     fallback = default_root or Path(".artifacts")
     root = ArtifactsConfig.load().resolve_root(fallback)
     root.mkdir(parents=True, exist_ok=True)
+    db_url = f"sqlite+aiosqlite:///{root / 'index.db'}"
+    apply_migrations(db_url)
     return ArtifactService(
         storage=FilesystemStorage(root=root / "blobs"),
-        index=SQLiteIndex(db_url=f"sqlite+aiosqlite:///{root / 'index.db'}"),
+        index=SQLiteIndex(db_url=db_url),
     )
 
 

@@ -20,6 +20,7 @@ dependencies = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
     "sqlalchemy>=2.0",
+    "alembic>=1.13",
     "langgraph>=1.0",
     "langgraph-checkpoint-postgres>=1.0",
     "psycopg[binary]>=3.0",
@@ -146,6 +147,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "redis.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "alembic.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

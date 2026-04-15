@@ -7,6 +7,7 @@ Commands:
     monet server   — start the orchestration server
     monet worker   — start a worker process
     monet register — register agent capabilities with a server
+    monet db       — artifact index schema migration commands
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import click
 
 from monet.cli._chat import chat
+from monet.cli._db import db
 from monet.cli._dev import dev
 from monet.cli._register import register
 from monet.cli._run import run
@@ -32,6 +34,7 @@ def cli() -> None:
 
 
 cli.add_command(chat)
+cli.add_command(db)
 cli.add_command(dev)
 cli.add_command(run)
 cli.add_command(runs)
