@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from monet.config import (
     default_config_path,
+    dispatch_secret_env,
     pool_auth_env,
     pool_url_env,
     read_str,
@@ -34,6 +35,11 @@ class PoolConfig:
             (``MONET_POOL_{NAME}_URL``) if not in the TOML file.
         auth: Auth token/secret for pull/push pools. Resolved from env
             (``MONET_POOL_{NAME}_AUTH``) if not in the TOML file.
+        dispatch_secret: Bearer that monet presents to the push-pool
+            webhook at ``url``. Lets the worker endpoint reject random
+            internet traffic. Resolved from env
+            (``MONET_POOL_{NAME}_DISPATCH_SECRET``) if not in TOML.
+            Only meaningful for ``type="push"`` pools.
     """
 
     name: str
@@ -41,6 +47,7 @@ class PoolConfig:
     lease_ttl: int = 300
     url: str | None = None
     auth: str | None = None
+    dispatch_secret: str | None = None
 
 
 def load_config(path: Path | None = None) -> dict[str, PoolConfig]:
@@ -91,6 +98,9 @@ def load_config(path: Path | None = None) -> dict[str, PoolConfig]:
 
         url = pool_data.get("url") or read_str(pool_url_env(name))
         auth = pool_data.get("auth") or read_str(pool_auth_env(name))
+        dispatch_secret = pool_data.get("dispatch_secret") or read_str(
+            dispatch_secret_env(name)
+        )
 
         # Push pools require a URL — either in config or environment.
         if pool_type == "push" and url is None:
@@ -105,6 +115,7 @@ def load_config(path: Path | None = None) -> dict[str, PoolConfig]:
             lease_ttl=int(cast("int", lease_ttl)),
             url=cast("str | None", url),
             auth=cast("str | None", auth),
+            dispatch_secret=cast("str | None", dispatch_secret),
         )
 
     return result

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from monet._ports import MAX_INLINE_PAYLOAD_BYTES
 from monet.core.manifest import AgentCapability, AgentManifest
 from monet.queue import TaskQueue
-from monet.server._auth import require_api_key
+from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+from monet.server._auth import require_api_key, require_task_auth
 from monet.server._deployment import DeploymentStore
 from monet.types import AgentResult, ArtifactPointer, Signal
 
@@ -89,12 +91,20 @@ class CreateDeploymentRequest(BaseModel):
     capabilities: list[dict[str, str]]
 
 
+class PoolClaimRequest(BaseModel):
+    """Body for ``POST /api/v1/pools/{pool}/claim``."""
+
+    consumer_id: str
+    block_ms: int = 5000
+
+
 class HealthResponse(BaseModel):
     """Response for ``GET /api/v1/health``."""
 
     status: str
     workers: int
     queued: int
+    redis: str | None = None
 
 
 # -- Router ----------------------------------------------------------------
@@ -184,11 +194,11 @@ async def claim_task(
     response: Response,
     queue: Queue,
 ) -> dict[str, Any] | None:
-    """Claim the next pending task in a pool.
+    """Claim the next pending task in a pool (legacy non-blocking).
 
-    Returns the task record on success or 204 No Content when the pool
-    is empty. Phase 3 replaces this with ``POST /api/v1/pools/{pool}/claim``
-    that takes a body with ``consumer_id`` and ``block_ms``.
+    Kept for RemoteQueue backwards compatibility. New workers should
+    use ``POST /api/v1/pools/{pool}/claim`` which honours ``block_ms``
+    and ``consumer_id``.
     """
     record = await queue.claim(pool, consumer_id="server", block_ms=0)
     if record is None:
@@ -198,8 +208,34 @@ async def claim_task(
 
 
 @router.post(
-    "/tasks/{task_id}/complete",
+    "/pools/{pool}/claim",
     dependencies=[Depends(require_api_key)],
+)
+async def claim_from_pool(
+    pool: str,
+    body: PoolClaimRequest,
+    response: Response,
+    queue: Queue,
+) -> dict[str, Any] | None:
+    """Claim one task from the pool, server-blocking up to ``block_ms``.
+
+    The server issues ``XREADGROUP ... BLOCK block_ms`` (or the memory
+    equivalent) so the worker's HTTP request waits until a task lands
+    or the timeout elapses. Returns the task record on success or 204
+    No Content on timeout.
+    """
+    record = await queue.claim(
+        pool, consumer_id=body.consumer_id, block_ms=body.block_ms
+    )
+    if record is None:
+        response.status_code = 204
+        return None
+    return dict(record)
+
+
+@router.post(
+    "/tasks/{task_id}/complete",
+    dependencies=[Depends(require_task_auth)],
 )
 async def complete_task(
     task_id: str,
@@ -228,7 +264,7 @@ async def complete_task(
 
 @router.post(
     "/tasks/{task_id}/fail",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_task_auth)],
 )
 async def fail_task(
     task_id: str,
@@ -242,21 +278,35 @@ async def fail_task(
 
 @router.post(
     "/tasks/{task_id}/progress",
-    dependencies=[Depends(require_api_key)],
+    status_code=202,
+    dependencies=[Depends(require_task_auth)],
 )
 async def post_progress(
     task_id: str,
     body: dict[str, Any],
     queue: Queue,
+    request: Request,
 ) -> dict[str, str]:
-    """Post a progress event from a remote worker to the server queue.
+    """Fire-and-forget progress event from a remote worker.
 
-    The server queue fans events out to any active subscribers via
-    ``subscribe_progress``. The server's ``invoke_agent`` forwards those
-    events into the active LangGraph stream.
+    Rejects bodies larger than ``MAX_INLINE_PAYLOAD_BYTES`` (413). The
+    server publishes to Redis Pub/Sub (or the in-memory fan-out); lost
+    publishes are acceptable per ADR §progress-flow loss budget.
     """
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            size = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid Content-Length") from exc
+        if size > MAX_INLINE_PAYLOAD_BYTES:
+            raise HTTPException(
+                413,
+                f"Progress payload {size} bytes exceeds "
+                f"MAX_INLINE_PAYLOAD_BYTES={MAX_INLINE_PAYLOAD_BYTES}",
+            )
     await queue.publish_progress(task_id, body)
-    return {"status": "ok"}
+    return {"status": "accepted"}
 
 
 @router.get(
@@ -291,9 +341,30 @@ async def create_deployment(
 async def health(
     deployments: Deployments,
     queue: Queue,
+    response: Response,
 ) -> HealthResponse:
-    """Health check endpoint. No authentication required."""
+    """Health check. No authentication required.
+
+    On a Redis-backed queue, PING is required to return 200 — a Redis
+    outage must surface as 503 here so load balancers stop routing to
+    broken replicas instead of returning a false-healthy 200.
+    """
     active = await deployments.get_active()
     worker_count = len(active)
     queued = getattr(queue, "pending_count", 0)
-    return HealthResponse(status="ok", workers=worker_count, queued=queued)
+    redis_status: str | None = None
+    if isinstance(queue, RedisStreamsTaskQueue):
+        if await queue.ping():
+            redis_status = "ok"
+        else:
+            redis_status = "down"
+            response.status_code = 503
+            return HealthResponse(
+                status="degraded",
+                workers=worker_count,
+                queued=queued,
+                redis=redis_status,
+            )
+    return HealthResponse(
+        status="ok", workers=worker_count, queued=queued, redis=redis_status
+    )

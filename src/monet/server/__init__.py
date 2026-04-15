@@ -57,10 +57,13 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: _FastAPI) -> AsyncIterator[None]:
+        from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+
         await deployments.initialize()
 
         # Periodic stale-deployment sweeper
         sweeper_task: asyncio.Task[None] | None = None
+        queue_sweeper_task: asyncio.Task[None] | None = None
 
         async def _sweep_loop() -> None:
             while True:
@@ -79,6 +82,21 @@ def create_app(
 
         sweeper_task = asyncio.create_task(_sweep_loop())
 
+        # Redis Streams queue sweeper — reclaims PEL entries whose lease
+        # has expired. Only active when the streams backend is wired.
+        if isinstance(queue, RedisStreamsTaskQueue):
+            interval = max(queue._lease_ttl / 3, 5.0)
+
+            async def _queue_sweep_loop() -> None:
+                while True:
+                    await asyncio.sleep(interval)
+                    try:
+                        await queue.reclaim_expired_internal()
+                    except Exception:
+                        logger.exception("Queue sweeper failed")
+
+            queue_sweeper_task = asyncio.create_task(_queue_sweep_loop())
+
         try:
             yield
         finally:
@@ -86,6 +104,12 @@ def create_app(
                 sweeper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await sweeper_task
+            if queue_sweeper_task is not None:
+                queue_sweeper_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await queue_sweeper_task
+            if isinstance(queue, RedisStreamsTaskQueue):
+                await queue.close()
             await deployments.close()
 
     app = _FastAPI(lifespan=lifespan)
