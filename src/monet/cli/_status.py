@@ -8,7 +8,7 @@ from typing import Any
 
 import click
 
-from monet._constants import STANDARD_DEV_PORT
+from monet._ports import STANDARD_DEV_PORT
 from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
 

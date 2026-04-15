@@ -21,7 +21,7 @@ import click
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-from monet._constants import STANDARD_DEV_PORT, state_file
+from monet._ports import STANDARD_DEV_PORT, state_file
 from monet.cli._setup import check_env
 
 

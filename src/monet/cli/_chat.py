@@ -15,7 +15,7 @@ import click
 if TYPE_CHECKING:
     from monet.client import MonetClient
 
-from monet._constants import STANDARD_DEV_PORT
+from monet._ports import STANDARD_DEV_PORT
 from monet.cli._render import (
     prompt_execution_decision,
     prompt_plan_decision,
@@ -79,8 +79,8 @@ async def _chat_main(
     session_name: str | None,
     graph_override: str | None,
 ) -> None:
-    from monet._graph_config import load_graph_roles
     from monet.client import MonetClient
+    from monet.config import load_graph_roles
 
     graph_ids = load_graph_roles()
     if graph_override:

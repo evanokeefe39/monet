@@ -10,9 +10,8 @@ Known issues (bugs, deprecations, standards violations, design gaps) live in `IS
 
 - `src/monet/` — package source (src layout)
   - Top-level modules (stable public surface): `types.py` (`AgentResult`, `AgentRunContext`, `Signal`, `ArtifactPointer`), `signals.py` (`SignalType` vocabulary + group frozensets), `streams.py` (`AgentStream`), `handlers.py` (stream handler factories), `descriptors.py` (capability descriptors), `exceptions.py` (`SemanticError`, `EscalationRequired`, `NeedsHumanReview`), `tracing.py` (public tracing API), `agent_manifest.py` (`configure_agent_manifest`, `get_agent_manifest` — orchestration-side).
-  - `_constants.py` — canonical local ports (`STANDARD_POSTGRES_PORT=5432`, `STANDARD_REDIS_PORT=6379`, `STANDARD_DEV_PORT=2026`, `STANDARD_LANGFUSE_PORT=3000`) and `state_file()` helper.
-  - `config/` — central configuration subpackage. `_env.py` is the single boundary where the SDK touches `os.environ` (registers every `MONET_*` name as `Final[str]`, exposes typed accessors `read_str/bool/float/int/path/enum`, defines `ConfigError`). `_load.py` owns `monet.toml` reading (`default_config_path`, `read_toml`, `read_toml_section`). `_schema.py` defines per-unit pydantic schemas (`ServerConfig`, `WorkerConfig`, `ClientConfig`, `ObservabilityConfig`, `ArtifactsConfig`, `QueueConfig`, `AuthConfig`, `OrchestrationConfig`, `CLIDevConfig`), each with `load()`, `validate_for_boot()`, and `redacted_summary()` methods. Every deployable unit validates its config at boot and emits a redacted summary at `INFO` — malformed values fail fast, never silent. See `docs/reference/env-vars.md` for the full registry.
-  - `_graph_config.py` — loads `monet.toml [graphs]` role mapping and `[entrypoints.<name>]` declarations via `monet.config._load.read_toml`. `DEFAULT_ENTRYPOINTS` + `load_entrypoints()` gate which graphs `MonetClient.run` and `monet run` can invoke. `Entrypoint` is a one-field `TypedDict({"graph": str})` — no `kind` field.
+  - `_ports.py` — canonical local ports (`STANDARD_POSTGRES_PORT=5432`, `STANDARD_REDIS_PORT=6379`, `STANDARD_DEV_PORT=2026`, `STANDARD_LANGFUSE_PORT=3000`) and `state_file()` helper.
+  - `config/` — central configuration subpackage. `_env.py` is the single boundary where the SDK touches `os.environ` (registers every `MONET_*` name as `Final[str]`, exposes typed accessors `read_str/bool/float/int/path/enum`, defines `ConfigError`). `_load.py` owns `monet.toml` reading (`default_config_path`, `read_toml`, `read_toml_section`). `_schema.py` defines per-unit pydantic schemas (`ServerConfig`, `WorkerConfig`, `ClientConfig`, `ObservabilityConfig`, `ArtifactsConfig`, `QueueConfig`, `AuthConfig`, `OrchestrationConfig`, `CLIDevConfig`), each with `load()`, `validate_for_boot()`, and `redacted_summary()` methods. `_graphs.py` loads `monet.toml [graphs]` role mapping and `[entrypoints.<name>]` declarations — `DEFAULT_ENTRYPOINTS` + `load_entrypoints()` gate which graphs `MonetClient.run` and `monet run` can invoke; `Entrypoint` is a one-field `TypedDict({"graph": str})`. Every deployable unit validates its config at boot and emits a redacted summary at `INFO` — malformed values fail fast, never silent. See `docs/reference/env-vars.md` for the full registry.
   - `core/` — worker-side internals: `decorator.py` (`@agent`), `registry.py` (handler registry), `manifest.py` (capability declarations), `context.py` (`contextvars` run context), `context_resolver.py` (`resolve_context` — artifact store read), `tracing.py` (OTel setup), `hooks.py` (`GraphHookRegistry`, `@on_hook`), `stubs.py` (`emit_progress` / `emit_signal` / `write_artifact`), `artifacts.py` (worker-side handle), `worker_client.py`, `_agents_config.py`, `_retry.py`, `_serialization.py`.
   - `cli/` — click commands: `_dev.py` (`monet dev` as a group with `down` subcommand + auto-teardown), `_run.py` (default-pipeline vs single-graph dispatch), `_runs.py`, `_chat.py`, `_worker.py`, `_register.py`, `_server.py`, `_status.py`, `_render.py`, `_discovery.py`, `_setup.py`.
   - `client/` — `MonetClient` graph-agnostic client (`__init__.py`), core events (`_events.py`: `RunStarted`, `NodeUpdate`, `AgentProgress`, `SignalEmitted`, `Interrupt`, `RunComplete`, `RunFailed`, plus `RunSummary`, `RunDetail`, `PendingDecision`, `ChatSummary`), boundary errors (`_errors.py`: `MonetClientError` + `RunNotInterrupted`, `AlreadyResolved`, `AmbiguousInterrupt`, `InterruptTagMismatch`, `GraphNotInvocable`), wire helpers (`_wire.py`: `task_input`, `chat_input`, `stream_run`, `get_state_values`, `create_thread`, metadata keys — documented adapter API), run-state cache (`_run_state.py`: `{run_id: {graph_id: thread_id}}`).
@@ -57,6 +56,19 @@ Dev: pytest, pytest-asyncio, hypothesis, httpx, ruff, mypy, mkdocs-material, pre
 - Every public function needs a corresponding test
 - conftest.py provides autouse `_queue_worker` fixture: creates InMemoryTaskQueue + background worker for all async tests. invoke_agent works transparently.
 
+## Code navigation
+
+SymDex MCP is installed and the repo is registered (`~/.symdex/monet.db`). Prefer symdex tools over Read/Grep/Glob when locating, tracing, or understanding existing code:
+
+- `mcp__symdex__search_symbols` / `get_symbol` — find functions, classes, methods by name with exact byte offsets
+- `mcp__symdex__semantic_search` — find code by intent rather than exact name
+- `mcp__symdex__get_callers` / `get_callees` — trace call graph
+- `mcp__symdex__get_file_outline` / `get_repo_outline` — structure without reading full files
+- `mcp__symdex__search_routes` — list HTTP endpoints across the codebase
+- `mcp__symdex__get_index_status` — check freshness at session start; reindex via `index_repo` if stale (watcher is off by default)
+
+Full-file `Read` is still correct for non-code files (toml/md/json) or when complete file context is required. The `symdex-code-search` skill documents the full tool surface.
+
 ## Style
 
 - src layout, all imports from `monet`
@@ -74,6 +86,7 @@ GitHub Actions runs ruff, mypy, and pytest on push/PR to main. All checks must p
 - Modify CI workflow without explicit approval
 - Create files outside the established layout
 - Add compatibility shims or backwards-compat code
+- Add catch-all environment variables (e.g. `ENV=production`, `MODE=dev`, `STAGE=staging`) that toggle multiple unrelated behaviors. Each behavior gets its own explicit, named config knob — boot validation rejects on missing required values rather than branching on a single mode flag.
 
 ## Architecture
 
@@ -105,7 +118,7 @@ Six shapes. Full descriptions, wiring, and matrix in `docs/architecture/deployme
 
 ## Standard ports and example lifecycle
 
-Every example uses the same canonical local ports (defined in `src/monet/_constants.py`):
+Every example uses the same canonical local ports (defined in `src/monet/_ports.py`):
 
 - Postgres: `5432`
 - Redis: `6379`

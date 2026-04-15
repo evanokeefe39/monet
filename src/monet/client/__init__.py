@@ -155,8 +155,7 @@ class MonetClient:
         api_key: str | None = None,
         graph_ids: dict[str, str] | None = None,
     ) -> None:
-        from monet._graph_config import load_entrypoints, load_graph_roles
-        from monet.config import ClientConfig
+        from monet.config import ClientConfig, load_entrypoints, load_graph_roles
 
         cfg = ClientConfig.load()
         resolved_url = url if url is not None else cfg.server_url

@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from monet._constants import STANDARD_REDIS_PORT
+from monet._ports import STANDARD_REDIS_PORT
 from monet.core._serialization import (
     deserialize_result,
     now_iso,

@@ -10,7 +10,7 @@ import click
 if TYPE_CHECKING:
     from monet.client import MonetClient
 
-from monet._constants import STANDARD_DEV_PORT
+from monet._ports import STANDARD_DEV_PORT
 from monet.cli._render import (
     prompt_execution_decision,
     prompt_plan_decision,
