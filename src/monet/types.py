@@ -17,6 +17,7 @@ __all__ = [
     "ArtifactPointer",
     "Signal",
     "SignalType",
+    "build_artifact_pointer",
     "find_artifact",
 ]
 
@@ -70,6 +71,23 @@ def find_artifact(
 ) -> ArtifactPointer | None:
     """Return the first artifact matching a semantic key, or None."""
     return next((a for a in artifacts if a.get("key") == key), None)
+
+
+def build_artifact_pointer(raw: dict[str, Any]) -> ArtifactPointer:
+    """Reconstruct an ArtifactPointer from a raw dict, preserving optional fields.
+
+    Single codec for every path that rehydrates a pointer from wire bytes
+    (queue serialisation, HTTP request bodies, test fixtures). Preserves
+    the optional ``key`` semantic tag that ``find_artifact`` depends on.
+    """
+    pointer = ArtifactPointer(
+        artifact_id=raw.get("artifact_id", ""),
+        url=raw.get("url", ""),
+    )
+    key = raw.get("key")
+    if isinstance(key, str):
+        pointer["key"] = key
+    return pointer
 
 
 # --- Agent run context ---
