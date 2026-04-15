@@ -19,15 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build context is the repo root (see docker-compose.yml). Install the
-# server example's deps, which pulls in monet via path source.
-COPY examples/deployed/server/pyproject.toml ./pyproject.toml
-COPY pyproject.toml ./monet-pyproject.toml
+# Build context is the repo root (see docker-compose.yml). Install
+# monet[examples] from the repo's own lockfile for reproducible builds
+# — every image built from the same commit installs bit-identical deps.
+COPY pyproject.toml ./pyproject.toml
+COPY uv.lock ./uv.lock
+COPY README.md ./README.md
 COPY src/ ./src/
-RUN uv venv /app/.venv \
-    && . /app/.venv/bin/activate \
-    && uv pip install --no-cache -e . \
-    && uv pip install --no-cache aegra-cli
+RUN uv sync --frozen --no-dev --extra examples
 
 # -----------------------------
 # Runtime stage
@@ -48,6 +47,9 @@ COPY examples/deployed/server/server_graphs.py ./server_graphs.py
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 2026
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:2026/api/v1/health || exit 1
 
 USER app
 

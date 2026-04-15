@@ -19,13 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build context is the repo root (see compose files). Install the
-# worker example's deps, which pulls in monet via path source.
-COPY examples/deployed/worker/pyproject.toml ./pyproject.toml
+# Build context is the repo root. Install monet[examples] from the
+# workspace lockfile for reproducible builds.
+COPY pyproject.toml ./pyproject.toml
+COPY uv.lock ./uv.lock
+COPY README.md ./README.md
 COPY src/ ./src/
-RUN uv venv /app/.venv \
-    && . /app/.venv/bin/activate \
-    && uv pip install --no-cache -e .
+RUN uv sync --frozen --no-dev --extra examples
 
 # -----------------------------
 # Runtime stage
