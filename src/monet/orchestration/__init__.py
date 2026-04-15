@@ -18,6 +18,7 @@ from ._state import (
     WaveResult,
 )
 from .chat_graph import ChatState, build_chat_graph
+from .default_graph import build_default_graph
 from .entry_graph import build_entry_subgraph
 from .execution_graph import AGENT_FAILED_EVENT_STATUS, build_execution_subgraph
 from .planning_graph import build_planning_subgraph
@@ -33,6 +34,7 @@ __all__ = [
     "WaveItem",
     "WaveResult",
     "build_chat_graph",
+    "build_default_graph",
     "build_entry_subgraph",
     "build_execution_subgraph",
     "build_planning_subgraph",

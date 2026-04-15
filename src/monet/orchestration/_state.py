@@ -206,6 +206,7 @@ class RunState(TypedDict, total=False):
     triage: dict[str, Any] | None
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None
+    plan_approved: bool | None
     wave_results: Annotated[list[dict[str, Any]], _append_reducer]
     wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
     abort_reason: str | None
