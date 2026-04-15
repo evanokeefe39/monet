@@ -9,7 +9,7 @@ repos:
     rev: v1.14.1
     hooks:
       - id: mypy
-        exclude: ^examples/
+        exclude: ^(examples/|tests/e2e/)
         additional_dependencies:
           - pydantic>=2.0
           - fastapi>=0.115

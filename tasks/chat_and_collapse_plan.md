@@ -45,14 +45,24 @@ No API break. Unblocks independent of B.
 
 Before B lands. Captures current behavior as regression baseline.
 
-- [ ] New directory `tests/e2e/` with `conftest.py`
-- [ ] Fixture: `monet_dev_server` — subprocess `monet dev`, health-probe, teardown via `monet dev down`
-- [ ] Fixture: `docker_postgres` — spin up / tear down Postgres via compose
-- [ ] Add `@pytest.mark.e2e` marker to `pyproject.toml`
-- [ ] CI: separate job, opt-in via `pytest -m e2e`
-- [ ] E2E-01: `monet run "topic" --auto-approve` happy path against default pipeline
-- [ ] E2E-02: `monet run "topic"` manual HITL — approve / revise / reject
+- [x] New directory `tests/e2e/` with `conftest.py`
+- [x] Fixture: `monet_dev_server` — subprocess `monet dev` from `examples/quickstart/`, health-probes `/health`, tears down via `monet dev down`. Session-scoped.
+- [x] Postgres — provisioned by `monet dev` itself (no separate fixture needed).
+- [x] `@pytest.mark.e2e` registered in `pyproject.toml`. Skipped by default unless `MONET_E2E=1`.
+- [x] E2E-01: `monet run "topic" --auto-approve --output json` via subprocess; asserts exit 0, NDJSON parses, `RunComplete` present
+- [x] E2E-02: approve / revise+approve / reject via `MonetClient` + `continue_after_plan_approval`
 - [ ] Commit baseline before B touches anything
+
+Invoking the harness:
+
+```bash
+# Requires Docker running + GEMINI_API_KEY or GROQ_API_KEY in quickstart .env
+MONET_E2E=1 uv run pytest -m e2e
+```
+
+CI opt-in: keep `e2e` out of the default `pytest` job. Add a separate
+opt-in workflow gated on repository secrets (outside scope for scaffold
+commit).
 
 ## Track B — subgraph-as-node collapse
 
