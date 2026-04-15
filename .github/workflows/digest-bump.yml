@@ -1,0 +1,68 @@
+name: Base image digest bump
+
+on:
+  schedule:
+    # Weekly — Mondays 10:00 UTC, after dependabot's 09:00 PRs land.
+    - cron: "0 10 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve python:3.12-slim-bookworm digest
+        id: python
+        run: |
+          set -euo pipefail
+          # Skopeo ships on ubuntu-latest runners.
+          DIGEST=$(skopeo inspect --format '{{.Digest}}' \
+            docker://python:3.12-slim-bookworm)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve ghcr.io/astral-sh/uv:0.10.0 digest
+        id: uv
+        run: |
+          set -euo pipefail
+          DIGEST=$(skopeo inspect --format '{{.Digest}}' \
+            docker://ghcr.io/astral-sh/uv:0.10.0)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Apply digest pins
+        run: |
+          set -euo pipefail
+          PY="${{ steps.python.outputs.digest }}"
+          UV="${{ steps.uv.outputs.digest }}"
+          for df in \
+            examples/deployed/server/Dockerfile \
+            examples/deployed/worker/Dockerfile \
+            examples/split-fleet/compose/Dockerfile \
+            examples/quickstart/.monet/Dockerfile \
+            examples/local/.monet/Dockerfile \
+            examples/custom-graph/.monet/Dockerfile; do
+            [ -f "$df" ] || continue
+            # Replace `python:3.12-slim-bookworm` or pre-existing `@sha256:…`.
+            sed -E -i "s|python:3\.12-slim-bookworm(@sha256:[a-f0-9]+)?|python:3.12-slim-bookworm@${PY}|g" "$df"
+            sed -E -i "s|ghcr\.io/astral-sh/uv:0\.10\.0(@sha256:[a-f0-9]+)?|ghcr.io/astral-sh/uv:0.10.0@${UV}|g" "$df"
+          done
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(docker): weekly base image digest bump"
+          title: "chore(docker): weekly base image digest bump"
+          body: |
+            Weekly refresh of base image digests:
+
+            - `python:3.12-slim-bookworm` → `${{ steps.python.outputs.digest }}`
+            - `ghcr.io/astral-sh/uv:0.10.0` → `${{ steps.uv.outputs.digest }}`
+          branch: chore/digest-bump
+          delete-branch: true
+          labels: |
+            dependencies
+            docker
