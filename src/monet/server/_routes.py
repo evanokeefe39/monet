@@ -325,6 +325,59 @@ async def create_deployment(
     return {"deployment_id": deployment_id}
 
 
+@router.get("/agents")
+async def list_agents(manifest: Manifest) -> list[dict[str, Any]]:
+    """List every capability declared in the agent manifest.
+
+    Returns one entry per ``(agent_id, command)`` pair with its pool
+    assignment and optional description. Used by ``MonetClient.list_capabilities``
+    so clients can discover user-defined agents at runtime (chat REPL
+    dynamic ``/<agent_id>:<command>`` dispatch, direct invocation via
+    ``monet run <agent>:<command>``).
+    """
+    return [dict(cap) for cap in manifest.capabilities()]
+
+
+class InvokeAgentRequest(BaseModel):
+    """Body for ``POST /api/v1/agents/{agent_id}/{command}/invoke``."""
+
+    task: str = ""
+    context: list[dict[str, Any]] | None = None
+    skills: list[str] | None = None
+
+
+@router.post(
+    "/agents/{agent_id}/{command}/invoke",
+    dependencies=[Depends(require_api_key)],
+)
+async def invoke_agent_endpoint(
+    agent_id: str,
+    command: str,
+    body: InvokeAgentRequest,
+) -> dict[str, Any]:
+    """Run a single ``agent_id:command`` invocation and return the result.
+
+    Wraps the orchestration-side ``invoke_agent`` primitive so clients
+    can drive a single capability without composing a graph. Fails with
+    400 if the capability isn't in the manifest.
+    """
+    from monet.orchestration._invoke import invoke_agent
+
+    try:
+        result = await invoke_agent(
+            agent_id,
+            command=command,
+            task=body.task,
+            context=body.context,
+            skills=body.skills,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # AgentResult is a TypedDict; cast the dict-view to the endpoint's
+    # return type for mypy.
+    return cast("dict[str, Any]", result)
+
+
 @router.get("/health")
 async def health(
     deployments: Deployments,

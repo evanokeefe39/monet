@@ -157,7 +157,7 @@ One PR per ST-18 (docs + code + tests land together).
 - [ ] E2E-09: Redis queue backend HITL parity vs memory backend — same resume behavior
 - [ ] E2E-10: user extends `build_default_graph` with custom review node via `MyRunState`; `monet run` drives compound graph + custom node + custom events surface in CLI
 
-## Track C — custom agents in chat + direct invocation
+## Track C — custom agents in chat + direct invocation [DONE]
 
 Depends on A (chat decoupling) and B (no adapter coupling).
 

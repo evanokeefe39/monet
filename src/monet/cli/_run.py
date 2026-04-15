@@ -116,12 +116,17 @@ def run(
     output_mode: str,
     entrypoint_name: str | None,
 ) -> None:
-    """Run a topic through a declared entrypoint.
+    """Run a topic through a declared entrypoint, or invoke an agent directly.
 
-    Drives the entrypoint's graph as a single stream and renders events
-    to stdout. When the graph pauses on ``interrupt()``, prompts for the
-    resume payload using the form-schema convention. When piped,
-    defaults to NDJSON event stream on stdout.
+    Two modes, keyed by the first positional arg:
+
+    - ``monet run <topic>``: drive the entrypoint's graph as a stream
+      (form-schema interrupts rendered interactively).
+    - ``monet run <agent>:<command> [task]``: bypass graphs, call the
+      single capability server-side and print its ``AgentResult``.
+      Entrypoint routing is ignored in this mode.
+
+    When piped, defaults to NDJSON on stdout.
     """
     check_env()
     mode = _resolve_output_mode(output_mode)
@@ -131,6 +136,21 @@ def run(
         resolved_topic = _read_topic_from_stdin()
     if resolved_topic is None:
         raise click.UsageError("Missing topic. Provide as argument or pipe via stdin.")
+
+    # Direct-agent path: "<agent>:<command>" in the first arg.
+    if ":" in resolved_topic and entrypoint_name is None:
+        agent_id, _, command = resolved_topic.partition(":")
+        if agent_id and command:
+            try:
+                exit_code = asyncio.run(
+                    _invoke_agent_direct(agent_id, command, url, api_key, mode)
+                )
+            except KeyboardInterrupt:
+                raise SystemExit(130) from None
+            except (ConnectionError, OSError) as exc:
+                click.echo(f"Connection error: {exc}", err=True)
+                raise SystemExit(_EXIT_CONNECTION_ERROR) from exc
+            raise SystemExit(exit_code)
 
     if mode == "json":
         auto_approve = True
@@ -150,6 +170,63 @@ def run(
         raise SystemExit(_EXIT_CONNECTION_ERROR) from exc
 
     raise SystemExit(exit_code)
+
+
+async def _invoke_agent_direct(
+    agent_id: str,
+    command: str,
+    url: str,
+    api_key: str | None,
+    mode: str,
+) -> int:
+    """Invoke a single ``agent_id:command`` on the server and render the result."""
+    import json as _json
+
+    from monet.client import MonetClient
+
+    preflight_error = await _preflight_server(url, api_key)
+    if preflight_error is not None:
+        click.echo(preflight_error, err=True)
+        return _EXIT_CONNECTION_ERROR
+
+    client = MonetClient(url, api_key=api_key)
+    # The agent's "task" is supplied via stdin or a positional arg
+    # distinct from the agent:cmd selector; read stdin only when
+    # nothing further is typed.
+    task = ""
+    if not sys.stdin.isatty():
+        task = sys.stdin.read().strip()
+
+    try:
+        result = await client.invoke_agent(agent_id, command, task=task)
+    except Exception as exc:
+        click.echo(f"Error invoking {agent_id}:{command}: {exc}", err=True)
+        return _EXIT_AGENT_ERROR
+
+    if mode == "json":
+        click.echo(_json.dumps(result, default=str, ensure_ascii=False))
+    else:
+        success = result.get("success")
+        status_color = "green" if success else "red"
+        click.secho(
+            f"{agent_id}:{command} {'succeeded' if success else 'failed'}",
+            fg=status_color,
+            bold=True,
+        )
+        output = result.get("output")
+        if output:
+            click.echo(
+                output if isinstance(output, str) else _json.dumps(output, indent=2)
+            )
+        signals = result.get("signals") or []
+        for sig in signals:
+            if isinstance(sig, dict):
+                click.secho(
+                    f"  signal: {sig.get('signal_type', '?')}",
+                    fg="yellow",
+                    dim=True,
+                )
+    return _EXIT_SUCCESS if result.get("success") else _EXIT_AGENT_ERROR
 
 
 async def _drive_entrypoint(

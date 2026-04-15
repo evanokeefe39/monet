@@ -130,13 +130,12 @@ def test_server_public_api() -> None:
 
 
 def test_client_public_api() -> None:
-    """Graph-agnostic client surface — pipeline-specific types live in
-    ``monet.pipelines.default``.
-    """
+    """Graph-agnostic client surface. Form-schema + capability types live here."""
     from monet.client import (  # noqa: F401
         AgentProgress,
         AlreadyResolved,
         AmbiguousInterrupt,
+        Capability,
         ChatSummary,
         GraphNotInvocable,
         Interrupt,

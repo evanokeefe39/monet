@@ -8,6 +8,7 @@ dispatches work through the default monet pipeline inline.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 
 import click
@@ -136,6 +137,23 @@ async def _chat_main(
 
     click.echo(f"Session: {thread_id}", err=True)
 
+    # Discover server-side agent capabilities so `/<agent>:<command>`
+    # slash commands resolve to direct invocations. Failure to reach
+    # the manifest is non-fatal — chat still works without them.
+    capabilities: list[dict[str, object]] = []
+    try:
+        raw_caps = await client.list_capabilities()
+        capabilities = [dict(c) for c in raw_caps]
+    except Exception as exc:
+        click.secho(f"(agent discovery failed: {exc})", dim=True, err=True)
+
+    if capabilities:
+        preview = ", ".join(
+            f"/{c.get('agent_id')}:{c.get('command')}" for c in capabilities[:5]
+        )
+        more = "" if len(capabilities) <= 5 else f" (+{len(capabilities) - 5} more)"
+        click.secho(f"Agents available: {preview}{more}", dim=True, err=True)
+
     history = await client.get_chat_history(thread_id)
     if history:
         click.echo(f"({len(history)} messages in history)", err=True)
@@ -151,11 +169,17 @@ async def _chat_main(
             click.secho("  ...", dim=True)
         click.echo()
 
-    await _chat_repl(client, thread_id)
+    await _chat_repl(client, thread_id, capabilities)
 
 
-async def _chat_repl(client: MonetClient, thread_id: str) -> None:
+async def _chat_repl(
+    client: MonetClient,
+    thread_id: str,
+    capabilities: list[dict[str, object]],
+) -> None:
     """Main REPL loop for the chat session."""
+    cap_index = {f"/{c.get('agent_id')}:{c.get('command')}": c for c in capabilities}
+
     while True:
         try:
             line = click.prompt("", prompt_suffix="> ", default="", show_default=False)
@@ -168,7 +192,15 @@ async def _chat_repl(client: MonetClient, thread_id: str) -> None:
             continue
 
         if line.startswith("/"):
-            should_exit = await _handle_slash_command(client, thread_id, line)
+            cmd_head = line.split(maxsplit=1)[0].lower()
+            if cmd_head in cap_index:
+                await _invoke_agent_from_chat(
+                    client, thread_id, cap_index[cmd_head], line
+                )
+                continue
+            should_exit = await _handle_slash_command(
+                client, thread_id, line, cap_index
+            )
             if should_exit:
                 return
             continue
@@ -181,7 +213,51 @@ async def _chat_repl(client: MonetClient, thread_id: str) -> None:
             click.echo(f"Error: {exc}", err=True)
 
 
-async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) -> bool:
+async def _invoke_agent_from_chat(
+    client: MonetClient,
+    thread_id: str,
+    capability: dict[str, object],
+    line: str,
+) -> None:
+    """Run ``/<agent>:<command> <task>`` in-REPL and append result to thread."""
+    import json as _json
+
+    agent_id = str(capability.get("agent_id", ""))
+    command = str(capability.get("command", ""))
+    task = line.split(maxsplit=1)[1] if " " in line else ""
+    click.secho(f"Invoking {agent_id}:{command}…", dim=True, err=True)
+    try:
+        result = await client.invoke_agent(agent_id, command, task=task)
+    except Exception as exc:
+        click.echo(f"Error: {exc}", err=True)
+        return
+    success = result.get("success")
+    status_color = "green" if success else "red"
+    click.secho(
+        f"{agent_id}:{command} {'ok' if success else 'failed'}",
+        fg=status_color,
+    )
+    output = result.get("output")
+    if output:
+        rendered = (
+            output
+            if isinstance(output, str)
+            else _json.dumps(output, indent=2, default=str)
+        )
+        click.echo(rendered)
+        # Attach a short summary back into the chat thread as a
+        # system message so the conversation context knows it happened.
+        summary = f"[{agent_id}:{command}] {str(rendered)[:400]}"
+        with contextlib.suppress(Exception):
+            await client.send_context(thread_id, summary)
+
+
+async def _handle_slash_command(
+    client: MonetClient,
+    thread_id: str,
+    line: str,
+    cap_index: dict[str, dict[str, object]],
+) -> bool:
     """Dispatch a slash command. Returns True if the REPL should exit."""
     parts = line.split(maxsplit=1)
     cmd = parts[0].lower()
@@ -189,6 +265,20 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
 
     if cmd in ("/quit", "/exit"):
         return True
+
+    if cmd == "/help":
+        click.echo("Commands:")
+        click.echo("  /name <name>         rename session")
+        click.echo("  /runs                list recent runs")
+        click.echo("  /graphs              list server graphs")
+        click.echo("  /history             show conversation history")
+        click.echo("  /quit, /exit         leave the REPL")
+        if cap_index:
+            click.echo("Agents:")
+            for slash, cap in sorted(cap_index.items()):
+                desc = str(cap.get("description", "")) or ""
+                click.echo(f"  {slash} <task>" + (f"  — {desc}" if desc else ""))
+        return False
 
     if cmd == "/name":
         if not arg:
@@ -233,5 +323,5 @@ async def _handle_slash_command(client: MonetClient, thread_id: str, line: str) 
         return False
 
     click.echo(f"Unknown command: {cmd}")
-    click.echo("Commands: /name, /runs, /graphs, /history, /quit")
+    click.echo("Commands: /help, /name, /runs, /graphs, /history, /quit")
     return False
