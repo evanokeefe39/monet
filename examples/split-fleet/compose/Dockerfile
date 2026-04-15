@@ -21,13 +21,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build context = repo root. Install monet editable from its own pyproject.
+# Build context = repo root. Install monet[examples] from the workspace
+# lockfile so rebuilds from the same commit produce bit-identical deps.
 COPY pyproject.toml ./pyproject.toml
+COPY uv.lock ./uv.lock
 COPY README.md ./README.md
 COPY src/ ./src/
-RUN uv venv /app/.venv \
-    && . /app/.venv/bin/activate \
-    && uv pip install --no-cache -e ".[examples]"
+RUN uv sync --frozen --no-dev --extra examples
 
 # -----------------------------
 # Runtime stage — single image drives both server and workers via CMD
@@ -57,6 +57,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
     MONET_ARTIFACTS_DIR=/app/.artifacts
 
 EXPOSE 2026
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:2026/api/v1/health || exit 1
 
 USER app
 

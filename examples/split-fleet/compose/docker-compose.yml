@@ -3,7 +3,7 @@ services:
     build:
       context: ../../..
       dockerfile: examples/split-fleet/compose/Dockerfile
-    image: monet-split-fleet:latest
+    image: monet-split-fleet:${MONET_IMAGE_TAG:-dev}
     ports:
       - "2026:2026"
     environment:
@@ -19,7 +19,7 @@ services:
     command: aegra serve --host 0.0.0.0 --port 2026
 
   worker-fast:
-    image: monet-split-fleet:latest
+    image: monet-split-fleet:${MONET_IMAGE_TAG:-dev}
     environment:
       MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
       MONET_SERVER_URL: http://monet:2026
@@ -34,7 +34,7 @@ services:
     command: monet worker --server-url http://monet:2026 --pool fast --path agents
 
   worker-heavy:
-    image: monet-split-fleet:latest
+    image: monet-split-fleet:${MONET_IMAGE_TAG:-dev}
     environment:
       MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
       MONET_SERVER_URL: http://monet:2026
