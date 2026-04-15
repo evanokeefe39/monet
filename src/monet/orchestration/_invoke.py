@@ -12,14 +12,17 @@ import contextlib
 import logging
 import secrets
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 
 from monet.config import OrchestrationConfig
+from monet.queue import TaskStatus
+from monet.queue.backends.memory import InMemoryTaskQueue
 
 if TYPE_CHECKING:
-    from monet.queue import TaskQueue
+    from monet.queue import TaskQueue, TaskRecord
     from monet.types import AgentResult, AgentRunContext
 
 _log = logging.getLogger("monet.orchestration")
@@ -48,6 +51,25 @@ def get_queue() -> TaskQueue | None:
 
 def _generate_trace_id() -> str:
     return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
+
+
+async def wait_completion(
+    queue: TaskQueue, task_id: str, timeout: float
+) -> AgentResult:
+    """Wait for a task's completion via a backend-appropriate channel.
+
+    Not part of the ``TaskQueue`` protocol — dispatches by concrete type
+    so the protocol stays minimal. Memory uses an asyncio.Event. The
+    Redis Streams branch lands in Phase 2 of the queue refactor.
+
+    Raises:
+        TimeoutError: if ``timeout`` seconds elapse without a result.
+        TypeError: if the queue backend does not support completion waits.
+    """
+    if isinstance(queue, InMemoryTaskQueue):
+        return await queue._await_completion(task_id, timeout)
+    msg = f"wait_completion not supported for {type(queue).__name__}"
+    raise TypeError(msg)
 
 
 async def invoke_agent(
@@ -94,11 +116,7 @@ async def invoke_agent(
         "skills": skills or [],
     }
 
-    # Pool routing via the agent manifest handle. When the manifest is
-    # configured (monolith and production), an unknown agent is a fail-fast
-    # error — the orchestrator cannot route to an unknown pool. When the
-    # manifest is not configured (bare test harnesses), fall back to the
-    # "local" pool so in-process tests still work.
+    # Pool routing via the agent manifest handle.
     from monet.core.agent_manifest import get_agent_manifest
 
     manifest = get_agent_manifest()
@@ -112,6 +130,20 @@ async def invoke_agent(
             raise ValueError(msg)
         pool = "local"
 
+    task_id = str(uuid.uuid4())
+    record: TaskRecord = {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "command": command,
+        "pool": pool,
+        "context": ctx,
+        "status": TaskStatus.PENDING,
+        "result": None,
+        "created_at": datetime.now(UTC).isoformat(),
+        "claimed_at": None,
+        "completed_at": None,
+    }
+
     tracer = trace.get_tracer("monet.orchestration")
     with tracer.start_as_current_span(
         f"agent.{agent_id}.{command}",
@@ -121,19 +153,13 @@ async def invoke_agent(
             "monet.run_id": resolved_run_id,
         },
     ) as span:
-        task_id = await _task_queue.enqueue(agent_id, command, ctx, pool=pool)
+        await _task_queue.enqueue(record)
         # Forward worker-side progress into the current LangGraph stream
-        # via emit_progress. Runs concurrently with poll_result; cleaned
-        # up whether we complete successfully or time out.
+        # via emit_progress. Runs concurrently with wait_completion.
         progress_task = asyncio.create_task(_forward_progress(_task_queue, task_id))
         try:
-            try:
-                timeout = OrchestrationConfig.load().agent_timeout
-                result = await _task_queue.poll_result(task_id, timeout=timeout)
-            except TimeoutError:
-                # Cancel the task so workers don't waste resources on it
-                await _task_queue.cancel(task_id)
-                raise
+            timeout = OrchestrationConfig.load().agent_timeout
+            result = await wait_completion(_task_queue, task_id, timeout=timeout)
             span.set_attribute("agent.success", result.success)
             span.set_attribute("agent.signal_count", len(result.signals))
             return result
@@ -144,13 +170,7 @@ async def invoke_agent(
 
 
 async def _forward_progress(queue: TaskQueue, task_id: str) -> None:
-    """Forward queue progress events to the current LangGraph stream.
-
-    Uses emit_progress so events land in LangGraph's stream writer (or
-    no-op if none is active). Suppresses NotImplementedError (remote
-    queues don't support subscription — they forward via POST) and logs
-    other errors at debug.
-    """
+    """Forward queue progress events to the current LangGraph stream."""
     from monet.core.stubs import emit_progress
 
     try:

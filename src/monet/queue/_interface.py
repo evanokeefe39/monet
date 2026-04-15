@@ -1,11 +1,15 @@
 """Task queue protocol for decoupling orchestration from execution.
 
-The queue has two sides:
-- **Producer** (called by ``invoke_agent``): ``enqueue`` + ``poll_result``
-- **Consumer** (called by workers): ``claim`` + ``complete`` + ``fail``
+Producer side (orchestration builds a TaskRecord, calls enqueue).
+Consumer side (workers claim, execute, complete / fail).
+Progress fan-out via publish_progress / subscribe_progress.
 
-Workers claim by pool (Prefect model): a worker registers for one pool
-and executes whatever lands in it. Handler lookup is the worker's concern.
+monet ships one reference implementation (``RedisStreamsTaskQueue``).
+Self-hosters with different operational requirements may implement this
+protocol against Kafka, RabbitMQ, SQS, or any other transport — the
+protocol is intentionally minimal and transport-neutral. Implementations
+are free to choose how they track leases, dedupe completions, and handle
+crash recovery; the protocol does not mandate Redis-specific machinery.
 """
 
 from __future__ import annotations
@@ -32,7 +36,6 @@ class TaskStatus(StrEnum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
     FAILED = "failed"
-    CANCELLED = "cancelled"
 
 
 class TaskRecord(TypedDict):
@@ -52,90 +55,49 @@ class TaskRecord(TypedDict):
 
 @runtime_checkable
 class TaskQueue(Protocol):
-    """Queue interface for task dispatch and consumption.
+    """Queue interface. Six methods, transport-neutral."""
 
-    Producer side (orchestration):
-        enqueue — submit a task with a pool assignment, receive a task_id
-        poll_result — block until a task completes or timeout
+    async def enqueue(self, task: TaskRecord) -> str:
+        """Submit a task. Returns the opaque task_id (usually ``task["task_id"]``).
 
-    Consumer side (workers):
-        claim — grab the next pending task in a pool (Prefect model)
-        complete — post a successful result
-        fail — post a failure
-    """
-
-    async def enqueue(
-        self,
-        agent_id: str,
-        command: str,
-        ctx: AgentRunContext,
-        pool: str = "local",
-    ) -> str:
-        """Submit a task to the queue.
-
-        Args:
-            agent_id: Target agent identifier.
-            command: Agent command to invoke.
-            ctx: Full agent run context.
-            pool: Pool this task belongs to.
-
-        Returns:
-            task_id that can be passed to ``poll_result``.
+        The caller builds the TaskRecord (including ``task_id``) before
+        dispatch — required so callers that derive per-task tokens from
+        task_id have a stable identity before the task lands in the queue.
         """
         ...
 
-    async def poll_result(self, task_id: str, timeout: float) -> AgentResult:
-        """Block until the task is completed or failed.
+    async def claim(
+        self, pool: str, consumer_id: str, block_ms: int
+    ) -> TaskRecord | None:
+        """Claim the next pending task in the pool.
 
-        Raises:
-            TimeoutError: if ``timeout`` seconds elapse without a result.
-            KeyError: if ``task_id`` is unknown.
-        """
-        ...
-
-    async def claim(self, pool: str) -> TaskRecord | None:
-        """Claim the next pending task in the given pool.
-
-        Workers call this in a loop. Returns None if no tasks are
-        available in the pool. The worker looks up the handler locally
-        and executes — the queue does not filter by capability.
-
-        Returns:
-            A TaskRecord with status CLAIMED, or None if nothing available.
+        Blocks up to ``block_ms`` milliseconds waiting for work. Returns
+        ``None`` if nothing arrives. ``consumer_id`` identifies the
+        claiming worker for crash-recovery ownership (implementations may
+        ignore it if they do not need it).
         """
         ...
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
-        """Post a successful result for a claimed task."""
-        ...
+        """Post a successful result for a claimed task.
 
-    async def fail(self, task_id: str, error: str) -> None:
-        """Post a failure for a claimed task."""
-        ...
-
-    async def cancel(self, task_id: str) -> None:
-        """Cancel a pending or claimed task.
-
-        Workers should check for cancellation and skip execution.
-        If the task is already completed or failed, this is a no-op.
+        Implementations acknowledge the claim internally (e.g. XACK on
+        Streams). The protocol does not expose a separate ack step.
         """
         ...
 
-    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
+    async def fail(self, task_id: str, error: str) -> None:
+        """Post a failure for a claimed task. Ack handled internally."""
+        ...
+
+    async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
         """Publish a progress event for a task.
 
         Best-effort — implementations must NOT raise on backpressure,
-        serialisation errors, or transport failures. The worker-side
-        emit_progress fan-out uses this to forward events to subscribers.
+        serialisation errors, or transport failures.
         """
         ...
 
     def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
-        """Yield progress events for a task until it completes.
-
-        Server-side only. RemoteQueue implementations raise
-        NotImplementedError — remote progress flows via POST
-        /api/v1/tasks/{task_id}/progress from the worker, not a pull
-        subscription.
-        """
+        """Yield progress events for a task until it completes."""
         ...

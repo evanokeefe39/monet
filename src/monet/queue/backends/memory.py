@@ -1,33 +1,28 @@
 """In-memory task queue for testing and monolith-mode deployment.
 
 Uses per-pool ``asyncio.Queue`` for O(1) claim and FIFO ordering.
-Completion notification via per-task ``asyncio.Event``.
-No persistence, no external deps.
+Completion notification via per-task ``asyncio.Event``. No persistence,
+no external deps. Rejected by boot validation when ``REDIS_URI`` is set.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from monet.queue import TaskRecord, TaskStatus
 from monet.signals import SignalType
-from monet.types import AgentResult, AgentRunContext, Signal
+from monet.types import AgentResult, Signal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 __all__ = ["InMemoryTaskQueue"]
 
-_TERMINAL_STATUSES = (
-    TaskStatus.COMPLETED,
-    TaskStatus.FAILED,
-    TaskStatus.CANCELLED,
-)
+_TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
 
 # Subscriber queue size. Drops on full — progress is best-effort.
 _SUBSCRIBER_QUEUE_MAX = 64
@@ -36,11 +31,12 @@ _SUBSCRIBER_QUEUE_MAX = 64
 class InMemoryTaskQueue:
     """In-memory task queue backed by asyncio primitives.
 
-    Per-pool queues ensure O(1) claim and preserve FIFO ordering
-    within each pool. Workers claim by pool name only (Prefect model).
+    Per-pool queues ensure O(1) claim and FIFO ordering within each pool.
+    Implements the six-method ``TaskQueue`` protocol plus a private
+    ``_await_completion`` used by ``wait_completion`` in orchestration
+    (isinstance-dispatched; not part of the protocol).
     """
 
-    # Default max pending tasks across all pools. 0 = unlimited.
     DEFAULT_MAX_PENDING = 0
 
     def __init__(self, max_pending: int = 0) -> None:
@@ -48,7 +44,6 @@ class InMemoryTaskQueue:
         self._pool_queues: dict[str, asyncio.Queue[str]] = defaultdict(asyncio.Queue)
         self._completions: dict[str, asyncio.Event] = {}
         self._max_pending = max_pending or self.DEFAULT_MAX_PENDING
-        # Subscriber bookkeeping for progress events.
         self._progress_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = (
             defaultdict(set)
         )
@@ -58,96 +53,48 @@ class InMemoryTaskQueue:
         """Number of tasks in PENDING state across all pools."""
         return sum(1 for t in self._tasks.values() if t["status"] == TaskStatus.PENDING)
 
-    async def enqueue(
-        self,
-        agent_id: str,
-        command: str,
-        ctx: AgentRunContext,
-        pool: str = "local",
-    ) -> str:
-        """Submit a task. Routes to the pool's internal queue.
-
-        Raises:
-            RuntimeError: if max_pending is set and exceeded.
-        """
+    async def enqueue(self, task: TaskRecord) -> str:
+        """Submit a pre-built TaskRecord. Raises on backpressure or duplicate id."""
         if self._max_pending and self.pending_count >= self._max_pending:
             msg = (
                 f"Queue backpressure: {self.pending_count} pending tasks "
                 f"(max {self._max_pending})"
             )
             raise RuntimeError(msg)
-        task_id = str(uuid.uuid4())
-        record: TaskRecord = {
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "command": command,
-            "pool": pool,
-            "context": ctx,
-            "status": TaskStatus.PENDING,
-            "result": None,
-            "created_at": datetime.now(UTC).isoformat(),
-            "claimed_at": None,
-            "completed_at": None,
-        }
+        task_id = task["task_id"]
+        if task_id in self._tasks:
+            msg = f"Duplicate task_id: {task_id}"
+            raise ValueError(msg)
+        # Store a defensive copy so callers mutating the input after
+        # enqueue do not corrupt queue state.
+        record: TaskRecord = {**task, "status": TaskStatus.PENDING}
         self._tasks[task_id] = record
         self._completions[task_id] = asyncio.Event()
-        await self._pool_queues[pool].put(task_id)
+        await self._pool_queues[task["pool"]].put(task_id)
         return task_id
 
-    async def poll_result(self, task_id: str, timeout: float) -> AgentResult:
-        """Block until task completes or timeout.
+    async def claim(
+        self, pool: str, consumer_id: str, block_ms: int
+    ) -> TaskRecord | None:
+        """Claim the next pending task in the pool.
 
-        Cleans up internal state after consuming the result.
-
-        Raises:
-            TimeoutError: if timeout elapses without completion.
-            KeyError: if task_id is unknown.
+        Blocks up to ``block_ms`` milliseconds. ``block_ms <= 0`` means
+        non-blocking (immediate ``None`` if empty). ``consumer_id`` is
+        accepted for protocol conformance but ignored — there is no PEL
+        in the in-memory backend, lease reclamation is a Redis concept.
         """
-        if task_id not in self._tasks:
-            msg = f"Unknown task_id: {task_id}"
-            raise KeyError(msg)
-        event = self._completions[task_id]
-        try:
-            await asyncio.wait_for(event.wait(), timeout=timeout)
-        except TimeoutError:
-            msg = f"Task {task_id} did not complete within {timeout}s"
-            raise TimeoutError(msg) from None
-
-        record = self._tasks[task_id]
-        result = record["result"]
-
-        # Cleanup: task is consumed, free memory
-        self._tasks.pop(task_id, None)
-        self._completions.pop(task_id, None)
-
-        if result is not None:
-            return result
-        # Task failed without a result object
-        return AgentResult(
-            success=False,
-            output="",
-            signals=(
-                Signal(
-                    type=SignalType.SEMANTIC_ERROR,
-                    reason="Task failed in queue",
-                    metadata=None,
-                ),
-            ),
-            trace_id=record["context"]["trace_id"],
-            run_id=record["context"]["run_id"],
-        )
-
-    async def claim(self, pool: str) -> TaskRecord | None:
-        """Claim the next pending task in the given pool.
-
-        Non-blocking: returns None if the pool's queue is empty.
-        O(1) lookup — no scanning or re-queuing.
-        """
+        del consumer_id  # accepted, unused
         queue = self._pool_queues[pool]
-        try:
-            task_id = queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
+        if block_ms <= 0:
+            try:
+                task_id = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return None
+        else:
+            try:
+                task_id = await asyncio.wait_for(queue.get(), timeout=block_ms / 1000.0)
+            except TimeoutError:
+                return None
 
         record = self._tasks.get(task_id)
         if record is None or record["status"] != TaskStatus.PENDING:
@@ -191,34 +138,13 @@ class InMemoryTaskQueue:
         record["completed_at"] = datetime.now(UTC).isoformat()
         self._completions[task_id].set()
 
-    async def cancel(self, task_id: str) -> None:
-        """Cancel a pending or claimed task.
-
-        Sets status to CANCELLED and signals completion so poll_result
-        unblocks. If already completed/failed/cancelled, this is a no-op.
-        """
-        record = self._tasks.get(task_id)
-        if record is None:
-            return
-        if record["status"] in _TERMINAL_STATUSES:
-            return
-        record["status"] = TaskStatus.CANCELLED
-        record["completed_at"] = datetime.now(UTC).isoformat()
-        event = self._completions.get(task_id)
-        if event:
-            event.set()
-
     # --- Progress streaming ---
 
-    async def publish_progress(self, task_id: str, data: dict[str, Any]) -> None:
-        """Fan out an event to all subscribers of this task.
-
-        Drops on full subscriber queue — progress is best-effort.
-        """
+    async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
+        """Fan out an event to all subscribers. Drops on full queue."""
         for sub_q in self._progress_subscribers.get(task_id, set()):
-            # Subscriber is slow → drop rather than block.
             with contextlib.suppress(asyncio.QueueFull):
-                sub_q.put_nowait(data)
+                sub_q.put_nowait(event)
 
     async def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
         """Yield progress events until the task reaches a terminal state."""
@@ -229,12 +155,8 @@ class InMemoryTaskQueue:
         try:
             while True:
                 record = self._tasks.get(task_id)
-                # Task cleaned up (poll_result consumed it) OR reached a
-                # terminal status — either way, drain and exit.
                 terminal = record is None or record["status"] in _TERMINAL_STATUSES
                 if terminal:
-                    # Let any final publish_progress calls resolve before
-                    # we drain — closes the publish-vs-status-check race.
                     await asyncio.sleep(0)
                     while not sub_q.empty():
                         yield sub_q.get_nowait()
@@ -248,3 +170,48 @@ class InMemoryTaskQueue:
             self._progress_subscribers[task_id].discard(sub_q)
             if not self._progress_subscribers[task_id]:
                 self._progress_subscribers.pop(task_id, None)
+
+    # --- Private helper for orchestration.wait_completion ---
+
+    async def _await_completion(self, task_id: str, timeout: float) -> AgentResult:
+        """Block until the task is completed or failed.
+
+        Isinstance-dispatched from ``monet.orchestration._invoke.wait_completion``.
+        Not part of the public protocol — backends implement completion
+        notification however suits their transport.
+
+        Raises:
+            TimeoutError: if ``timeout`` seconds elapse without a result.
+            KeyError: if ``task_id`` is unknown.
+        """
+        if task_id not in self._tasks:
+            msg = f"Unknown task_id: {task_id}"
+            raise KeyError(msg)
+        event = self._completions[task_id]
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except TimeoutError:
+            msg = f"Task {task_id} did not complete within {timeout}s"
+            raise TimeoutError(msg) from None
+
+        record = self._tasks[task_id]
+        result = record["result"]
+
+        self._tasks.pop(task_id, None)
+        self._completions.pop(task_id, None)
+
+        if result is not None:
+            return result
+        return AgentResult(
+            success=False,
+            output="",
+            signals=(
+                Signal(
+                    type=SignalType.SEMANTIC_ERROR,
+                    reason="Task failed in queue",
+                    metadata=None,
+                ),
+            ),
+            trace_id=record["context"]["trace_id"],
+            run_id=record["context"]["run_id"],
+        )

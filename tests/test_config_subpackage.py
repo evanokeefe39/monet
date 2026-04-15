@@ -30,8 +30,6 @@ from monet.config import (
     MONET_SERVER_URL,
     MONET_WORKER_CONCURRENCY,
     REDIS_URI,
-    UPSTASH_REDIS_REST_TOKEN,
-    UPSTASH_REDIS_REST_URL,
     ArtifactsConfig,
     AuthConfig,
     CLIDevConfig,
@@ -276,25 +274,20 @@ def test_queue_redis_requires_uri(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc_info.value.var == REDIS_URI
 
 
-def test_queue_upstash_requires_credentials(
+def test_queue_memory_rejected_when_redis_uri_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(MONET_QUEUE_BACKEND, "upstash")
+    """Guarantees a deployed server cannot silently fall back to in-memory.
+
+    Replaces the ``MONET_ENV=production`` pattern: rather than a catch-all
+    mode flag, the explicit signal is ``REDIS_URI`` being set while the
+    backend is still ``memory`` — that combination is rejected at boot.
+    """
+    monkeypatch.setenv(REDIS_URI, "redis://localhost:6379")
     cfg = QueueConfig.load()
     with pytest.raises(ConfigError) as exc_info:
         cfg.validate_for_boot()
-    assert exc_info.value.var == UPSTASH_REDIS_REST_URL
-
-
-def test_queue_upstash_requires_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(MONET_QUEUE_BACKEND, "upstash")
-    monkeypatch.setenv(UPSTASH_REDIS_REST_URL, "https://x")
-    cfg = QueueConfig.load()
-    with pytest.raises(ConfigError) as exc_info:
-        cfg.validate_for_boot()
-    assert exc_info.value.var == UPSTASH_REDIS_REST_TOKEN
+    assert exc_info.value.var == MONET_QUEUE_BACKEND
 
 
 def test_queue_redis_valid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,14 +296,14 @@ def test_queue_redis_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     QueueConfig.load().validate_for_boot()  # must not raise
 
 
-def test_queue_redacted_summary_hides_token(
+def test_queue_redacted_summary_hides_redis_uri(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(UPSTASH_REDIS_REST_TOKEN, "supersecret")
+    monkeypatch.setenv(REDIS_URI, "redis://user:supersecret@host:6379")
     cfg = QueueConfig.load()
     summary = cfg.redacted_summary()
     assert "supersecret" not in str(summary)
-    assert summary["upstash_token"] == "set"
+    assert summary["redis_uri"] == "set"
 
 
 # ── Schemas: AuthConfig ────────────────────────────────────────────────

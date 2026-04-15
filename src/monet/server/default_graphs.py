@@ -50,30 +50,21 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
 
     ``cfg.validate_for_boot()`` must have been called first; this
     function trusts that credentials for the chosen backend are present.
-    Still uses a final :class:`ConfigError` as a belt-and-suspenders
-    guard so a future backend added to :data:`QueueBackend` without a
-    branch here cannot silently fall through to in-memory.
     """
     if cfg.backend == "memory":
         queue: TaskQueue = InMemoryTaskQueue()
         return queue
     if cfg.backend == "redis":
-        from monet.queue.backends.redis import RedisTaskQueue
-
-        assert cfg.redis_uri is not None  # validated by cfg.validate_for_boot()
-        return RedisTaskQueue(cfg.redis_uri)
-    if cfg.backend == "sqlite":
-        from monet.queue.backends.sqlite import SQLiteTaskQueue
-
-        return SQLiteTaskQueue(str(cfg.sqlite_path))
-    if cfg.backend == "upstash":
-        from monet.queue.backends.upstash import UpstashTaskQueue
-
-        return UpstashTaskQueue()
+        # RedisStreamsTaskQueue lands in Phase 2 of the queue refactor.
+        raise ConfigError(
+            MONET_QUEUE_BACKEND,
+            cfg.backend,
+            "backend=memory (Redis Streams backend lands in Phase 2)",
+        )
     raise ConfigError(
         MONET_QUEUE_BACKEND,
         cfg.backend,
-        "one of {memory, redis, sqlite, upstash}",
+        "one of {memory, redis}",
     )
 
 

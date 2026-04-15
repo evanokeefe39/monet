@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
@@ -132,17 +133,12 @@ async def run_worker(
 
     async def _execute(record: TaskRecord) -> None:
         from monet.core.stubs import _progress_publisher
-        from monet.queue import TaskStatus
 
         task_id = record["task_id"]
         agent_id = record["agent_id"]
         command = record["command"]
 
         async with sem:
-            # Check if task was cancelled while waiting for semaphore
-            if record.get("status") == TaskStatus.CANCELLED:
-                return
-
             progress_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
                 maxsize=_PROGRESS_QUEUE_SIZE
             )
@@ -185,7 +181,7 @@ async def run_worker(
                         result = await handler(record["context"])
                         # Flush progress BEFORE completing so subscribers
                         # see all events — completing the task triggers
-                        # poll_result cleanup which terminates subscriptions.
+                        # wait_completion cleanup which terminates subscriptions.
                         await _flush_drain()
                         await queue.complete(task_id, result)
                     except Exception as exc:
@@ -201,11 +197,15 @@ async def run_worker(
                 if not drain_task.done():
                     await _flush_drain()
 
+    consumer_id = f"worker-{uuid.uuid4().hex[:8]}"
+    claim_block_ms = max(int(poll_interval * 1000), 1)
+
     try:
         while True:
-            record = await queue.claim(pool)
+            record = await queue.claim(
+                pool, consumer_id=consumer_id, block_ms=claim_block_ms
+            )
             if record is None:
-                await asyncio.sleep(poll_interval)
                 continue
             task = asyncio.create_task(_execute(record))
             in_flight.add(task)

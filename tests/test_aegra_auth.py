@@ -20,7 +20,7 @@ def _set_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 async def _call_handler(headers: dict[str, str]) -> dict[str, Any]:
     handler = auth._authenticate_handler
     assert handler is not None
-    return cast(dict[str, Any], await handler(headers))
+    return cast("dict[str, Any]", await handler(headers))
 
 
 @pytest.mark.asyncio

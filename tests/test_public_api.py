@@ -114,7 +114,6 @@ def test_tracing_public_api() -> None:
 def test_queue_concrete_exports() -> None:
     from monet.queue import (  # noqa: F401
         InMemoryTaskQueue,
-        SQLiteTaskQueue,
         TaskQueue,
         TaskRecord,
         TaskStatus,

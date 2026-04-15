@@ -29,7 +29,7 @@ Each schema exposes:
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path  # noqa: TC003 — pydantic needs this at runtime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -51,7 +51,6 @@ from ._env import (
     MONET_ARTIFACTS_DIR,
     MONET_DISTRIBUTED,
     MONET_QUEUE_BACKEND,
-    MONET_QUEUE_DB,
     MONET_SERVER_URL,
     MONET_TRACE_FILE,
     MONET_WORKER_AGENTS,
@@ -65,8 +64,6 @@ from ._env import (
     OTEL_SERVICE_NAME,
     REDIS_URI,
     TAVILY_API_KEY,
-    UPSTASH_REDIS_REST_TOKEN,
-    UPSTASH_REDIS_REST_URL,
     ConfigError,
     read_bool,
     read_enum,
@@ -90,12 +87,10 @@ __all__ = [
 ]
 
 
-QueueBackend = Literal["memory", "redis", "sqlite", "upstash"]
+QueueBackend = Literal["memory", "redis"]
 _QUEUE_BACKENDS: tuple[QueueBackend, ...] = (
     "memory",
     "redis",
-    "sqlite",
-    "upstash",
 )
 
 _SECRET = "set"
@@ -256,15 +251,18 @@ class QueueConfig(BaseModel):
 
     ``validate_for_boot`` is where we fail an operator-visible error on
     typos like ``MONET_QUEUE_BACKEND=redi`` or missing credentials.
+    Memory backend is for tests and single-process development only; it
+    is rejected at boot whenever ``REDIS_URI`` is set, which guarantees
+    that a deployed server cannot silently drop to in-memory storage.
     """
 
     model_config = ConfigDict(frozen=True)
 
     backend: QueueBackend = "memory"
     redis_uri: str | None = None
-    sqlite_path: Path = Path(".monet/queue.db")
-    upstash_url: str | None = None
-    upstash_token: str | None = None
+    work_stream_maxlen: int | None = None
+    redis_pool_size: int = 20
+    push_dispatch_timeout: float = 10.0
 
     @classmethod
     def load(cls) -> QueueConfig:
@@ -272,13 +270,9 @@ class QueueConfig(BaseModel):
         backend: QueueBackend = (
             backend_raw if backend_raw is not None else "memory"  # type: ignore[assignment]
         )
-        sqlite_path = read_path(MONET_QUEUE_DB, default=Path(".monet/queue.db"))
         return cls(
             backend=backend,
             redis_uri=read_str(REDIS_URI),
-            sqlite_path=sqlite_path or Path(".monet/queue.db"),
-            upstash_url=read_str(UPSTASH_REDIS_REST_URL),
-            upstash_token=read_str(UPSTASH_REDIS_REST_TOKEN),
         )
 
     def validate_for_boot(self) -> None:
@@ -288,29 +282,21 @@ class QueueConfig(BaseModel):
                 None,
                 f"a Redis URI (required when {MONET_QUEUE_BACKEND}=redis)",
             )
-        if self.backend == "upstash":
-            if not self.upstash_url:
-                raise ConfigError(
-                    UPSTASH_REDIS_REST_URL,
-                    None,
-                    f"an Upstash REST URL (required when "
-                    f"{MONET_QUEUE_BACKEND}=upstash)",
-                )
-            if not self.upstash_token:
-                raise ConfigError(
-                    UPSTASH_REDIS_REST_TOKEN,
-                    None,
-                    f"an Upstash REST token (required when "
-                    f"{MONET_QUEUE_BACKEND}=upstash)",
-                )
+        if self.backend == "memory" and self.redis_uri:
+            raise ConfigError(
+                MONET_QUEUE_BACKEND,
+                self.backend,
+                "the memory backend to be disabled when REDIS_URI is set "
+                f"(set {MONET_QUEUE_BACKEND}=redis or unset REDIS_URI)",
+            )
 
     def redacted_summary(self) -> dict[str, Any]:
         return {
             "backend": self.backend,
             "redis_uri": _redact(self.redis_uri),
-            "sqlite_path": str(self.sqlite_path),
-            "upstash_url": _redact(self.upstash_url),
-            "upstash_token": _redact(self.upstash_token),
+            "work_stream_maxlen": self.work_stream_maxlen,
+            "redis_pool_size": self.redis_pool_size,
+            "push_dispatch_timeout": self.push_dispatch_timeout,
         }
 
 

@@ -134,14 +134,6 @@ module = "examples.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = "redis.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "upstash_redis.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = "aegra.*"
 ignore_missing_imports = true
 
