@@ -564,13 +564,16 @@ async def questionnaire_node(state: ChatState) -> dict[str, Any]:
     if isinstance(decision, dict):
         for idx, question in enumerate(questions):
             raw = decision.get(f"q{idx}")
-            if raw in (None, "", "__skip__"):
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if not text or text.lower() in {"skip", "__skip__", "n/a", "-"}:
                 continue
             answers.append(
                 {
                     "type": "user_clarification",
                     "summary": question,
-                    "content": f"Q: {question}\nA: {raw}",
+                    "content": f"Q: {question}\nA: {text}",
                 }
             )
 
@@ -582,27 +585,26 @@ async def questionnaire_node(state: ChatState) -> dict[str, Any]:
 
 
 def _followup_form(questions: list[str]) -> dict[str, Any]:
-    """Form-schema payload for the planner's follow-up questionnaire."""
-    fields: list[dict[str, Any]] = []
-    for idx, question in enumerate(questions):
-        fields.append(
-            {
-                "name": f"q{idx}",
-                "type": "select_or_text",
-                "label": question,
-                "options": [
-                    {"value": "__skip__", "label": "Skip / I don't know"},
-                ],
-                "default": "__skip__",
-            }
-        )
+    """Form-schema payload for the planner's follow-up questionnaire.
+
+    Each question becomes a free-text field. The TUI parser treats the
+    user's reply as one line per field; ``skip`` (or empty) drops the
+    answer so the planner falls back to its default reasoning.
+    """
+    fields: list[dict[str, Any]] = [
+        {
+            "name": f"q{idx}",
+            "type": "text",
+            "label": question,
+            "default": "",
+        }
+        for idx, question in enumerate(questions)
+    ]
     return {
         "prompt": (
             "The planner needs more information before it can build a plan. "
-            "Answer each question, or pick 'Skip' if you don't know — the "
-            "planner will use its best judgement for skipped items."
+            "Answer each question on its own line (or type 'skip' to skip)."
         ),
-        "render": "inline",
         "fields": fields,
     }
 
