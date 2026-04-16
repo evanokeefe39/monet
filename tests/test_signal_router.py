@@ -16,6 +16,15 @@ def test_blocking_signal_routes_to_interrupt() -> None:
     assert route.action == "interrupt"
 
 
+def test_needs_clarification_is_blocking() -> None:
+    """NEEDS_CLARIFICATION must be in the BLOCKING group — agents asking
+    follow-up questions block until the human answers."""
+    assert SignalType.NEEDS_CLARIFICATION in BLOCKING
+    route = EXECUTION_ROUTER.route([_signal(SignalType.NEEDS_CLARIFICATION)])
+    assert route is not None
+    assert route.action == "interrupt"
+
+
 def test_recoverable_signal_routes_to_retry() -> None:
     route = EXECUTION_ROUTER.route([_signal(SignalType.RATE_LIMITED)])
     assert route is not None

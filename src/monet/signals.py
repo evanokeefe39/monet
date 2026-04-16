@@ -17,6 +17,7 @@ class SignalType(StrEnum):
 
     # Control flow — orchestrator routes on these directly
     NEEDS_HUMAN_REVIEW = "needs_human_review"
+    NEEDS_CLARIFICATION = "needs_clarification"
     ESCALATION_REQUIRED = "escalation_required"
     APPROVAL_REQUIRED = "approval_required"
     INSUFFICIENT_CONTEXT = "insufficient_context"
@@ -43,6 +44,7 @@ class SignalType(StrEnum):
 BLOCKING: frozenset[SignalType] = frozenset(
     {
         SignalType.NEEDS_HUMAN_REVIEW,
+        SignalType.NEEDS_CLARIFICATION,
         SignalType.ESCALATION_REQUIRED,
         SignalType.APPROVAL_REQUIRED,
     }

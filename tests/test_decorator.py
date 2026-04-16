@@ -265,7 +265,14 @@ async def test_auto_offload_naive_agent(_artifacts: None) -> None:
 
 
 async def test_double_write_dedupes(_artifacts: None) -> None:
-    """Agent writes bytes AND returns the same bytes — one artifact, not two."""
+    """Agent writes bytes AND returns the same bytes — one artifact, full output.
+
+    When the agent has already persisted the bytes explicitly the decorator
+    skips the auto-offload but also keeps the full return value inline —
+    truncating would silently drop content a chat transcript / direct
+    consumer is counting on. Agents choosing to return large payloads own
+    the size tradeoff.
+    """
     big = "y" * 5000
 
     @agent(agent_id="test-offload-dedupe")
@@ -283,7 +290,7 @@ async def test_double_write_dedupes(_artifacts: None) -> None:
 
     result = await dedupe_agent(_ctx(task="t", agent_id="test-offload-dedupe"))
     assert len(result.artifacts) == 1
-    assert result.output == big[:200]
+    assert result.output == big  # full return preserved when already persisted
 
 
 async def test_side_artifact_still_offloads(_artifacts: None) -> None:

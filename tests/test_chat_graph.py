@@ -14,17 +14,22 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from monet.orchestration.chat_graph import (
+    MAX_FOLLOWUP_ATTEMPTS,
+    PLAN_MAX_REVISIONS,
     ChatState,
     ChatTriageResult,
     _build_context,
     _parse_slash,
+    approval_node,
     build_chat_graph,
     parse_command_node,
     planner_node,
+    questionnaire_node,
     respond_node,
     specialist_node,
     triage_node,
 )
+from monet.signals import SignalType
 
 # --- parse_command_node ---------------------------------------------------
 
@@ -103,8 +108,9 @@ async def test_triage_node_routes_chat() -> None:
     assert out["route"] == "chat"
 
 
-async def test_triage_node_routes_planner() -> None:
-    fake = _fake_triage_model(ChatTriageResult(route="planner", confidence=0.9))
+async def test_triage_node_routes_plan_to_planner_edge() -> None:
+    """Triage returns route='plan'; the graph edge name is 'planner'."""
+    fake = _fake_triage_model(ChatTriageResult(route="plan", confidence=0.9))
     with patch("monet.orchestration.chat_graph._load_model", return_value=fake):
         out = await triage_node(
             {"messages": [{"role": "user", "content": "plan a feature"}]}
@@ -113,46 +119,10 @@ async def test_triage_node_routes_planner() -> None:
     assert out["command_meta"]["task"] == "plan a feature"
 
 
-async def test_triage_node_routes_specialist_with_name() -> None:
-    fake = _fake_triage_model(
-        ChatTriageResult(route="specialist", specialist="researcher", confidence=0.8)
-    )
-    with (
-        patch("monet.orchestration.chat_graph._load_model", return_value=fake),
-        patch(
-            "monet.orchestration.chat_graph._known_agent_ids",
-            return_value={"researcher"},
-        ),
-    ):
-        out = await triage_node({"messages": [{"role": "user", "content": "research"}]})
-    assert out["route"] == "specialist"
-    assert out["command_meta"]["specialist"] == "researcher"
-    assert out["command_meta"]["mode"] == "fast"
-
-
-async def test_triage_node_rejects_hallucinated_specialist() -> None:
-    fake = _fake_triage_model(
-        ChatTriageResult(
-            route="specialist",
-            specialist="ai_trends_healthcare",
-            confidence=0.5,
-        )
-    )
-    with (
-        patch("monet.orchestration.chat_graph._load_model", return_value=fake),
-        patch(
-            "monet.orchestration.chat_graph._known_agent_ids",
-            return_value={"researcher", "writer"},
-        ),
-    ):
-        out = await triage_node({"messages": [{"role": "user", "content": "research"}]})
-    assert out["route"] == "planner"
-
-
 async def test_triage_node_clarification_routes_chat() -> None:
     fake = _fake_triage_model(
         ChatTriageResult(
-            route="planner",
+            route="plan",
             confidence=0.3,
             clarification_needed=True,
             clarification_prompt="Be more specific about the scope.",
@@ -225,15 +195,21 @@ async def test_respond_node_clarification_prepends_system_message() -> None:
     assert captured["payload"][0]["content"] == "Ask for scope."
 
 
-# --- planner_node / specialist_node --------------------------------------
+# --- planner_node (single invocation per visit) --------------------------
 
 
-async def _fake_result(output: Any = "plan ok", success: bool = True) -> MagicMock:
-    result = MagicMock()
-    result.success = success
-    result.output = output
-    result.signals = []
-    return result
+def _result(
+    output: Any = None,
+    signals: list[dict[str, Any]] | None = None,
+    artifacts: tuple[dict[str, Any], ...] = (),
+    success: bool = True,
+) -> MagicMock:
+    r = MagicMock()
+    r.success = success
+    r.output = output
+    r.signals = signals or []
+    r.artifacts = artifacts
+    return r
 
 
 async def test_planner_node_passes_full_context_no_truncation() -> None:
@@ -248,15 +224,9 @@ async def test_planner_node_passes_full_context_no_truncation() -> None:
     async def fake_invoke(agent_id: str, **kwargs: Any) -> Any:
         captured["agent_id"] = agent_id
         captured["kwargs"] = kwargs
-        return await _fake_result(output={"goal": "Drafted plan"})
+        return _result(output={"kind": "plan", "goal": "Drafted plan"})
 
-    with (
-        patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke),
-        patch(
-            "monet.orchestration.chat_graph.interrupt",
-            return_value={"action": "approve"},
-        ),
-    ):
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
         out = await planner_node(
             {"messages": messages, "command_meta": {"task": "plan a thing"}}
         )
@@ -265,67 +235,145 @@ async def test_planner_node_passes_full_context_no_truncation() -> None:
     assert captured["kwargs"]["command"] == "plan"
     assert captured["kwargs"]["task"] == "plan a thing"
     ctx = captured["kwargs"]["context"]
+    # Full transcript pass-through — 2 chat_history entries, no feedback/force.
     assert len(ctx) == 2
-    assert ctx[0]["content"] == big  # no truncation
-    assert "Drafted plan" in out["messages"][0]["content"]
-    assert any("approved" in m["content"].lower() for m in out["messages"])
+    assert ctx[0]["content"] == big
+    # Planner output stashed in state for approval_node to consume.
+    assert out["last_plan_output"]["goal"] == "Drafted plan"
+    assert out["pending_questions"] is None
 
 
-async def test_planner_node_revise_loop_re_invokes_with_feedback() -> None:
-    calls: list[dict[str, Any]] = []
+async def test_planner_node_questions_signal_writes_pending_questions() -> None:
+    """NEEDS_CLARIFICATION signal + questions output → state.pending_questions."""
 
-    async def fake_invoke(agent_id: str, **kwargs: Any) -> Any:
-        calls.append(kwargs)
-        return await _fake_result(output={"goal": "Plan"})
-
-    decisions = [
-        {"action": "revise", "feedback": "tighten scope"},
-        {"action": "approve"},
-    ]
-
-    def fake_interrupt(_payload: Any) -> Any:
-        return decisions.pop(0)
-
-    with (
-        patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke),
-        patch("monet.orchestration.chat_graph.interrupt", side_effect=fake_interrupt),
-    ):
-        out = await planner_node(
-            {
-                "messages": [{"role": "user", "content": "/plan x"}],
-                "command_meta": {"task": "x"},
-            }
-        )
-
-    assert len(calls) == 2
-    second_ctx = calls[1]["context"]
-    assert any(
-        isinstance(c, dict)
-        and c.get("type") == "instruction"
-        and "tighten scope" in str(c.get("content"))
-        for c in second_ctx
-    )
-    assert any("approved" in m["content"].lower() for m in out["messages"])
-
-
-async def test_planner_node_reject_halts() -> None:
     async def fake_invoke(*_args: Any, **_kwargs: Any) -> Any:
-        return await _fake_result(output={"goal": "Plan"})
+        return _result(
+            output={"kind": "questions", "questions": ["scope?", "format?"]},
+            signals=[
+                {
+                    "type": SignalType.NEEDS_CLARIFICATION,
+                    "reason": "underspec",
+                    "metadata": None,
+                }
+            ],
+        )
 
-    with (
-        patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke),
-        patch(
-            "monet.orchestration.chat_graph.interrupt",
-            return_value={"action": "reject"},
-        ),
-    ):
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
         out = await planner_node(
             {
-                "messages": [{"role": "user", "content": "/plan x"}],
-                "command_meta": {"task": "x"},
+                "messages": [{"role": "user", "content": "do something"}],
+                "command_meta": {"task": "do something"},
+                "followup_attempts": 0,
             }
         )
-    assert any("rejected" in m["content"].lower() for m in out["messages"])
+    assert out["pending_questions"] == ["scope?", "format?"]
+    assert out["last_plan_output"] is None
+
+
+async def test_planner_node_force_plan_after_max_attempts() -> None:
+    """followup_attempts >= MAX → force-plan instruction in the context."""
+    captured: dict[str, Any] = {}
+
+    async def fake_invoke(*_args: Any, **kwargs: Any) -> Any:
+        captured["kwargs"] = kwargs
+        return _result(output={"kind": "plan", "goal": "forced"})
+
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
+        out = await planner_node(
+            {
+                "messages": [{"role": "user", "content": "ambiguous"}],
+                "command_meta": {"task": "ambiguous"},
+                "followup_attempts": MAX_FOLLOWUP_ATTEMPTS,
+            }
+        )
+    ctx = captured["kwargs"]["context"]
+    assert any(
+        isinstance(c, dict) and c.get("summary") == "Force-plan override" for c in ctx
+    )
+    assert out["last_plan_output"]["goal"] == "forced"
+
+
+async def test_planner_node_give_up_when_force_still_asks() -> None:
+    """Agent still emits questions on the forced pass → apology message, END."""
+
+    async def fake_invoke(*_args: Any, **_kwargs: Any) -> Any:
+        return _result(
+            output={"kind": "questions", "questions": ["still unclear?"]},
+            signals=[
+                {
+                    "type": SignalType.NEEDS_CLARIFICATION,
+                    "reason": "x",
+                    "metadata": None,
+                }
+            ],
+        )
+
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
+        out = await planner_node(
+            {
+                "messages": [{"role": "user", "content": "vague"}],
+                "command_meta": {"task": "vague"},
+                "followup_attempts": MAX_FOLLOWUP_ATTEMPTS,
+            }
+        )
+    assert out["pending_questions"] is None
+    assert out["last_plan_output"] is None
+    assert any(
+        "couldn't produce a plan" in m["content"].lower() for m in out["messages"]
+    )
+
+
+async def test_planner_node_injects_plan_feedback() -> None:
+    """plan_feedback from a prior revise is injected as an instruction entry."""
+    captured: dict[str, Any] = {}
+
+    async def fake_invoke(*_args: Any, **kwargs: Any) -> Any:
+        captured["kwargs"] = kwargs
+        return _result(output={"kind": "plan", "goal": "p"})
+
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
+        out = await planner_node(
+            {
+                "messages": [{"role": "user", "content": "x"}],
+                "command_meta": {"task": "x"},
+                "plan_feedback": "tighten scope",
+            }
+        )
+    ctx = captured["kwargs"]["context"]
+    assert any(
+        c.get("type") == "instruction" and "tighten scope" in str(c.get("content"))
+        for c in ctx
+    )
+    # Feedback cleared after consumption so it doesn't re-apply.
+    assert out["plan_feedback"] is None
+
+
+async def test_planner_node_injects_followup_answers() -> None:
+    """followup_answers are forwarded as user_clarification context entries."""
+    captured: dict[str, Any] = {}
+
+    async def fake_invoke(*_args: Any, **kwargs: Any) -> Any:
+        captured["kwargs"] = kwargs
+        return _result(output={"kind": "plan", "goal": "p"})
+
+    answers = [
+        {
+            "type": "user_clarification",
+            "summary": "scope?",
+            "content": "Q: scope?\nA: small",
+        }
+    ]
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
+        out = await planner_node(
+            {
+                "messages": [{"role": "user", "content": "x"}],
+                "command_meta": {"task": "x"},
+                "followup_answers": answers,
+            }
+        )
+    ctx = captured["kwargs"]["context"]
+    assert any(c.get("type") == "user_clarification" for c in ctx)
+    assert out["followup_answers"] is None  # consumed
 
 
 async def test_planner_node_surfaces_invoke_error_as_assistant_message() -> None:
@@ -340,6 +388,105 @@ async def test_planner_node_surfaces_invoke_error_as_assistant_message() -> None
             }
         )
     assert "Planner invocation failed" in out["messages"][0]["content"]
+    assert out["last_plan_output"] is None
+
+
+# --- questionnaire_node --------------------------------------------------
+
+
+async def test_questionnaire_node_interrupts_and_bumps_attempts() -> None:
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"q0": "small scope", "q1": "__skip__"},
+    ):
+        out = await questionnaire_node(
+            {
+                "pending_questions": ["scope?", "deadline?"],
+                "followup_attempts": 0,
+            }
+        )
+    assert out["pending_questions"] is None
+    assert out["followup_attempts"] == 1
+    answers = out["followup_answers"]
+    assert len(answers) == 1  # skipped question filtered out
+    assert answers[0]["summary"] == "scope?"
+    assert "small scope" in answers[0]["content"]
+
+
+async def test_questionnaire_node_no_pending_is_no_op() -> None:
+    """Defensive — routed here without questions → clear flags + pass through."""
+    out = await questionnaire_node({"followup_attempts": 2})
+    assert out == {"pending_questions": None, "followup_attempts": 2}
+
+
+# --- approval_node -------------------------------------------------------
+
+
+async def test_approval_node_approve_terminates() -> None:
+    plan = {"goal": "Do it", "routing_skeleton": {"goal": "Do it", "nodes": []}}
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"action": "approve"},
+    ):
+        out = await approval_node({"last_plan_output": plan})
+    assert out["last_plan_output"] is None
+    assert any("approved" in m["content"].lower() for m in out["messages"])
+    assert "plan_feedback" not in out  # no revise
+
+
+async def test_approval_node_reject_terminates() -> None:
+    plan = {"goal": "Do it"}
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"action": "reject"},
+    ):
+        out = await approval_node({"last_plan_output": plan})
+    assert any("rejected" in m["content"].lower() for m in out["messages"])
+    assert "plan_feedback" not in out
+
+
+async def test_approval_node_revise_writes_feedback_and_bumps_revisions() -> None:
+    plan = {"goal": "Do it"}
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"action": "revise", "feedback": "narrow the scope"},
+    ):
+        out = await approval_node(
+            {"last_plan_output": plan, "plan_revisions": 0},
+        )
+    assert out["plan_feedback"] == "narrow the scope"
+    assert out["plan_revisions"] == 1
+    assert out["last_plan_output"] is None
+
+
+async def test_approval_node_revise_without_feedback_treated_as_rejection() -> None:
+    plan = {"goal": "Do it"}
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"action": "revise", "feedback": ""},
+    ):
+        out = await approval_node({"last_plan_output": plan})
+    assert "plan_feedback" not in out
+    assert any("no feedback provided" in m["content"].lower() for m in out["messages"])
+
+
+async def test_approval_node_max_revisions_stops() -> None:
+    plan = {"goal": "Do it"}
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"action": "revise", "feedback": "again"},
+    ):
+        out = await approval_node(
+            {"last_plan_output": plan, "plan_revisions": PLAN_MAX_REVISIONS},
+        )
+    assert "plan_feedback" not in out
+    assert any(
+        f"exceeded {PLAN_MAX_REVISIONS} revisions" in m["content"].lower()
+        for m in out["messages"]
+    )
+
+
+# --- specialist_node -----------------------------------------------------
 
 
 async def test_specialist_node_invokes_named_agent_and_mode() -> None:
@@ -348,7 +495,7 @@ async def test_specialist_node_invokes_named_agent_and_mode() -> None:
     async def fake_invoke(agent_id: str, **kwargs: Any) -> Any:
         captured["agent_id"] = agent_id
         captured["kwargs"] = kwargs
-        return await _fake_result(output="deep result")
+        return _result(output="deep result")
 
     with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
         await specialist_node(
@@ -363,6 +510,27 @@ async def test_specialist_node_invokes_named_agent_and_mode() -> None:
         )
     assert captured["agent_id"] == "researcher"
     assert captured["kwargs"]["command"] == "deep"
+
+
+async def test_specialist_node_surfaces_artifact_links() -> None:
+    async def fake_invoke(*_args: Any, **_kwargs: Any) -> Any:
+        return _result(
+            output="deep research content",
+            artifacts=({"artifact_id": "abc123", "url": "", "key": "report"},),
+        )
+
+    meta = {"specialist": "researcher", "mode": "deep", "task": "x"}
+    with patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke):
+        out = await specialist_node(
+            {
+                "messages": [{"role": "user", "content": "/researcher:deep x"}],
+                "command_meta": meta,
+            }
+        )
+    content = out["messages"][0]["content"]
+    assert "deep research content" in content
+    assert "→ artifact (report):" in content
+    assert "abc123" in content
 
 
 async def test_specialist_node_missing_capability_inline_message() -> None:
@@ -390,7 +558,6 @@ async def test_compiled_graph_free_form_triage_routes_to_respond() -> None:
     fake_respond.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
 
     def pick(model_str: str) -> Any:
-        # triage model = flash-lite, respond model = flash
         if "lite" in model_str:
             return triage_llm
         return fake_respond
@@ -405,14 +572,15 @@ async def test_compiled_graph_free_form_triage_routes_to_respond() -> None:
     assert "hi" in contents
 
 
-async def test_compiled_graph_slash_plan_bypasses_triage() -> None:
+async def test_compiled_graph_slash_plan_approve_flow() -> None:
+    """End-to-end: /plan → planner → approval → approve → END."""
     triage_llm = MagicMock()
     triage_llm.with_structured_output = MagicMock()
 
     async def fake_invoke(agent_id: str, **kwargs: Any) -> Any:
         assert agent_id == "planner"
         assert kwargs["command"] == "plan"
-        return await _fake_result(output={"goal": "Did it"})
+        return _result(output={"kind": "plan", "goal": "Did it"})
 
     with (
         patch("monet.orchestration.chat_graph._load_model", return_value=triage_llm),
@@ -425,11 +593,54 @@ async def test_compiled_graph_slash_plan_bypasses_triage() -> None:
         graph = build_chat_graph().compile(checkpointer=MemorySaver())
         out = await graph.ainvoke(
             {"messages": [{"role": "user", "content": "/plan draft something"}]},
-            config={"configurable": {"thread_id": "chat-2"}},
+            config={"configurable": {"thread_id": "chat-p1"}},
         )
-    # Triage's structured output never called — slash path bypassed it.
     assert triage_llm.with_structured_output.call_count == 0
-    assert any("Did it" in m["content"] for m in out["messages"])
+    assert any("approved" in m["content"].lower() for m in out["messages"])
+
+
+async def test_compiled_graph_questionnaire_then_plan_flow() -> None:
+    """Planner asks → questionnaire runs → planner plans → approval approves."""
+    triage_llm = MagicMock()
+    triage_llm.with_structured_output = MagicMock()
+
+    invocations = {"count": 0}
+
+    async def fake_invoke(*_args: Any, **_kwargs: Any) -> Any:
+        invocations["count"] += 1
+        if invocations["count"] == 1:
+            return _result(
+                output={"kind": "questions", "questions": ["topic?"]},
+                signals=[
+                    {
+                        "type": SignalType.NEEDS_CLARIFICATION,
+                        "reason": "x",
+                        "metadata": None,
+                    }
+                ],
+            )
+        return _result(output={"kind": "plan", "goal": "Planned"})
+
+    interrupts = [
+        {"q0": "AI trends"},  # questionnaire answer
+        {"action": "approve"},  # approval
+    ]
+
+    def fake_interrupt(_payload: Any) -> Any:
+        return interrupts.pop(0)
+
+    with (
+        patch("monet.orchestration.chat_graph._load_model", return_value=triage_llm),
+        patch("monet.orchestration.chat_graph.invoke_agent", side_effect=fake_invoke),
+        patch("monet.orchestration.chat_graph.interrupt", side_effect=fake_interrupt),
+    ):
+        graph = build_chat_graph().compile(checkpointer=MemorySaver())
+        out = await graph.ainvoke(
+            {"messages": [{"role": "user", "content": "/plan do a thing"}]},
+            config={"configurable": {"thread_id": "chat-q1"}},
+        )
+    assert invocations["count"] == 2  # first asked, second planned
+    assert any("approved" in m["content"].lower() for m in out["messages"])
 
 
 async def test_compiled_graph_unknown_slash_inline_error() -> None:
@@ -442,6 +653,5 @@ async def test_compiled_graph_unknown_slash_inline_error() -> None:
             {"messages": [{"role": "user", "content": "/what"}]},
             config={"configurable": {"thread_id": "chat-3"}},
         )
-    # No LLM call — inline error path.
     assert fake_llm.ainvoke.call_count == 0
     assert any("Unknown command" in m["content"] for m in out["messages"])

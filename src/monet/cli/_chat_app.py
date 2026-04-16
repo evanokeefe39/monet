@@ -35,6 +35,7 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    LoadingIndicator,
     OptionList,
     RadioButton,
     RadioSet,
@@ -82,6 +83,7 @@ TUI_COMMANDS: tuple[str, ...] = (
     "/threads",
     "/switch",
     "/agents",
+    "/runs",
     "/help",
     "/quit",
     "/exit",
@@ -219,77 +221,19 @@ class InterruptScreen(Screen[dict[str, Any]]):
             yield Button("Cancel", id="cancel")
 
     def _compose_field(self, field: Field) -> Any:
-        name = str(field.get("name") or "")
-        if not name:
-            return None
-        ftype = str(field.get("type") or "text")
-        label = str(field.get("label") or name)
-        default = field.get("default")
-        options = field.get("options") or []
+        return _build_field_widget(
+            field,
+            widget_index=self._widget_index,
+            hidden_defaults=self._hidden_defaults,
+        )
 
-        if ftype == "hidden":
-            self._hidden_defaults[name] = default
-            return None
+    def on_mount(self) -> None:
+        import contextlib
 
-        block = Vertical()
-        header = Label(label, classes="field-label")
-
-        if ftype == "text":
-            widget: Any = Input(value=str(default or ""), id=f"f-{name}")
-        elif ftype == "textarea":
-            widget = TextArea(str(default or ""), id=f"f-{name}")
-        elif ftype == "int":
-            widget = Input(
-                value=str(default if default is not None else ""),
-                type="integer",
-                id=f"f-{name}",
-            )
-        elif ftype == "bool":
-            widget = Checkbox(label, value=bool(default), id=f"f-{name}")
-            # Checkbox already carries its own label — collapse the header.
-            self._widget_index[name] = widget
-            return widget
-        elif ftype == "radio":
-            buttons = [
-                RadioButton(
-                    str(_option_label(o)),
-                    value=(_option_value(o) == default),
-                    id=f"r-{name}-{idx}",
-                    name=str(_option_value(o)),
-                )
-                for idx, o in enumerate(options)
-            ]
-            widget = RadioSet(*buttons, id=f"f-{name}")
-        elif ftype == "checkbox":
-            if options:
-                selection_items = [
-                    (
-                        str(_option_label(o)),
-                        _option_value(o),
-                        _is_selected(_option_value(o), default),
-                    )
-                    for o in options
-                ]
-                widget = SelectionList(*selection_items, id=f"f-{name}")
-            else:
-                widget = Checkbox(label, value=bool(default), id=f"f-{name}")
-                self._widget_index[name] = widget
-                return widget
-        elif ftype == "select":
-            choices = [(str(_option_label(o)), _option_value(o)) for o in options]
-            widget = Select(choices, id=f"f-{name}", allow_blank=False)
-            if default is not None:
-                for _, value in choices:
-                    if value == default:
-                        widget.value = value
-                        break
-        else:
-            widget = Input(value=str(default or ""), id=f"f-{name}")
-
-        block.compose_add_child(header)
-        block.compose_add_child(widget)
-        self._widget_index[name] = widget
-        return block
+        for widget in self._widget_index.values():
+            with contextlib.suppress(Exception):
+                widget.focus()
+                break
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit":
@@ -306,6 +250,236 @@ class InterruptScreen(Screen[dict[str, Any]]):
         for name, widget in self._widget_index.items():
             out[name] = _read_widget_value(widget)
         return out
+
+
+class InlineInterruptForm(Vertical):
+    """In-flow HITL form mounted above the chat prompt.
+
+    Chosen when ``form["render"] == "inline"``. Uses the same field
+    widgets as :class:`InterruptScreen` but does not take over the
+    screen — the transcript and prompt stay visible and scrollable.
+    """
+
+    DEFAULT_CSS = """
+    InlineInterruptForm {
+        dock: bottom;
+        height: auto;
+        max-height: 24;
+        margin: 0 0 5 0;
+        padding: 1 2;
+        border: round $accent;
+        background: $panel;
+    }
+
+    InlineInterruptForm .interrupt-prompt {
+        padding-bottom: 1;
+        text-style: bold;
+    }
+
+    InlineInterruptForm .field-label {
+        padding-top: 1;
+        color: $text-muted;
+    }
+
+    InlineInterruptForm #inline-buttons {
+        height: 3;
+        padding: 1 0 0 0;
+    }
+
+    InlineInterruptForm Button {
+        margin: 0 1 0 0;
+    }
+    """
+
+    def __init__(self, form: Form) -> None:
+        super().__init__(id="inline-interrupt")
+        self._form: Form = form
+        self._fields: list[Field] = list(form.get("fields") or [])
+        self._widget_index: dict[str, Any] = {}
+        self._hidden_defaults: dict[str, Any] = {}
+        self._result: asyncio.Future[dict[str, Any] | None] = (
+            asyncio.get_event_loop().create_future()
+        )
+
+    @property
+    def result(self) -> asyncio.Future[dict[str, Any] | None]:
+        """Future that resolves to the form submission (or None on cancel)."""
+        return self._result
+
+    def compose(self) -> ComposeResult:
+        prompt = str(self._form.get("prompt") or "Please respond:")
+        yield Static(prompt, classes="interrupt-prompt")
+        for field in self._fields:
+            widget = _build_field_widget(
+                field,
+                widget_index=self._widget_index,
+                hidden_defaults=self._hidden_defaults,
+            )
+            if widget is not None:
+                yield widget
+        with Horizontal(id="inline-buttons"):
+            yield Button("Submit", id="inline-submit", variant="primary")
+            yield Button("Cancel", id="inline-cancel")
+
+    def on_mount(self) -> None:
+        import contextlib
+
+        for widget in self._widget_index.values():
+            with contextlib.suppress(Exception):
+                widget.focus()
+                break
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "inline-submit":
+            event.stop()
+            self._resolve(self._collect())
+        elif event.button.id == "inline-cancel":
+            event.stop()
+            self._resolve(None)
+
+    def _collect(self) -> dict[str, Any]:
+        out: dict[str, Any] = dict(self._hidden_defaults)
+        for name, widget in self._widget_index.items():
+            out[name] = _read_widget_value(widget)
+        return out
+
+    def _resolve(self, value: dict[str, Any] | None) -> None:
+        if not self._result.done():
+            self._result.set_result(value)
+
+
+def _build_field_widget(
+    field: Field,
+    *,
+    widget_index: dict[str, Any],
+    hidden_defaults: dict[str, Any],
+) -> Any:
+    """Build the Textual widget for one form :class:`Field`.
+
+    Mutates ``widget_index`` (keyed by field name for later collection)
+    and ``hidden_defaults`` (for ``hidden`` field carry-through). Returns
+    the composable widget to yield, or ``None`` when no UI is produced
+    (hidden fields, missing names).
+    """
+    name = str(field.get("name") or "")
+    if not name:
+        return None
+    ftype = str(field.get("type") or "text")
+    label = str(field.get("label") or name)
+    default = field.get("default")
+    options = field.get("options") or []
+
+    if ftype == "hidden":
+        hidden_defaults[name] = default
+        return None
+
+    header = Label(label, classes="field-label")
+
+    if ftype == "text":
+        widget: Any = Input(value=str(default or ""), id=f"f-{name}")
+    elif ftype == "textarea":
+        widget = TextArea(str(default or ""), id=f"f-{name}")
+    elif ftype == "int":
+        widget = Input(
+            value=str(default if default is not None else ""),
+            type="integer",
+            id=f"f-{name}",
+        )
+    elif ftype == "bool":
+        widget = Checkbox(label, value=bool(default), id=f"f-{name}")
+        widget_index[name] = widget
+        return widget
+    elif ftype == "radio":
+        buttons = [
+            RadioButton(
+                str(_option_label(o)),
+                value=(_option_value(o) == default),
+                id=f"r-{name}-{idx}",
+                name=str(_option_value(o)),
+            )
+            for idx, o in enumerate(options)
+        ]
+        widget = RadioSet(*buttons, id=f"f-{name}")
+    elif ftype == "checkbox":
+        if options:
+            selection_items = [
+                (
+                    str(_option_label(o)),
+                    _option_value(o),
+                    _is_selected(_option_value(o), default),
+                )
+                for o in options
+            ]
+            widget = SelectionList(*selection_items, id=f"f-{name}")
+        else:
+            widget = Checkbox(label, value=bool(default), id=f"f-{name}")
+            widget_index[name] = widget
+            return widget
+    elif ftype == "select":
+        choices = [(str(_option_label(o)), _option_value(o)) for o in options]
+        widget = Select(choices, id=f"f-{name}", allow_blank=False)
+        if default is not None:
+            for _, value in choices:
+                if value == default:
+                    widget.value = value
+                    break
+    elif ftype == "select_or_text":
+        widget = _build_select_or_text(name, options, default)
+    else:
+        widget = Input(value=str(default or ""), id=f"f-{name}")
+
+    widget_index[name] = widget
+    return Vertical(header, widget)
+
+
+class SelectOrText(Vertical):
+    """Composite field: a :class:`Select` plus a free-form :class:`Input`.
+
+    The text input wins when non-empty; otherwise the select value is
+    used. Mirrors the claude-code-style questionnaire idiom where the
+    last option is "write your own response" — except here the user
+    can type directly into the always-visible text field, no option to
+    click first.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        choices: list[tuple[str, Any]],
+        default: Any,
+    ) -> None:
+        super().__init__(id=f"f-{name}")
+        self._select_widget = Select(choices, id=f"f-{name}-select", allow_blank=False)
+        if default is not None:
+            for _, value in choices:
+                if value == default:
+                    self._select_widget.value = value
+                    break
+        self._text_widget = Input(
+            placeholder="…or type your own response",
+            id=f"f-{name}-text",
+        )
+
+    def compose(self) -> ComposeResult:
+        yield self._select_widget
+        yield self._text_widget
+
+    @property
+    def value(self) -> Any:
+        """Return the text value if non-empty; else the select value."""
+        text = (self._text_widget.value or "").strip()
+        if text:
+            return text
+        return self._select_widget.value
+
+
+def _build_select_or_text(name: str, options: list[Any], default: Any) -> SelectOrText:
+    """Build a :class:`SelectOrText` widget from a field's options + default."""
+    choices = [(str(_option_label(o)), _option_value(o)) for o in options]
+    if not choices:
+        # Degenerate — no options means the text input is the only path.
+        choices = [("(no preset options)", "")]
+    return SelectOrText(name, choices, default)
 
 
 def _option_label(option: Any) -> str:
@@ -328,6 +502,8 @@ def _is_selected(value: Any, default: Any) -> bool:
 
 def _read_widget_value(widget: Any) -> Any:
     """Return the submission value for a dynamically built field widget."""
+    if isinstance(widget, SelectOrText):
+        return widget.value
     if isinstance(widget, Checkbox):
         return widget.value
     if isinstance(widget, Input):
@@ -476,6 +652,18 @@ class ChatApp(App[None]):
     #slash-suggest.visible {
         display: block;
     }
+
+    #spinner {
+        dock: bottom;
+        height: 1;
+        margin: 0 0 5 0;
+        background: $panel;
+        display: none;
+    }
+
+    #spinner.visible {
+        display: block;
+    }
     """
 
     COMMANDS: ClassVar = App.COMMANDS | {SlashCommandProvider}
@@ -504,6 +692,22 @@ class ChatApp(App[None]):
         self._busy = False
         self._transcript_lines: list[str] = []
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Disable slash-suggest bindings when a HITL surface is active.
+
+        Tab is registered as a priority App binding so the suggester can
+        accept ghost-text from anywhere. Without this guard, pushed
+        screens (``InterruptScreen``, ``_PickerScreen``) and inline
+        forms (``InlineInterruptForm``) never see Tab / Escape / Down
+        because the App consumes them first.
+        """
+        scoped = {"accept_suggestion", "focus_suggest", "hide_suggest"}
+        if action not in scoped:
+            return True
+        if isinstance(self.screen, InterruptScreen | _PickerScreen):
+            return False
+        return not self.query("#inline-interrupt")
+
     def _combined_slash_commands(self) -> list[str]:
         """TUI-level commands first, then server-declared slash commands."""
         out: list[str] = list(TUI_COMMANDS)
@@ -527,6 +731,7 @@ class ChatApp(App[None]):
             yield Button("⧉ copy", id="copy-transcript", variant="default")
         yield RichLog(id="transcript", wrap=True, markup=False, highlight=False)
         yield OptionList(id="slash-suggest")
+        yield LoadingIndicator(id="spinner")
         yield Input(
             placeholder="Type a message or /command…",
             id="prompt",
@@ -553,6 +758,17 @@ class ChatApp(App[None]):
             content = str(msg.get("content") or "")
             self._append_line(f"[{role}] {content}")
         self.query_one("#prompt", Input).focus()
+
+    def _set_spinner(self, visible: bool) -> None:
+        """Show or hide the bottom loading indicator."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            spinner = self.query_one("#spinner", LoadingIndicator)
+            if visible:
+                spinner.add_class("visible")
+            else:
+                spinner.remove_class("visible")
 
     def _append_line(self, line: str) -> None:
         """Write *line* to the transcript and buffer it for copy-to-clipboard.
@@ -689,6 +905,7 @@ class ChatApp(App[None]):
             return
         self._busy = True
         self.sub_title = "thinking…"
+        self._set_spinner(True)
         self._append_line("[info] thinking…")
         try:
             await self._run_turn(
@@ -698,6 +915,7 @@ class ChatApp(App[None]):
             self._append_line(f"[error] {exc}")
             _log.exception("chat turn failed")
         self.sub_title = ""
+        self._set_spinner(False)
         self._busy = False
 
     async def _run_turn(
@@ -717,7 +935,7 @@ class ChatApp(App[None]):
                 self._append_line("[info] graph paused but no form schema — aborting")
                 _log.warning("interrupt payload missing form schema: %r", form)
                 return
-            decision = await self._push_interrupt_screen(form)
+            decision = await self._push_interrupt(form)
             if not decision:
                 self._append_line("[info] (cancelled; sending reject)")
                 decision = {"action": "reject"}
@@ -754,6 +972,31 @@ class ChatApp(App[None]):
                 return
         self._append_line("[info] (no assistant response)")
         _log.warning("%s fallback found no assistant message", source)
+
+    async def _push_interrupt(
+        self,
+        form: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Dispatch to inline or modal HITL rendering based on ``form['render']``."""
+        hint = str(form.get("render") or "").lower()
+        if hint == "inline":
+            return await self._push_interrupt_inline(form)
+        return await self._push_interrupt_screen(form)
+
+    async def _push_interrupt_inline(
+        self,
+        form: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Mount :class:`InlineInterruptForm` above the prompt and await it."""
+        widget = InlineInterruptForm(form)  # type: ignore[arg-type]
+        await self.mount(widget, before="#prompt")
+        try:
+            return await widget.result
+        finally:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                await widget.remove()
 
     async def _push_interrupt_screen(
         self,
@@ -796,6 +1039,9 @@ class ChatApp(App[None]):
             return True
         if head == "/agents":
             await self._cmd_list_agents(log)
+            return True
+        if head == "/runs":
+            await self._cmd_list_runs(log)
             return True
         if head == "/help":
             self._cmd_help(log)
@@ -897,12 +1143,36 @@ class ChatApp(App[None]):
 
         self.push_screen(_PickerScreen("Select an agent command", options), _on_pick)
 
+    async def _cmd_list_runs(self, log: RichLog) -> None:
+        """Print recent pipeline runs to the transcript.
+
+        Chat-only runs (those whose single completed stage is ``chat``)
+        are filtered out to keep the log focused on planning / execution
+        activity.
+        """
+        try:
+            runs = await self._client.list_runs(limit=20)
+        except Exception as exc:
+            self._append_line(f"[error] /runs failed: {exc}")
+            return
+        filtered = [r for r in runs if not (set(r.completed_stages) <= {"chat"})]
+        if not filtered:
+            self._append_line("[info] no pipeline runs yet")
+            return
+        self._append_line(f"[info] {len(filtered)} recent pipeline run(s):")
+        for r in filtered:
+            stages = ", ".join(r.completed_stages) or "(none)"
+            created = (r.created_at or "")[:19]
+            rid = (r.run_id or "")[:8]
+            self._append_line(f"  {created}  {r.status:<12}  {rid}  stages=[{stages}]")
+
     def _cmd_help(self, log: RichLog) -> None:
         self._append_line("[info] TUI commands:")
         self._append_line("  /new, /clear        start a fresh thread")
         self._append_line("  /threads            open the thread picker")
         self._append_line("  /switch <thread>    resume an existing thread by id")
         self._append_line("  /agents             open the agent-command picker")
+        self._append_line("  /runs               list recent pipeline runs")
         self._append_line("  /quit, /exit        leave the REPL")
         self._append_line("[info] server-side slash commands:")
         for cmd in self._server_slash_commands[:20]:

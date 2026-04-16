@@ -6,31 +6,23 @@ Each entry: **symptom**, **location**, **why it matters**, **fix sketch** where 
 
 ---
 
-## I8 — InterruptScreen: Tab/click do nothing, can't submit approve/reject
+## I10 — No progress updates visible in chat transcript
 
-**Symptom.** When the chat HITL approval screen pops after `/plan`, pressing Tab, arrow keys, or clicking the Approve/Reject/Revise radio or Submit button produces no reaction. User is stuck with no way to progress the plan.
+**Symptom.** Agents emit `emit_progress({...})` during execution (e.g. researcher emits `"researching (fast)"`, `"writing artifact"`). These never appear in the `monet chat` transcript. User sees `[info] thinking…` then the final `[assistant] …` reply with no intermediate feedback. Long-running turns (deep research, multi-step plans) look frozen.
 
-**Location.** `src/monet/cli/_chat_app.py` — `InterruptScreen` converted from `ModalScreen` to `Screen` to de-cramp the layout. Either the focus chain isn't picking up the new screen's widgets, or a parent-level binding (likely the `tab` binding on `ChatApp` for slash suggestions + `escape` for hide_suggest) is swallowing the events before the screen gets them.
+**Location.** `src/monet/cli/_chat_app.py` — `_drain_stream` iterates only over `send_message`'s yielded strings (assistant message content). `monet.client._stream_chat_with_input` reads LangGraph `updates` mode and yields assistant messages from `messages` patches, ignoring `AgentProgress` events entirely. `monet.client` also supports a `custom` stream mode via `stream_run` in `_wire.py` that carries progress payloads — not wired into the chat path.
 
-**Why it matters.** The whole HITL approve/revise/reject loop is unreachable from chat — defeating the purpose of the interrupt refactor.
+**Why it matters.** Users staring at a spinner for 30 s assume it's broken. Also masks useful real-time signal (which agent is working, which phase). Undermines the "transparent orchestration" claim.
 
-**Fix sketch.** Either (a) unbind `tab`/`escape` at the App level and move them onto the ChatApp's main Screen so sub-screens are unaffected, or (b) add an explicit focus on the first field in `InterruptScreen.on_mount`. Verify with a Textual `Pilot` test that drives a full approve path from the screen.
+**Fix sketch.** Two options:
+- (a) Extend `_stream_chat_with_input` to also surface progress chunks — subscribe to `stream_run`'s `custom` mode and yield `AgentProgress` events as a typed value the chat app can tag differently (`[progress] researching…`). Requires a multi-type async iterator (e.g. `Union[str, AgentProgress]`) or a sidecar generator.
+- (b) Add a new `MonetClient.chat_progress_stream(thread_id)` generator that polls `/tasks/{task_id}/progress` or subscribes to Redis Pub/Sub, runs concurrently in the TUI (background task) and writes `[progress] …` lines into the transcript.
 
----
-
-## I9 — Chat triage picks `planner/fast` when `researcher/deep` fits
-
-**Symptom.** Free-form user turns like "give me a detailed report on AI trends in healthcare" get triaged to `planner` with `command="fast"` (the quick classifier), rather than dispatching directly to `researcher/deep` or routing to the full planning pipeline.
-
-**Location.** `src/monet/orchestration/chat_graph.py` — `triage_node` builds a system prompt listing registered agent ids but does not list each agent's *commands* nor the per-command descriptions. The triage classifier can therefore only return `specialist=<agent_id>`, and the downstream `specialist_node` hardcodes `mode = command_meta.get("mode") or "fast"`. Deep-research tasks end up on the shallow command.
-
-**Why it matters.** Research-grade chat requests silently downgrade to the fast agent path, producing lower-quality output without any indication to the user.
-
-**Fix sketch.** Extend `ChatTriageResult` with a `command` field, include each `{agent_id, command, description}` in the grounding prompt, and have `specialist_node` use `command_meta["mode"]` without a `"fast"` fallback when triage names one. Preserve the fallback for slash-invoked specialists (`/researcher:deep` already sets `mode=deep` explicitly).
+Lean (a) — reuses the existing stream; no new transport. Tag progress lines distinctly in `_TAG_STYLES` (e.g. `[progress]` in muted yellow) so they visually separate from assistant output.
 
 ---
 
-The prior I1–I7 slate plus I1 (chat graph phantom `planner/chat`) are resolved. New findings land here.
+The prior I1–I9 slate is resolved. New findings land here.
 
 ---
 

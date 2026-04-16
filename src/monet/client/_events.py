@@ -34,6 +34,7 @@ FieldType = Literal[
     "radio",
     "checkbox",
     "select",
+    "select_or_text",
     "int",
     "bool",
     "hidden",
@@ -70,14 +71,23 @@ class Field(TypedDict, total=False):
     value: NotRequired[Any]
 
 
+FormRender = Literal["inline", "modal"]
+
+
 class Form(TypedDict, total=False):
     """An interrupt form envelope. Graphs pass this (or any dict) to
     ``interrupt()``. Consumers check for ``fields`` to opt into rendering.
+
+    ``render`` is a hint — ``"modal"`` (default) renders as a full-page
+    dialog, ``"inline"`` renders in-flow (e.g. mounted above the prompt
+    in the chat TUI). Renderers that can't honour the hint fall back to
+    their default surface.
     """
 
     prompt: str
     fields: list[Field]
     context: NotRequired[dict[str, Any]]
+    render: NotRequired[FormRender]
 
 
 # ── Run stream events ───────────────────────────────────────────────

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from monet.cli._chat_app import (
     ChatApp,
+    InlineInterruptForm,
     InterruptScreen,
     RegistrySuggester,
     _is_selected,
@@ -187,6 +188,195 @@ async def test_interrupt_screen_submits_collected_values() -> None:
     assert result["run_id"] == "abc-123"
 
 
+async def test_interrupt_screen_focuses_first_field_on_mount() -> None:
+    form: Any = {
+        "prompt": "Approve plan?",
+        "fields": [
+            {
+                "name": "action",
+                "type": "radio",
+                "options": [{"value": "a", "label": "A"}],
+                "default": "a",
+            },
+        ],
+    }
+
+    class _Host(ChatApp):
+        def __init__(self) -> None:
+            super().__init__(client=_fake_client(), thread_id="t")
+
+        def on_mount(self) -> None:
+            super().on_mount()
+            self.push_screen(InterruptScreen(form), lambda _r: None)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        # First field widget should own focus after on_mount ran.
+        first = host.screen.query_one("#f-action")
+        assert first.has_focus
+        host.exit()
+
+
+async def test_check_action_disables_tab_on_sub_screen() -> None:
+    """Priority Tab binding must not steal events from InterruptScreen."""
+    form: Any = {
+        "prompt": "?",
+        "fields": [
+            {
+                "name": "action",
+                "type": "radio",
+                "options": [{"value": "a", "label": "A"}],
+                "default": "a",
+            },
+        ],
+    }
+
+    class _Host(ChatApp):
+        def __init__(self) -> None:
+            super().__init__(client=_fake_client(), thread_id="t")
+
+        def on_mount(self) -> None:
+            super().on_mount()
+            self.push_screen(InterruptScreen(form), lambda _r: None)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        assert host.check_action("accept_suggestion", ()) is False
+        assert host.check_action("focus_suggest", ()) is False
+        assert host.check_action("hide_suggest", ()) is False
+        host.exit()
+
+
+async def test_inline_interrupt_renders_when_render_hint_is_inline() -> None:
+    form: Any = {
+        "prompt": "Approve?",
+        "render": "inline",
+        "fields": [
+            {
+                "name": "action",
+                "type": "radio",
+                "options": [{"value": "approve", "label": "Approve"}],
+                "default": "approve",
+            },
+        ],
+    }
+
+    client = _fake_client()
+    app = ChatApp(client=client, thread_id="t", slash_commands=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Drive the dispatcher directly to avoid mocking a live stream.
+        task = app.run_worker(app._push_interrupt(form), exclusive=False)
+        await pilot.pause()
+        inline = app.query_one("#inline-interrupt", InlineInterruptForm)
+        assert inline is not None
+        # Sub-screen-style App bindings must be disabled while inline form mounted.
+        assert app.check_action("accept_suggestion", ()) is False
+        await pilot.click("#inline-submit")
+        await pilot.pause()
+        result = await task.wait()
+        assert result == {"action": "approve"}
+        # Inline widget should have been removed after resolution.
+        assert not app.query("#inline-interrupt")
+        app.exit()
+
+
+async def test_inline_interrupt_cancel_returns_none() -> None:
+    form: Any = {
+        "prompt": "Approve?",
+        "render": "inline",
+        "fields": [
+            {
+                "name": "action",
+                "type": "radio",
+                "options": [{"value": "a"}],
+                "default": "a",
+            },
+        ],
+    }
+    client = _fake_client()
+    app = ChatApp(client=client, thread_id="t", slash_commands=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        task = app.run_worker(app._push_interrupt(form), exclusive=False)
+        await pilot.pause()
+        await pilot.click("#inline-cancel")
+        await pilot.pause()
+        result = await task.wait()
+        assert result is None
+        app.exit()
+
+
+async def test_select_or_text_prefers_text_when_present() -> None:
+    """select_or_text fields — text input beats the select when non-empty."""
+    from textual.app import ComposeResult  # noqa: TC002
+
+    from monet.cli._chat_app import SelectOrText, _read_widget_value
+
+    class _Host(ChatApp):
+        def __init__(self) -> None:
+            super().__init__(client=_fake_client(), thread_id="t")
+
+        def compose(self) -> ComposeResult:
+            yield from super().compose()
+            yield SelectOrText(
+                "answer",
+                [("Yes", "yes"), ("No", "no")],
+                default="yes",
+            )
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        widget = host.query_one("#f-answer", SelectOrText)
+        assert _read_widget_value(widget) == "yes"  # select default
+        widget._text_widget.value = "custom response"
+        assert _read_widget_value(widget) == "custom response"
+        host.exit()
+
+
+async def test_select_or_text_form_field_builds_composite() -> None:
+    """A Form with a select_or_text field renders SelectOrText inline."""
+    from monet.cli._chat_app import SelectOrText
+
+    form: Any = {
+        "prompt": "Pick or type",
+        "fields": [
+            {
+                "name": "answer",
+                "type": "select_or_text",
+                "label": "Your response",
+                "options": [{"value": "a", "label": "A"}, {"value": "b", "label": "B"}],
+                "default": "a",
+            },
+        ],
+    }
+    captured: dict[str, Any] = {}
+
+    def _done(result: dict[str, Any] | None) -> None:
+        captured["result"] = result or {}
+
+    class _Host(ChatApp):
+        def __init__(self) -> None:
+            super().__init__(client=_fake_client(), thread_id="t")
+
+        def on_mount(self) -> None:
+            super().on_mount()
+            self.push_screen(InterruptScreen(form), _done)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        composite = host.screen.query_one("#f-answer", SelectOrText)
+        composite._text_widget.value = "my own"
+        await pilot.click("#submit")
+        await pilot.pause()
+        host.exit()
+    assert captured["result"] == {"answer": "my own"}
+
+
 async def test_interrupt_screen_cancel_returns_empty_dict() -> None:
     form: Any = {
         "prompt": "Approve?",
@@ -265,6 +455,42 @@ async def test_chat_app_submits_message_and_streams() -> None:
         await pilot.pause()
     # Not asserting RichLog content to avoid version-specific widget internals;
     # we've asserted send_message was invoked via the body.
+
+
+async def test_cmd_list_runs_filters_chat_only_runs() -> None:
+    from monet.client._events import RunSummary
+
+    client = _fake_client()
+
+    async def _list_runs(*, limit: int = 20) -> list[RunSummary]:
+        return [
+            RunSummary(
+                run_id="r-pipeline",
+                status="success",
+                completed_stages=["planning", "execution"],
+                created_at="2026-04-16T10:00:00",
+            ),
+            RunSummary(
+                run_id="r-chatonly",
+                status="success",
+                completed_stages=["chat"],
+                created_at="2026-04-16T10:05:00",
+            ),
+        ]
+
+    client.list_runs = _list_runs
+    app = ChatApp(client=client, thread_id="t", slash_commands=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "/runs"
+        await pilot.press("enter")
+        await pilot.pause()
+        combined = "\n".join(app._transcript_lines)
+        assert "r-pipeli" in combined  # truncated to 8 chars
+        assert "r-chaton" not in combined
+        assert "1 recent pipeline run(s)" in combined
+        app.exit()
 
 
 async def test_chat_app_quit_slash_exits() -> None:
