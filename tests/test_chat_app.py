@@ -19,10 +19,12 @@ from monet.cli._chat_app import (
     InlineInterruptForm,
     InterruptScreen,
     RegistrySuggester,
+    _format_progress_line,
     _is_selected,
     _option_label,
     _option_value,
 )
+from monet.client._events import AgentProgress
 
 # --- RegistrySuggester ----------------------------------------------------
 
@@ -432,6 +434,40 @@ async def test_chat_app_mounts_and_renders_history() -> None:
         prompt = app.query_one("#prompt", Input)
         assert prompt.suggester is app._suggester
         app.exit()
+
+
+def test_format_progress_line_default() -> None:
+    line = _format_progress_line(
+        AgentProgress(run_id="", agent_id="researcher", status="searching with Exa")
+    )
+    assert line == "[progress] researcher: searching with Exa"
+
+
+def test_format_progress_line_empty_status_uses_placeholder() -> None:
+    line = _format_progress_line(
+        AgentProgress(run_id="", agent_id="planner", status="")
+    )
+    assert line == "[progress] planner: ..."
+
+
+async def test_drain_stream_renders_progress_lines() -> None:
+    """AgentProgress chunks land as ``[progress]`` transcript lines."""
+    from textual.widgets import RichLog
+
+    client = _fake_client()
+
+    async def _stream() -> AsyncIterator[Any]:
+        yield AgentProgress(run_id="", agent_id="researcher", status="searching")
+        yield "final assistant text"
+
+    app = ChatApp(client=client, thread_id="t-1", slash_commands=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        log = app.query_one("#transcript", RichLog)
+        await app._drain_stream(log, _stream(), source="initial")
+
+    assert "[progress] researcher: searching" in app._transcript_lines
+    assert "[assistant] final assistant text" in app._transcript_lines
 
 
 async def test_chat_app_submits_message_and_streams() -> None:

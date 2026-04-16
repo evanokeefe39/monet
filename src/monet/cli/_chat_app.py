@@ -47,6 +47,8 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
+from monet.client._events import AgentProgress
+
 _log = logging.getLogger("monet.cli.chat")
 
 
@@ -55,6 +57,7 @@ _TAG_STYLES: dict[str, str] = {
     "[user]": "bold #3b82f6",  # high-contrast bright blue
     "[assistant]": "bold #a855f7",  # purple
     "[info]": "bold #9ca3af",  # light grey
+    "[progress]": "bold #ca8a04",  # muted yellow
     "[error]": "bold red",
 }
 
@@ -69,6 +72,17 @@ def _styled_line(line: str) -> Text:
             text.append(rest)
             return text
     return Text(line)
+
+
+def _format_progress_line(progress: AgentProgress) -> str:
+    """Render an :class:`AgentProgress` as a transcript line.
+
+    Format: ``[progress] <agent_id>: <status>``. The ``[progress]`` tag
+    matches an entry in :data:`_TAG_STYLES` so :func:`_styled_line`
+    colours it distinctly from assistant content.
+    """
+    status = progress.status or "..."
+    return f"[progress] {progress.agent_id}: {status}"
 
 
 if TYPE_CHECKING:
@@ -952,6 +966,19 @@ class ChatApp(App[None]):
     ) -> None:
         streamed = False
         async for chunk in stream:
+            if isinstance(chunk, AgentProgress):
+                # Progress events are intermediate signal — render them
+                # but don't suppress the assistant-fallback below if no
+                # actual reply lands.
+                line = _format_progress_line(chunk)
+                self._append_line(line)
+                _log.info(
+                    "%s progress agent=%s status=%s",
+                    source,
+                    chunk.agent_id,
+                    chunk.status,
+                )
+                continue
             self._append_line(f"[assistant] {chunk}")
             _log.info("%s chunk len=%d", source, len(str(chunk)))
             streamed = True
