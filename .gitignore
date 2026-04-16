@@ -33,6 +33,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+*.log
 
 # Docs
 site/

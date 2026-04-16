@@ -134,7 +134,7 @@ Every example uses the same canonical local ports (defined in `src/monet/_ports.
 - Dev server (monet dev / Aegra): `2026`
 - Langfuse (optional tracing stack): `3000`
 
-**Only one example runs at a time.** `monet dev` records the active example's compose path in `~/.monet/state.json` and auto-tears-down the previous example's containers (parsed from `container_name:` lines in its `.monet/docker-compose.yml`) before starting. Volumes are preserved — re-entering an example keeps its Postgres data. `monet dev down` is the explicit teardown command.
+**Only one example runs at a time.** `monet dev` records the active example's compose path in `~/.monet/state.json` and auto-tears-down the previous example's containers (parsed from `container_name:` lines in its `.monet/docker-compose.yml`) before starting. On exit (Ctrl-C or Aegra crash) the current example's containers are also torn down, so `monet dev` never leaves orphans. Volumes are preserved — re-entering an example keeps its Postgres data. `monet dev down` still works as an explicit teardown command when the server is already stopped.
 
 ## Aegra compatibility constraints
 

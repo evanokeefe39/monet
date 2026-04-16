@@ -238,3 +238,81 @@ def test_public_exports_stable() -> None:
 def test_apply_migrations_rejects_blank_url(bad_url: str) -> None:
     with pytest.raises(Exception):  # noqa: B017 — alembic raises its own
         apply_migrations(bad_url)
+
+
+def test_apply_migrations_handles_empty_alembic_version(tmp_path: Path) -> None:
+    """DB with ``artifacts`` + empty ``alembic_version`` table.
+
+    Observed in the wild when a prior boot created the alembic_version
+    table but crashed before recording a revision. ``current_revision``
+    returns ``None`` despite the table existing, so the naive ``table
+    absent`` check misses this case.
+    """
+    db_path = tmp_path / "halfmigrated.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE artifacts ("
+            "artifact_id VARCHAR PRIMARY KEY, "
+            "content_type VARCHAR NOT NULL, "
+            "content_length INTEGER NOT NULL, "
+            "summary TEXT NOT NULL, "
+            "confidence FLOAT NOT NULL, "
+            "completeness VARCHAR NOT NULL, "
+            "sensitivity_label VARCHAR NOT NULL, "
+            "agent_id VARCHAR, "
+            "run_id VARCHAR, "
+            "trace_id VARCHAR, "
+            "tags TEXT DEFAULT '{}' NOT NULL, "
+            "created_at VARCHAR NOT NULL"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE alembic_version (version_num VARCHAR(32) PRIMARY KEY)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    url = _file_url(db_path)
+    apply_migrations(url)
+
+    assert check_at_head(url)
+
+
+def test_apply_migrations_handles_pre_alembic_db(tmp_path: Path) -> None:
+    """Pre-alembic DB (artifacts present, alembic_version absent) auto-stamps.
+
+    Regression for I8 — existing installs from before the alembic tree
+    shipped would crash with ``table artifacts already exists`` every
+    boot because alembic tried to re-apply the baseline.
+    """
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE artifacts ("
+            "artifact_id VARCHAR PRIMARY KEY, "
+            "content_type VARCHAR NOT NULL, "
+            "content_length INTEGER NOT NULL, "
+            "summary TEXT NOT NULL, "
+            "confidence FLOAT NOT NULL, "
+            "completeness VARCHAR NOT NULL, "
+            "sensitivity_label VARCHAR NOT NULL, "
+            "agent_id VARCHAR, "
+            "run_id VARCHAR, "
+            "trace_id VARCHAR, "
+            "tags TEXT DEFAULT '{}' NOT NULL, "
+            "created_at VARCHAR NOT NULL"
+            ")"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    url = _file_url(db_path)
+    apply_migrations(url)
+
+    assert check_at_head(url)
+    assert "alembic_version" in _tables(db_path)
+    assert "artifacts" in _tables(db_path)

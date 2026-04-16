@@ -1389,6 +1389,7 @@ source = { editable = "../../" }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
+    { name = "alembic" },
     { name = "click" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -1399,6 +1400,7 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
+    { name = "redis" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1422,6 +1424,7 @@ requires-dist = [
     { name = "aegra-cli", marker = "extra == 'examples'", specifier = ">=0.9" },
     { name = "aiofiles", specifier = ">=23.0" },
     { name = "aiosqlite", specifier = ">=0.19" },
+    { name = "alembic", specifier = ">=1.13" },
     { name = "click", specifier = ">=8.0" },
     { name = "exa-py", marker = "extra == 'examples'", specifier = ">=1.0" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -1441,6 +1444,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", marker = "extra == 'examples'", specifier = ">=1.0" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "tavily-python", marker = "extra == 'examples'", specifier = ">=0.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
@@ -1450,13 +1454,16 @@ provides-extras = ["agents", "examples"]
 [package.metadata.requires-dev]
 dev = [
     { name = "aegra-cli", specifier = ">=0.9" },
+    { name = "fakeredis", extras = ["lua"], specifier = ">=2.26" },
     { name = "hypothesis", specifier = ">=6.0" },
     { name = "mkdocs-material", specifier = ">=9.7.6" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "respx", specifier = ">=0.22" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "symdex", specifier = ">=0.1" },
 ]
 
 [[package]]

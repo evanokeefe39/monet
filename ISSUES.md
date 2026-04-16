@@ -75,16 +75,6 @@ Each entry: **symptom**, **location**, **why it matters**, **fix sketch** where 
 
 **Fix sketch:** add `tests/e2e/` marked with a pytest marker that is skipped by default in CI unit runs. Use `testcontainers` for Postgres/Redis. Cover items 1 and 7 first — they exercise the most wiring per test.
 
-### I6 — `client.resume()` races the draining `client.run()` iterator
-
-**Symptom:** an e2e test that drives a run until it sees an `Interrupt` event, breaks out of the `async for` loop, then calls `client.resume(run_id, tag, payload)` gets `langgraph_sdk.errors.BadRequestError: Cannot resume: thread is not in interrupted state`. The server-side view of the thread has already moved past the interrupt between the client seeing the event and the resume request arriving.
-
-**Location:** `src/monet/client/__init__.py:MonetClient.run` (stream iterator) and `MonetClient.resume` (post-break resume). Surfaced by `tests/e2e/test_e2e_hitl.py::test_approve_drives_execution_to_completion` which is currently `xfail`.
-
-**Why it matters:** this is the HITL observation pattern documented in `docs/api/state.md` ("stream until Interrupt, resume with payload"). Users following the guide will hit the same race. The pattern works correctly in-process (`tests/test_default_compound_graph.py` uses it against `MemorySaver`) — the race is specific to real-server streaming through Aegra.
-
-**Fix sketch:** two options, not mutually exclusive. (1) Make `client.run` expose an explicit cancel/close method so callers can tear down the stream deterministically before `resume`. (2) Have `client.resume` retry with backoff on the specific BadRequestError for a short window, since the server typically settles to "interrupted" within milliseconds of the Interrupt event reaching the client. Option 1 is the correct contract; option 2 is a pragmatic workaround.
-
 ### I7 — Triage classification bias: multi-step topics classified as "simple"
 
 **Symptom:** the planner/fast triage prompt classifies explicitly multi-step requests as `complexity: "simple"` often enough to make HITL e2e tests nondeterministic. Observed on Gemini 2.5 Flash with topics like "Produce a comparative analysis of leading open-source LLM agent orchestration frameworks, including a strengths/weaknesses matrix and a recommendation for production use." — classified `simple` on ~1/3 of runs, which short-circuits the whole pipeline past planning before any interrupt can fire.
@@ -95,19 +85,9 @@ Each entry: **symptom**, **location**, **why it matters**, **fix sketch** where 
 
 **Fix sketch:** two complementary moves. (1) Add few-shot examples to the triage prompt biased toward the classifications we want for the examples/docs test-cases (a 3-sentence brief is `bounded`, a comparative analysis is `complex`). (2) Use `with_structured_output` so the model has to commit to a Literal value and cannot drift into freeform text that falls back to the parse-failure default. Both fit under the "reference agent quality pass" roadmap item.
 
-### I8 — Artifact-index alembic migration not idempotent against pre-alembic DBs
-
-**Symptom:** `monet dev` crashes at boot on any system that has a pre-alembic `artifacts` table, with `sqlite3.OperationalError: table artifacts already exists`. The user must run `monet db stamp` manually to recover before `monet dev` will start.
-
-**Location:** `src/monet/artifacts/__init__.py:artifacts_from_env` calls `apply_migrations(db_url)` unconditionally. `apply_migrations` in `src/monet/artifacts/_migrations.py` runs the baseline migration that does `CREATE TABLE artifacts`. A DB from a pre-alembic monet install has the table but no `alembic_version` row, so alembic tries to re-apply the baseline and crashes.
-
-**Why it matters:** every user upgrading from any pre-alembic monet is blocked from running `monet dev` until they know about `monet db stamp`. The CLI command exists but the failure mode doesn't mention it.
-
-**Fix sketch:** `apply_migrations` should detect the pre-alembic case (table present, no `alembic_version` table) and auto-stamp the baseline before running later migrations. Document the behaviour in `docs/reference/env-vars.md` or similar. Alternative: catch `OperationalError: table artifacts already exists` and surface a clear error message naming `monet db stamp`.
-
 ---
 
 ## Out of scope for this file
 
 - **Roadmap features** (SaaS enabling primitives, push pool dispatch, pluggable pipeline adapters, in-process driver reintroduction, graph↔client wire-contract test, summarizer agent) live in `CLAUDE.md ## Roadmap` and `docs/architecture/roadmap.md`. Those are forward-looking commitments, not present-tense defects.
-- **Resolved items** from prior sessions (catalogue sync-in-async, artifact double-write, server-process agent wiring, Langfuse OTLP setup, Windows CLI encoding, triage nondeterminism) were verified fixed in the current code and removed from this list.
+- **Resolved items** from prior sessions (catalogue sync-in-async, artifact double-write, server-process agent wiring, Langfuse OTLP setup, Windows CLI encoding, triage nondeterminism, resume/stream race, alembic pre-existing-DB crash) were verified fixed in the current code and removed from this list.
