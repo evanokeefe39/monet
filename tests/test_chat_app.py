@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import Input, TextArea
+from textual.widgets import Input
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 from monet.cli._chat_app import (
     ChatApp,
-    InlineInterruptForm,
-    InterruptScreen,
     RegistrySuggester,
+    _format_form_prompt,
     _format_progress_line,
-    _is_selected,
-    _option_label,
-    _option_value,
+    _is_approval_form,
+    _parse_approval_reply,
+    _parse_text_reply,
 )
 from monet.client._events import AgentProgress
 
@@ -56,31 +55,129 @@ def test_suggester_update_replaces_list() -> None:
     assert s._commands == ["/researcher:deep"]
 
 
-# --- Option helpers -------------------------------------------------------
+# --- HITL form-text parser -----------------------------------------------
 
 
-def test_option_label_and_value_from_dict() -> None:
-    opt = {"label": "Approve", "value": "approve"}
-    assert _option_label(opt) == "Approve"
-    assert _option_value(opt) == "approve"
+_APPROVAL_FORM: dict[str, Any] = {
+    "prompt": "Approve plan?",
+    "fields": [
+        {
+            "name": "action",
+            "type": "radio",
+            "label": "Decision",
+            "options": [
+                {"value": "approve", "label": "Approve"},
+                {"value": "revise", "label": "Revise with feedback"},
+                {"value": "reject", "label": "Reject"},
+            ],
+            "default": "approve",
+        },
+        {
+            "name": "feedback",
+            "type": "textarea",
+            "label": "Feedback (required for revise)",
+            "default": "",
+        },
+    ],
+}
 
 
-def test_option_label_and_value_from_string() -> None:
-    assert _option_label("approve") == "approve"
-    assert _option_value("approve") == "approve"
+def test_is_approval_form_detects_action_radio() -> None:
+    assert _is_approval_form(_APPROVAL_FORM) is True
 
 
-def test_is_selected_scalar_default() -> None:
-    assert _is_selected("a", "a") is True
-    assert _is_selected("a", "b") is False
+def test_is_approval_form_rejects_other_shapes() -> None:
+    other = {
+        "fields": [{"name": "answer", "type": "text"}],
+    }
+    assert _is_approval_form(other) is False
 
 
-def test_is_selected_list_default() -> None:
-    assert _is_selected("a", ["a", "c"]) is True
-    assert _is_selected("b", ["a", "c"]) is False
+def test_format_form_prompt_approval_includes_help_line() -> None:
+    lines = _format_form_prompt(_APPROVAL_FORM)
+    assert any("Approve plan?" in line for line in lines)
+    assert any("approve | revise" in line for line in lines)
 
 
-# --- InterruptScreen pilot ------------------------------------------------
+def test_format_form_prompt_single_field_uses_label() -> None:
+    form: dict[str, Any] = {
+        "prompt": "What's your favourite colour?",
+        "fields": [{"name": "answer", "type": "text", "label": "Colour"}],
+    }
+    lines = _format_form_prompt(form)
+    joined = "\n".join(lines)
+    assert "favourite colour" in joined
+    assert "your colour" in joined
+
+
+def test_format_form_prompt_multi_field_lists_labels() -> None:
+    form: dict[str, Any] = {
+        "prompt": "Two questions",
+        "fields": [
+            {"name": "q0", "type": "text", "label": "First?"},
+            {"name": "q1", "type": "text", "label": "Second?"},
+        ],
+    }
+    lines = _format_form_prompt(form)
+    joined = "\n".join(lines)
+    assert "one line per field" in joined
+    assert "First?" in joined
+    assert "Second?" in joined
+
+
+def test_parse_approval_reply_recognises_action_keywords() -> None:
+    assert _parse_approval_reply("approve") == {"action": "approve", "feedback": ""}
+    assert _parse_approval_reply("yes") == {"action": "approve", "feedback": ""}
+    assert _parse_approval_reply("reject") == {"action": "reject", "feedback": ""}
+    assert _parse_approval_reply("revise add a step") == {
+        "action": "revise",
+        "feedback": "add a step",
+    }
+
+
+def test_parse_approval_reply_freeform_treated_as_revise() -> None:
+    assert _parse_approval_reply("please add detail") == {
+        "action": "revise",
+        "feedback": "please add detail",
+    }
+
+
+def test_parse_text_reply_approval_form_parses_action() -> None:
+    payload = _parse_text_reply(_APPROVAL_FORM, "approve")
+    assert payload == {"action": "approve", "feedback": ""}
+
+
+def test_parse_text_reply_single_field_takes_whole_text() -> None:
+    form: dict[str, Any] = {
+        "fields": [{"name": "answer", "type": "text"}],
+    }
+    assert _parse_text_reply(form, "blue") == {"answer": "blue"}
+
+
+def test_parse_text_reply_multi_field_splits_on_lines() -> None:
+    form: dict[str, Any] = {
+        "fields": [
+            {"name": "q0", "type": "text"},
+            {"name": "q1", "type": "text"},
+        ],
+    }
+    assert _parse_text_reply(form, "first\nsecond") == {
+        "q0": "first",
+        "q1": "second",
+    }
+
+
+def test_parse_text_reply_carries_hidden_defaults() -> None:
+    form: dict[str, Any] = {
+        "fields": [
+            {"name": "answer", "type": "text"},
+            {"name": "run_id", "type": "hidden", "default": "abc-123"},
+        ],
+    }
+    assert _parse_text_reply(form, "blue") == {"answer": "blue", "run_id": "abc-123"}
+
+
+# --- Resume integration via prompt --------------------------------------
 
 
 def _fake_client() -> Any:
@@ -95,426 +192,61 @@ def _fake_client() -> Any:
     return client
 
 
-async def test_interrupt_screen_submits_collected_values() -> None:
-    form: Any = {
-        "prompt": "Approve plan?",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "label": "Decision",
-                "options": [
-                    {"value": "approve", "label": "Approve"},
-                    {"value": "reject", "label": "Reject"},
-                ],
-                "default": "approve",
-            },
-            {
-                "name": "feedback",
-                "type": "textarea",
-                "label": "Feedback",
-                "default": "",
-            },
-            {
-                "name": "confidence",
-                "type": "int",
-                "label": "Confidence",
-                "default": 5,
-            },
-            {
-                "name": "notify",
-                "type": "bool",
-                "label": "Notify me",
-                "default": True,
-            },
-            {
-                "name": "tags",
-                "type": "checkbox",
-                "label": "Tags",
-                "options": ["urgent", "review"],
-                "default": ["urgent"],
-            },
-            {
-                "name": "priority",
-                "type": "select",
-                "label": "Priority",
-                "options": ["low", "high"],
-                "default": "low",
-            },
-            {
-                "name": "run_id",
-                "type": "hidden",
-                "label": "",
-                "default": "abc-123",
-            },
-        ],
-    }
+async def test_collect_resume_uses_next_prompt_submission() -> None:
+    """Form interrupt → user types `approve` → resume payload returned."""
+    import asyncio
 
-    captured: dict[str, Any] = {}
-
-    def _done(result: dict[str, Any] | None) -> None:
-        captured["result"] = result or {}
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), _done)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        screen = cast("InterruptScreen", host.screen)
-        assert isinstance(screen, InterruptScreen)
-
-        conf = screen.query_one("#f-confidence", Input)
-        conf.value = "7"
-
-        fb = screen.query_one("#f-feedback", TextArea)
-        fb.text = "looks good"
-
-        await pilot.click("#submit")
-        await pilot.pause()
-        host.exit()
-
-    result = captured["result"]
-    assert result["action"] == "approve"
-    assert result["feedback"] == "looks good"
-    assert result["confidence"] == 7
-    assert result["notify"] is True
-    assert "urgent" in result["tags"]
-    assert result["priority"] == "low"
-    # Hidden field carried through without a widget.
-    assert result["run_id"] == "abc-123"
-
-
-async def test_interrupt_screen_focuses_first_field_on_mount() -> None:
-    form: Any = {
-        "prompt": "Approve plan?",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "a", "label": "A"}],
-                "default": "a",
-            },
-        ],
-    }
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), lambda _r: None)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        # First field widget should own focus after on_mount ran.
-        first = host.screen.query_one("#f-action")
-        assert first.has_focus
-        host.exit()
-
-
-async def test_interrupt_screen_tab_moves_focus_across_fields() -> None:
-    """Tab cycles focus from RadioSet → TextArea → Submit on the screen.
-
-    Regression guard for the report that Tab / click / arrow keys did
-    nothing on the plan-approval screen in a real terminal.
-    """
-    form: Any = {
-        "prompt": "Approve?",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "approve", "label": "Approve"}],
-                "default": "approve",
-            },
-            {
-                "name": "feedback",
-                "type": "textarea",
-                "default": "",
-            },
-        ],
-    }
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), lambda _r: None)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        # First focus lands on the RadioSet.
-        radio = host.screen.query_one("#f-action")
-        assert radio.has_focus
-        # Tab moves off the RadioSet. Pressing Tab twice should land
-        # somewhere other than the initial radio.
-        await pilot.press("tab")
-        await pilot.pause()
-        assert not radio.has_focus, "Tab did not move focus away from RadioSet"
-        host.exit()
-
-
-async def test_interrupt_screen_ctrl_s_submits() -> None:
-    """ctrl+s fires the submit action without needing to click."""
-    form: Any = {
-        "prompt": "Approve?",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "approve", "label": "Approve"}],
-                "default": "approve",
-            },
-        ],
-    }
-
-    captured: dict[str, Any] = {}
-
-    def _done(result: dict[str, Any] | None) -> None:
-        captured["result"] = result or {}
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), _done)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("ctrl+s")
-        await pilot.pause()
-        host.exit()
-    assert captured["result"]["action"] == "approve"
-
-
-async def test_check_action_disables_tab_on_sub_screen() -> None:
-    """Priority Tab binding must not steal events from InterruptScreen."""
-    form: Any = {
-        "prompt": "?",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "a", "label": "A"}],
-                "default": "a",
-            },
-        ],
-    }
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), lambda _r: None)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        assert host.check_action("accept_suggestion", ()) is False
-        assert host.check_action("focus_suggest", ()) is False
-        assert host.check_action("hide_suggest", ()) is False
-        host.exit()
-
-
-async def test_inline_interrupt_renders_when_render_hint_is_inline() -> None:
-    form: Any = {
-        "prompt": "Approve?",
-        "render": "inline",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "approve", "label": "Approve"}],
-                "default": "approve",
-            },
-        ],
-    }
-
-    client = _fake_client()
-    app = ChatApp(client=client, thread_id="t", slash_commands=[])
+    app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Drive the dispatcher directly to avoid mocking a live stream.
-        task = app.run_worker(app._push_interrupt(form), exclusive=False)
+        # Kick off the collector in the background.
+        result_holder: dict[str, Any] = {}
+
+        async def _drive() -> None:
+            result_holder["payload"] = await app._collect_resume(_APPROVAL_FORM)
+
+        task = asyncio.create_task(_drive())
         await pilot.pause()
-        inline = app.query_one("#inline-interrupt", InlineInterruptForm)
-        assert inline is not None
-        # Sub-screen-style App bindings must be disabled while inline form mounted.
-        assert app.check_action("accept_suggestion", ()) is False
-        await pilot.click("#inline-submit")
-        await pilot.pause()
-        result = await task.wait()
-        assert result == {"action": "approve"}
-        # Inline widget should have been removed after resolution.
-        assert not app.query("#inline-interrupt")
-        app.exit()
-
-
-async def test_inline_interrupt_cancel_returns_none() -> None:
-    form: Any = {
-        "prompt": "Approve?",
-        "render": "inline",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "a"}],
-                "default": "a",
-            },
-        ],
-    }
-    client = _fake_client()
-    app = ChatApp(client=client, thread_id="t", slash_commands=[])
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        task = app.run_worker(app._push_interrupt(form), exclusive=False)
-        await pilot.pause()
-        await pilot.click("#inline-cancel")
-        await pilot.pause()
-        result = await task.wait()
-        assert result is None
-        app.exit()
-
-
-async def test_select_or_text_prefers_text_when_present() -> None:
-    """select_or_text fields — text input beats the select when non-empty."""
-    from textual.app import ComposeResult  # noqa: TC002
-
-    from monet.cli._chat_app import SelectOrText, _read_widget_value
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def compose(self) -> ComposeResult:
-            yield from super().compose()
-            yield SelectOrText(
-                "answer",
-                [("Yes", "yes"), ("No", "no")],
-                default="yes",
-            )
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        widget = host.query_one("#f-answer", SelectOrText)
-        assert _read_widget_value(widget) == "yes"  # select default
-        widget._text_widget.value = "custom response"
-        assert _read_widget_value(widget) == "custom response"
-        host.exit()
-
-
-async def test_select_or_text_form_field_builds_composite() -> None:
-    """A Form with a select_or_text field renders SelectOrText inline."""
-    from monet.cli._chat_app import SelectOrText
-
-    form: Any = {
-        "prompt": "Pick or type",
-        "fields": [
-            {
-                "name": "answer",
-                "type": "select_or_text",
-                "label": "Your response",
-                "options": [{"value": "a", "label": "A"}, {"value": "b", "label": "B"}],
-                "default": "a",
-            },
-        ],
-    }
-    captured: dict[str, Any] = {}
-
-    def _done(result: dict[str, Any] | None) -> None:
-        captured["result"] = result or {}
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), _done)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        composite = host.screen.query_one("#f-answer", SelectOrText)
-        composite._text_widget.value = "my own"
-        await pilot.click("#submit")
-        await pilot.pause()
-        host.exit()
-    assert captured["result"] == {"answer": "my own"}
-
-
-async def test_interrupt_screen_cancel_returns_empty_dict() -> None:
-    form: Any = {
-        "prompt": "Approve?",
-        "fields": [
-            {
-                "name": "action",
-                "type": "radio",
-                "options": [{"value": "yes", "label": "Yes"}],
-                "default": "yes",
-            }
-        ],
-    }
-    captured: dict[str, Any] = {}
-
-    def _done(result: dict[str, Any] | None) -> None:
-        captured["result"] = result or {}
-
-    class _Host(ChatApp):
-        def __init__(self) -> None:
-            super().__init__(client=_fake_client(), thread_id="t")
-
-        def on_mount(self) -> None:
-            super().on_mount()
-            self.push_screen(InterruptScreen(form), _done)
-
-    host = _Host()
-    async with host.run_test() as pilot:
-        await pilot.pause()
-        await pilot.click("#cancel")
-        await pilot.pause()
-        host.exit()
-    assert captured["result"] == {}
-
-
-# --- ChatApp smoke --------------------------------------------------------
-
-
-async def test_chat_app_mounts_and_renders_history() -> None:
-    client = _fake_client()
-    history = [
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "hi there"},
-    ]
-    app = ChatApp(
-        client=client,
-        thread_id="t1",
-        slash_commands=["/plan"],
-        history=history,
-    )
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        # Header + Input present.
+        # Form prompt + help line should be in transcript.
+        joined = "\n".join(app._transcript_lines)
+        assert "Approve plan?" in joined
+        assert "approve | revise" in joined
+        # User submits "approve" via the prompt.
         prompt = app.query_one("#prompt", Input)
-        assert prompt.suggester is app._suggester
+        prompt.value = "approve"
+        await pilot.press("enter")
+        await pilot.pause()
+        await task
         app.exit()
+    assert result_holder["payload"] == {"action": "approve", "feedback": ""}
+
+
+async def test_collect_resume_revise_with_feedback() -> None:
+    import asyncio
+
+    app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result_holder: dict[str, Any] = {}
+
+        async def _drive() -> None:
+            result_holder["payload"] = await app._collect_resume(_APPROVAL_FORM)
+
+        task = asyncio.create_task(_drive())
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "revise add benchmarking step"
+        await pilot.press("enter")
+        await pilot.pause()
+        await task
+        app.exit()
+    assert result_holder["payload"] == {
+        "action": "revise",
+        "feedback": "add benchmarking step",
+    }
+
+
+# --- Progress rendering --------------------------------------------------
 
 
 def test_format_progress_line_default() -> None:
@@ -549,6 +281,28 @@ async def test_drain_stream_renders_progress_lines() -> None:
 
     assert "[progress] researcher: searching" in app._transcript_lines
     assert "[assistant] final assistant text" in app._transcript_lines
+
+
+# --- ChatApp smoke --------------------------------------------------------
+
+
+async def test_chat_app_mounts_and_renders_history() -> None:
+    client = _fake_client()
+    history = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]
+    app = ChatApp(
+        client=client,
+        thread_id="t1",
+        slash_commands=["/plan"],
+        history=history,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        assert prompt.suggester is app._suggester
+        app.exit()
 
 
 async def test_chat_app_submits_message_and_streams() -> None:
