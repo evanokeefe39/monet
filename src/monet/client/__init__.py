@@ -591,13 +591,18 @@ class MonetClient:
             )
         return summaries
 
-    async def send_message(self, thread_id: str, message: str) -> AsyncIterator[str]:
+    async def send_message(
+        self, thread_id: str, message: str
+    ) -> AsyncIterator[str | AgentProgress]:
         """Send a user message to a chat thread and yield response tokens.
 
         Yields assistant message content from every node that writes to
         ``messages`` — ``respond``, ``planner``, and ``specialist`` all
         produce assistant replies in the chat graph, so the client
-        surfaces content from all of them uniformly.
+        surfaces content from all of them uniformly. Also yields
+        :class:`AgentProgress` for every ``emit_progress`` event the
+        running agents produce, so consumers can render real-time
+        feedback during long-running turns.
         """
         async for chunk in self._stream_chat_with_input(
             thread_id, input=chat_input(message)
@@ -610,7 +615,7 @@ class MonetClient:
         *,
         input: dict[str, Any] | None = None,
         command: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | AgentProgress]:
         async for mode, data in stream_run(
             self._client,
             thread_id,
@@ -620,6 +625,15 @@ class MonetClient:
         ):
             if mode == "error":
                 raise RuntimeError(f"server error: {data}")
+            if mode == "custom" and isinstance(data, dict):
+                # Custom stream carries ``emit_progress`` / ``emit_signal``
+                # payloads. Surface progress to the chat consumer; signals
+                # are routed inside the graph and don't need transcript
+                # rendering for now.
+                progress = _build_agent_progress("", data)
+                if progress is not None:
+                    yield progress
+                continue
             if mode == "updates" and isinstance(data, dict):
                 # ``updates`` mode delivers ``{node_name: patch}`` dicts.
                 # Scan every node patch for new assistant messages.
@@ -664,13 +678,15 @@ class MonetClient:
         self,
         thread_id: str,
         payload: dict[str, Any],
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[str | AgentProgress]:
         """Resume a paused chat thread and yield any follow-up messages.
 
         Sends ``Command(resume=payload)`` to the chat graph and streams
-        assistant content produced after the resume. The caller should
-        subsequently re-check :meth:`get_chat_interrupt` — the resumed
-        run may pause again (e.g. the plan-approval revise loop).
+        assistant content produced after the resume, plus any
+        :class:`AgentProgress` events agents emit while running. The
+        caller should subsequently re-check :meth:`get_chat_interrupt`
+        — the resumed run may pause again (e.g. the plan-approval
+        revise loop).
         """
         async for chunk in self._stream_chat_with_input(
             thread_id, command={"resume": payload}
