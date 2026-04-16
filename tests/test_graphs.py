@@ -57,6 +57,11 @@ def _reset() -> Any:
 def _mock(content: str) -> AsyncMock:
     mock = AsyncMock()
     mock.ainvoke = AsyncMock(return_value=AIMessage(content=content))
+    # planner_fast wraps the model via .with_structured_output(TriageResult).
+    # Route the structured chain back to the same mock so .ainvoke() still
+    # returns the configured AIMessage — planner_fast falls back to
+    # raw-text JSON parsing when the result isn't a TriageResult.
+    mock.with_structured_output = lambda schema: mock
     return mock
 
 
@@ -265,6 +270,9 @@ async def test_run_end_to_end() -> None:
         brief_resp = _mock(_BRIEF).ainvoke.return_value
         planner_mock.return_value.ainvoke = AsyncMock(
             side_effect=[triage_resp, brief_resp]
+        )
+        planner_mock.return_value.with_structured_output = (
+            lambda schema: planner_mock.return_value
         )
 
         checkpointer = MemorySaver()

@@ -83,6 +83,30 @@ def in_group(signal_type_str: str, group: frozenset[SignalType]) -> bool:
         return False
 
 
+def _register_in_msgpack_allowlist() -> None:
+    """Add SignalType to langgraph's msgpack safe-types allowlist.
+
+    Without this, every checkpoint resume that carries a SignalType logs
+    a "Deserializing unregistered type" warning and will hard-fail under
+    ``LANGGRAPH_STRICT_MSGPACK=true`` or a future langgraph release.
+    Extends ``_lg_msgpack.SAFE_MSGPACK_TYPES`` because ``_check_allowed``
+    in ``jsonplus.py`` resolves the module attribute at runtime.
+    """
+    try:
+        from langgraph.checkpoint.serde import _msgpack as _lg_msgpack
+    except ImportError:
+        return
+    key = (SignalType.__module__, SignalType.__name__)
+    if key in _lg_msgpack.SAFE_MSGPACK_TYPES:
+        return
+    _lg_msgpack.SAFE_MSGPACK_TYPES = frozenset(
+        set(_lg_msgpack.SAFE_MSGPACK_TYPES) | {key}
+    )
+
+
+_register_in_msgpack_allowlist()
+
+
 __all__ = [
     "AUDIT",
     "BLOCKING",

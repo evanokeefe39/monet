@@ -17,7 +17,7 @@
 
 `src/monet/agents/researcher/__init__.py`:
 - Two commands: `fast` (max 3 results) and `deep` (max 10 results).
-- Provider order: Exa (`EXA_API_KEY` + `exa_py`) → Tavily (`TAVILY_API_KEY` + `langchain_community`). Exa path does search + `_format_exa_results` + LLM synthesis via Jinja template `deep_synth.j2`. Tavily path runs a `create_react_agent` ReAct loop.
+- Provider order: Exa (`EXA_API_KEY` + `exa_py`) → Tavily (`TAVILY_API_KEY` + `langchain_tavily`). Exa path does search + `_format_exa_results` + LLM synthesis via Jinja template `deep_synth.j2`. Tavily path runs a `create_react_agent` ReAct loop.
 - Quality gate: `MIN_RESEARCH_CONTENT_LENGTH = 500`. Below → `EscalationRequired`.
 - Output: markdown artifact via `write_artifact`, confidence 0.7 (fast) / 0.85 (deep). Returned string is the raw synthesis.
 
@@ -52,7 +52,7 @@ Concrete module changes:
 ### `src/monet/agents/researcher/` — swap search+synthesis for research-only
 
 - Replace Exa / Tavily dual-provider logic with a single GPT Researcher call.
-- Depend on `gpt-researcher` as an **optional** dependency group, matching the pattern already used for `exa-py` and `langchain-community` (module-level imports stay LLM-only so `import monet.agents` succeeds).
+- Depend on `gpt-researcher` as an **optional** dependency group, matching the pattern already used for `exa-py` and `langchain-tavily` (module-level imports stay LLM-only so `import monet.agents` succeeds).
 - Public surface of `researcher` stays: two commands (`fast`, `deep`), differing by GPT Researcher report-type / depth config, both return a summary string and write an artifact.
 - New: researcher writes a second artifact alongside the main one — the source registry — keyed `"source_registry"`. Content: JSON `[{id, url, title, snippet, verified, ...}]`.
 - Remove the Tavily ReAct path entirely. It is dominated by GPT Researcher on both cost and quality.

@@ -7,6 +7,7 @@ its own checkpointer per langgraph.json.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import (
@@ -14,6 +15,7 @@ from langchain_core.runnables import (
 )
 from langgraph.graph import END, StateGraph
 
+from monet.core.agent_manifest import get_agent_manifest
 from monet.core.tracing import attached_trace, extract_carrier_from_config
 
 from ._invoke import invoke_agent
@@ -22,6 +24,25 @@ from ._state import EntryState
 
 if TYPE_CHECKING:
     from monet.core.hooks import GraphHookRegistry
+
+_log = logging.getLogger(__name__)
+
+
+def _filter_known_agents(suggested: list[Any]) -> list[str]:
+    """Drop agent_ids not declared in the manifest. Warns on unknowns."""
+    manifest = get_agent_manifest()
+    if not manifest.is_configured():
+        return [aid for aid in suggested if isinstance(aid, str)]
+    known = {cap["agent_id"] for cap in manifest.list_agents()}
+    kept: list[str] = []
+    for aid in suggested:
+        if not isinstance(aid, str):
+            continue
+        if aid in known:
+            kept.append(aid)
+        else:
+            _log.warning("Triage suggested unknown agent %s; dropping", aid)
+    return kept
 
 
 async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, Any]:
@@ -44,6 +65,11 @@ async def triage_node(state: EntryState, config: RunnableConfig) -> dict[str, An
         }
     else:
         triage = parsed
+        raw_suggested = triage.get("suggested_agents") or []
+        if isinstance(raw_suggested, list):
+            triage["suggested_agents"] = _filter_known_agents(raw_suggested)
+        else:
+            triage["suggested_agents"] = []
     return {"triage": triage}
 
 

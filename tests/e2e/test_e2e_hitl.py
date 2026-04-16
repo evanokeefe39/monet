@@ -17,31 +17,14 @@ import pytest
 from monet.client import Interrupt, MonetClient, RunComplete, RunFailed
 from monet.client._wire import task_input
 
-# Remaining open issue preventing reliable pass: triage nondeterminism
-# — the stock planner/fast prompt sometimes classifies an explicitly
-# multi-step topic as ``simple``, short-circuiting past planning so no
-# Interrupt is emitted. Tracked as I7.
+# Triage now uses ``with_structured_output(TriageResult)`` with few-shot
+# examples biasing comparative-analysis topics toward ``complex`` (I7
+# resolved). Resume/stream race (I6) is resolved via
+# ``MonetClient._await_interrupted_status`` polling thread status before
+# dispatching the resume command.
 #
-# The former resume/stream race (I6) is resolved —
-# ``MonetClient._await_interrupted_status`` polls the thread row until
-# Aegra commits ``status="interrupted"`` before dispatching resume, so
-# the prior 400 race is now a deterministic no-op when hit.
-#
-# Track B's graph-side correctness is already validated by
-# ``tests/test_default_compound_graph.py`` and the auto-approve E2E-01;
-# leaving these HITL scenarios as ``xfail`` until the triage prompt
-# tweak (I7) lands.
-pytestmark = pytest.mark.xfail(
-    reason=(
-        "e2e HITL harness: triage nondeterminism (I7). "
-        "Unit-level coverage in test_default_compound_graph.py."
-    ),
-    strict=False,
-)
-
-# Stock triage classifies narrow topics as "simple" and short-circuits
-# the pipeline. An explicit multi-step research/writing request forces
-# "complex", which routes through planning (→ interrupt) and execution.
+# An explicit multi-step research/writing request routes through
+# planning (→ interrupt) and execution.
 TOPIC = (
     "Produce a comparative analysis of leading open-source LLM agent "
     "orchestration frameworks, including a strengths/weaknesses matrix "
