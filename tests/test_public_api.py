@@ -162,7 +162,6 @@ def test_default_graph_public_api() -> None:
     from monet.orchestration import (  # noqa: F401
         RunState,
         build_default_graph,
-        build_entry_subgraph,
         build_execution_subgraph,
         build_planning_subgraph,
     )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,8 @@ from monet.types import AgentResult, Signal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+_log = logging.getLogger("monet.queue.memory")
 
 __all__ = ["InMemoryTaskQueue"]
 
@@ -71,6 +74,14 @@ class InMemoryTaskQueue:
         self._tasks[task_id] = record
         self._completions[task_id] = asyncio.Event()
         await self._pool_queues[task["pool"]].put(task_id)
+        _log.info(
+            "queue.enqueue pool=%s agent=%s command=%s task=%s pending=%d",
+            task["pool"],
+            task["agent_id"],
+            task["command"],
+            task_id,
+            self.pending_count,
+        )
         return task_id
 
     async def claim(
@@ -102,6 +113,13 @@ class InMemoryTaskQueue:
 
         record["status"] = TaskStatus.CLAIMED
         record["claimed_at"] = datetime.now(UTC).isoformat()
+        _log.info(
+            "queue.claim pool=%s agent=%s command=%s task=%s",
+            pool,
+            record["agent_id"],
+            record["command"],
+            task_id,
+        )
         return record
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
@@ -114,6 +132,13 @@ class InMemoryTaskQueue:
         record["result"] = result
         record["completed_at"] = datetime.now(UTC).isoformat()
         self._completions[task_id].set()
+        _log.info(
+            "queue.complete task=%s agent=%s command=%s success=%s",
+            task_id,
+            record["agent_id"],
+            record["command"],
+            getattr(result, "success", True),
+        )
 
     async def fail(self, task_id: str, error: str) -> None:
         """Post a failure."""
@@ -137,6 +162,13 @@ class InMemoryTaskQueue:
         )
         record["completed_at"] = datetime.now(UTC).isoformat()
         self._completions[task_id].set()
+        _log.warning(
+            "queue.fail task=%s agent=%s command=%s error=%s",
+            task_id,
+            record["agent_id"],
+            record["command"],
+            error,
+        )
 
     # --- Progress streaming ---
 

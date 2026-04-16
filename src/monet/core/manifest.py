@@ -17,7 +17,12 @@ from typing import TYPE_CHECKING, TypedDict
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-__all__ = ["AgentCapability", "AgentManifest", "default_manifest"]
+__all__ = ["RESERVED_SLASH", "AgentCapability", "AgentManifest", "default_manifest"]
+
+
+#: Slash commands that are always available regardless of registered agents.
+#: ``/plan`` is the top-level hand-off from chat to the planning pipeline.
+RESERVED_SLASH: tuple[str, ...] = ("/plan",)
 
 
 class AgentCapability(TypedDict, total=False):
@@ -159,6 +164,24 @@ class AgentManifest:
         """Return all declared capabilities."""
         with self._lock:
             return list(self._capabilities.values())
+
+    def slash_commands(self) -> list[str]:
+        """Return the full slash-command vocabulary for this manifest.
+
+        Combines :data:`RESERVED_SLASH` (framework-reserved prefixes like
+        ``/plan``) with ``/<agent_id>:<command>`` derived from every
+        declared capability. Order: reserved first (in declaration
+        order), then capabilities in registration order. Duplicates are
+        dropped.
+        """
+        out: list[str] = list(RESERVED_SLASH)
+        seen: set[str] = set(out)
+        for cap in self.capabilities():
+            cmd = f"/{cap['agent_id']}:{cap['command']}"
+            if cmd not in seen:
+                out.append(cmd)
+                seen.add(cmd)
+        return out
 
     def clear(self) -> None:
         """Remove all declarations."""

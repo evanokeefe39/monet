@@ -1,8 +1,8 @@
 """Typed events yielded by ``MonetClient.run()`` and query responses.
 
 These events are *graph-agnostic* — any LangGraph graph driven through
-:class:`~monet.client.MonetClient` produces them. Domain semantics
-(triage outcome, wave structure, etc.) come through as :class:`NodeUpdate`
+:class:`~monet.client.MonetClient` produces them. Domain semantics (plan
+summaries, wave structure, etc.) come through as :class:`NodeUpdate`
 deltas; consumers that want to display them inspect the update dict
 directly. Form-schema interrupts (see :class:`Form` / :class:`Field`)
 provide a uniform render contract for HITL pauses without typed event

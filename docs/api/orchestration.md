@@ -4,16 +4,6 @@ All exports from `monet.orchestration`.
 
 ## State types
 
-### `EntryState`
-
-```python
-class EntryState(TypedDict, total=False):
-    task: str
-    triage: dict[str, Any] | None
-    trace_id: str
-    run_id: str
-```
-
 ### `PlanningState`
 
 ```python
@@ -108,26 +98,18 @@ def configure_queue(queue: TaskQueue | None) -> None
 
 Set or clear the task queue used by `invoke_agent`. Called by `bootstrap()` or manually in tests.
 
-### `build_entry_graph`
+### `build_planning_subgraph`
 
 ```python
-def build_entry_graph() -> StateGraph
+def build_planning_subgraph(hooks: GraphHookRegistry | None = None) -> StateGraph
 ```
 
-Builds the triage graph. Single node: planner/fast classifies complexity.
+Builds the planning subgraph. Planner/plan → human approval gate → work brief pointer + routing skeleton output. Revise-with-feedback loops back to planner (max 3 revision rounds).
 
-### `build_planning_graph`
-
-```python
-def build_planning_graph() -> StateGraph
-```
-
-Builds the planning graph. Planner/plan → human approval gate → work brief output. Max 3 revision rounds.
-
-### `build_execution_graph`
+### `build_execution_subgraph`
 
 ```python
-def build_execution_graph() -> StateGraph
+def build_execution_subgraph(hooks: GraphHookRegistry | None = None) -> StateGraph
 ```
 
 Builds the execution graph. Wave-based parallel execution with QA reflection, retry budget, and signal routing.

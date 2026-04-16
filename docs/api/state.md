@@ -8,14 +8,13 @@ the form-schema convention for interrupts.
 
 ``RunState`` (``monet.orchestration.RunState``) is the parent state
 schema for ``build_default_graph`` — the compound graph that composes
-``entry`` / ``planning`` / ``execution`` subgraphs as nodes.
+``planning`` and ``execution`` subgraphs as nodes.
 
 ```python
 class RunState(TypedDict, total=False):
     task: str
     run_id: str
     trace_id: str
-    triage: dict[str, Any] | None
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None
     plan_approved: bool | None
@@ -50,7 +49,6 @@ nodes extend ``RunState`` via ``TypedDict`` inheritance:
 ```python
 from monet.orchestration import (
     RunState,
-    build_entry_subgraph,
     build_planning_subgraph,
     build_execution_subgraph,
 )
@@ -72,12 +70,10 @@ async def review_node(state: MyRunState) -> dict[str, Any]:
 
 def build_reviewed_default() -> StateGraph[MyRunState]:
     g = StateGraph(MyRunState)
-    g.add_node("entry",     build_entry_subgraph().compile())
     g.add_node("planning",  build_planning_subgraph().compile())
     g.add_node("execution", build_execution_subgraph().compile())
     g.add_node("review",    review_node)
-    g.add_edge(START, "entry")
-    g.add_edge("entry", "planning")
+    g.add_edge(START, "planning")
     g.add_edge("planning", "execution")
     g.add_edge("execution", "review")
     g.add_edge("review", END)

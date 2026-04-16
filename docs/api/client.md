@@ -142,7 +142,6 @@ from monet.pipelines.default import (
 from monet.pipelines.default import DefaultPipelineRunDetail
 
 view = DefaultPipelineRunDetail.from_run_detail(detail)
-view.triage
 view.routing_skeleton
 view.work_brief_pointer
 view.wave_results

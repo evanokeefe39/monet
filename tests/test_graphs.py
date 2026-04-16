@@ -1,5 +1,5 @@
 # mypy: disable-error-code="call-overload,arg-type"
-"""Tests for the three reference graph builders + run() sequencer.
+"""Tests for the reference graph builders + run() sequencer.
 
 Patches monet.agents.*._get_model so no API keys are required.
 """
@@ -24,7 +24,6 @@ from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry  # internal: registry_scope fixture
 from monet.orchestration import (
-    build_entry_subgraph,
     build_execution_subgraph,
     build_planning_subgraph,
 )
@@ -65,10 +64,6 @@ def _mock(content: str) -> AsyncMock:
     return mock
 
 
-_TRIAGE = (
-    '{"complexity": "complex", "suggested_agents": ["writer"],'
-    ' "requires_planning": true}'
-)
 # New flat-DAG brief — matches WorkBrief Pydantic schema.
 _BRIEF = (
     '{"goal": "Test goal",'
@@ -87,17 +82,6 @@ _LEGACY_WAVE_BRIEF = (
     "]}]}]}"
 )
 _QA = '{"verdict": "pass", "confidence": 0.9, "notes": "good"}'
-
-
-async def test_entry_graph_triage() -> None:
-    with patch("monet.agents.planner._get_model", return_value=_mock(_TRIAGE)):
-        graph = build_entry_subgraph().compile(checkpointer=MemorySaver())
-        config: RunnableConfig = {"configurable": {"thread_id": "t1"}}
-        result = await graph.ainvoke(
-            {"task": "Write a post", "trace_id": "t", "run_id": "r"},
-            config=config,
-        )
-    assert result["triage"]["complexity"] == "complex"
 
 
 async def test_planning_hitl_approve() -> None:
@@ -260,35 +244,14 @@ async def test_execution_graph_aborts_on_node_failure() -> None:
 
 
 async def test_run_end_to_end() -> None:
-    """Full entry → planning → execution pipeline via direct graph invocation."""
+    """Full planning → execution pipeline via direct graph invocation."""
     with (
-        patch("monet.agents.planner._get_model") as planner_mock,
+        patch("monet.agents.planner._get_model", return_value=_mock(_BRIEF)),
         patch("monet.agents.writer._get_model", return_value=_mock("Some content")),
         patch("monet.agents.qa._get_model", return_value=_mock(_QA)),
     ):
-        triage_resp = _mock(_TRIAGE).ainvoke.return_value
-        brief_resp = _mock(_BRIEF).ainvoke.return_value
-        planner_mock.return_value.ainvoke = AsyncMock(
-            side_effect=[triage_resp, brief_resp]
-        )
-        planner_mock.return_value.with_structured_output = (
-            lambda schema: planner_mock.return_value
-        )
-
         checkpointer = MemorySaver()
         thread_id = "e2e-test"
-
-        # Entry / triage
-        entry = build_entry_subgraph().compile(checkpointer=checkpointer)
-        entry_state = await entry.ainvoke(
-            {
-                "task": "Write a post about AI",
-                "trace_id": thread_id,
-                "run_id": thread_id,
-            },
-            config={"configurable": {"thread_id": f"{thread_id}-entry"}},
-        )
-        assert entry_state.get("triage", {}).get("complexity") == "complex"
 
         # Planning with auto-approve
         planning = build_planning_subgraph().compile(checkpointer=checkpointer)
