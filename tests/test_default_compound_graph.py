@@ -55,6 +55,11 @@ def _reset() -> Any:
 def _mock(content: str) -> AsyncMock:
     mock = AsyncMock()
     mock.ainvoke = AsyncMock(return_value=AIMessage(content=content))
+    # planner_fast wraps the model via .with_structured_output(TriageResult);
+    # route the structured chain back to the same mock so .ainvoke() serves
+    # the same content (planner_fast falls back to raw-text parse when the
+    # result isn't a TriageResult instance).
+    mock.with_structured_output = lambda schema: mock
     return mock
 
 
@@ -99,6 +104,9 @@ async def test_compound_graph_pauses_at_planning_interrupt() -> None:
         triage = _mock(_TRIAGE_COMPLEX).ainvoke.return_value
         brief = _mock(_BRIEF).ainvoke.return_value
         planner_mock.return_value.ainvoke = AsyncMock(side_effect=[triage, brief])
+        planner_mock.return_value.with_structured_output = (
+            lambda schema: planner_mock.return_value
+        )
 
         graph = build_default_graph().compile(checkpointer=MemorySaver())
         config: RunnableConfig = {"configurable": {"thread_id": "pause-1"}}
@@ -129,6 +137,9 @@ async def test_compound_graph_approves_and_drives_execution() -> None:
         triage = _mock(_TRIAGE_COMPLEX).ainvoke.return_value
         brief = _mock(_BRIEF).ainvoke.return_value
         planner_mock.return_value.ainvoke = AsyncMock(side_effect=[triage, brief])
+        planner_mock.return_value.with_structured_output = (
+            lambda schema: planner_mock.return_value
+        )
 
         graph = build_default_graph().compile(checkpointer=MemorySaver())
         config: RunnableConfig = {"configurable": {"thread_id": "e2e-1"}}
@@ -161,6 +172,9 @@ async def test_compound_graph_ends_on_plan_rejection() -> None:
         triage = _mock(_TRIAGE_COMPLEX).ainvoke.return_value
         brief = _mock(_BRIEF).ainvoke.return_value
         planner_mock.return_value.ainvoke = AsyncMock(side_effect=[triage, brief])
+        planner_mock.return_value.with_structured_output = (
+            lambda schema: planner_mock.return_value
+        )
 
         graph = build_default_graph().compile(checkpointer=MemorySaver())
         config: RunnableConfig = {"configurable": {"thread_id": "reject-1"}}

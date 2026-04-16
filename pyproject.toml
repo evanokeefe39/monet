@@ -41,6 +41,7 @@ monet = "monet.cli:cli"
 agents = [
     "langchain-core>=0.3",
     "langchain>=0.3",
+    "langchain-tavily>=0.1",
     "jinja2>=3.1",
     # Provider packages are user-supplied.
     # Install your own, e.g.:
@@ -48,15 +49,14 @@ agents = [
     #   pip install langchain-anthropic     (Claude)
     #   pip install langchain-openai        (GPT)
     # Search providers are optional at runtime:
-    #   pip install exa-py               (EXA_API_KEY — preferred for researcher/deep)
-    #   pip install langchain-community  (TAVILY_API_KEY — alternative)
+    #   pip install exa-py           (EXA_API_KEY — preferred for researcher/deep)
+    # Tavily is included (langchain-tavily) for TAVILY_API_KEY users.
 ]
 examples = [
     "monet[agents]",
     "aegra-cli>=0.9",
     "langchain-google-genai>=2.0",
     "langchain-groq>=0.2",
-    "langchain-community>=0.3",
     "tavily-python>=0.5",
     "exa-py>=1.0",
     "python-dotenv>=1.0",
@@ -87,6 +87,7 @@ dev = [
     "symdex>=0.1",
     "fakeredis[lua]>=2.26",
     "respx>=0.22",
+    "testcontainers>=4.0",
 ]
 
 [tool.pytest.ini_options]
@@ -139,25 +140,9 @@ module = "examples.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = "aegra.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = "click.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "redis.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = "alembic.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "fakeredis.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "respx.*"
 ignore_missing_imports = true

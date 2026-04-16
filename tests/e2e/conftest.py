@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -131,3 +131,47 @@ def _read_tail(path: Path, max_bytes: int = 4096) -> str:
             return fh.read().decode("utf-8", errors="replace")
     except OSError as exc:
         return f"(could not read {path}: {exc})"
+
+
+def _skip_if_no_docker() -> None:
+    """Skip the current test when Docker is unreachable.
+
+    Testcontainers fails with a noisy ``DockerException`` when Docker
+    Desktop is not running; a clean skip keeps cross-platform runs sane.
+    """
+    try:
+        import docker  # type: ignore[import-not-found]
+    except ImportError:
+        pytest.skip("docker python client missing (install testcontainers extras)")
+    try:
+        docker.from_env().ping()
+    except Exception as exc:  # docker.errors.DockerException or network error
+        pytest.skip(f"Docker daemon unreachable: {exc}")
+
+
+@pytest.fixture(scope="session")
+def postgres_container() -> Iterator[Any]:
+    """Session-scoped Postgres testcontainer. Yields the container handle.
+
+    Callers read ``.get_connection_url()`` for the SQLAlchemy URL.
+    """
+    _skip_if_no_docker()
+    from testcontainers.postgres import (
+        PostgresContainer,  # type: ignore[import-untyped]
+    )
+
+    with PostgresContainer("postgres:16-alpine") as container:
+        yield container
+
+
+@pytest.fixture(scope="session")
+def redis_container() -> Iterator[Any]:
+    """Session-scoped Redis testcontainer. Yields the container handle.
+
+    Callers read ``.get_container_host_ip()`` and ``.get_exposed_port(6379)``.
+    """
+    _skip_if_no_docker()
+    from testcontainers.redis import RedisContainer  # type: ignore[import-untyped]
+
+    with RedisContainer("redis:7-alpine") as container:
+        yield container

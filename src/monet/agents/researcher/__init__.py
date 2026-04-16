@@ -4,7 +4,7 @@ Two commands:
   - fast: quick search with fewer results (~30s)
   - deep: exhaustive search with provider selection at call time:
       1. EXA_API_KEY + exa_py importable  -> Exa semantic search + LLM synthesis
-      2. TAVILY_API_KEY + langchain_community importable -> Tavily ReAct agent
+      2. TAVILY_API_KEY + langchain_tavily importable -> Tavily ReAct agent
       3. No fallback — raises EscalationRequired if no search succeeds
 
 Both commands require a working search provider (Exa or Tavily). Research
@@ -14,7 +14,7 @@ content, the agent raises ``EscalationRequired`` which produces a BLOCKING
 signal and halts execution immediately.
 
 Module-level imports stay LLM-only so ``import monet.agents`` succeeds
-without exa_py or langchain_community installed.
+without exa_py or langchain_tavily installed.
 """
 
 from __future__ import annotations
@@ -52,15 +52,13 @@ _react_agent_cache: dict[str, Any] = {}
 def _get_react_agent(model_string: str) -> Any:
     """Build-and-cache a ReAct agent wrapping the model with Tavily."""
     if model_string not in _react_agent_cache:
-        from langchain_community.tools.tavily_search import (  # type: ignore[import-not-found]
-            TavilySearchResults,
-        )
+        from langchain_tavily import TavilySearch  # type: ignore[import-not-found]
         from langgraph.prebuilt import (
             create_react_agent,  # type: ignore[import-untyped]
         )
 
         model = _get_model(model_string)
-        tavily = TavilySearchResults(max_results=10)
+        tavily = TavilySearch(max_results=10)
         _react_agent_cache[model_string] = create_react_agent(model, [tavily])
     return _react_agent_cache[model_string]
 
@@ -171,7 +169,7 @@ async def _search(
             )
             content = _last_ai_message(result.get("messages", []))
         except ImportError:
-            logger.warning("TAVILY_API_KEY set but langchain-community not installed.")
+            logger.warning("TAVILY_API_KEY set but langchain-tavily not installed.")
 
     # Quality gate — no LLM-only fallback.
     # Enumerate what we tried so the escalation message is actionable

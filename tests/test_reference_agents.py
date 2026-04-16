@@ -50,6 +50,10 @@ def clean_registry_and_artifacts() -> Any:
 def _mock(content: str) -> AsyncMock:
     mock = AsyncMock()
     mock.ainvoke = AsyncMock(return_value=AIMessage(content=content))
+    # planner_fast wraps the model via .with_structured_output(TriageResult);
+    # route the structured chain back to the same mock so the raw-AIMessage
+    # fallback inside planner_fast handles the parse.
+    mock.with_structured_output = lambda schema: mock
     return mock
 
 

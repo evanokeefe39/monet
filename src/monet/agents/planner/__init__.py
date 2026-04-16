@@ -5,9 +5,9 @@ from __future__ import annotations
 import functools
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from monet import (
     agent,
@@ -22,6 +22,14 @@ from monet.orchestration._state import WorkBrief
 from .._prompts import extract_text, make_env
 
 _env = make_env(Path(__file__).parent)
+
+
+class TriageResult(BaseModel):
+    """Structured triage output. Forces the model to commit to a Literal."""
+
+    complexity: Literal["simple", "bounded", "complex"]
+    suggested_agents: list[str] = Field(default_factory=list)
+    requires_planning: bool
 
 
 @functools.cache
@@ -64,7 +72,14 @@ planner = agent("planner")
 
 @planner(command="fast")
 async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -> str:
-    """Classify request complexity. Returns JSON triage."""
+    """Classify request complexity. Returns JSON triage.
+
+    Uses ``with_structured_output(TriageResult)`` so the model must commit
+    to a ``Literal`` complexity value instead of drifting into freeform
+    text that falls back to the parse-failure default. Falls back to
+    raw-text parse when the model backend does not return a pydantic
+    instance (primarily in tests where ``_get_model`` is mocked).
+    """
     log = get_run_logger()
     emit_progress({"status": "triaging", "agent": "planner"})
     log.info("planner/fast triaging: %s", task[:80])
@@ -75,10 +90,13 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
         context=context or [],
         roster=roster,
     )
-    response = await _get_model(_model_string()).ainvoke(
-        [{"role": "user", "content": prompt}]
-    )
-    return _strip_json_fence(extract_text(response))
+    base_model = _get_model(_model_string())
+    structured = base_model.with_structured_output(TriageResult)
+    result = await structured.ainvoke([{"role": "user", "content": prompt}])
+    if isinstance(result, TriageResult):
+        return json.dumps(result.model_dump())
+    # Mock / non-structured fallback: treat as raw chat output.
+    return _strip_json_fence(extract_text(result))
 
 
 @planner(command="plan")
