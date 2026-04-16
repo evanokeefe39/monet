@@ -121,9 +121,12 @@ async def _wrap_result(
             already_written = hashlib.sha256(encoded).hexdigest() in written_hashes
             if already_written:
                 # Agent already persisted exact bytes explicitly — suppress
-                # the auto-offload, but still inline-summarise so consumers
-                # see a compact output field matching the explicit artifact.
-                output = output_str[:200]
+                # the auto-offload but keep the full return value inline.
+                # The agent chose to return this content; truncating would
+                # silently drop data a chat transcript / direct consumer
+                # expects to see. Large payloads are the agent's own
+                # responsibility to shrink (e.g. by returning a summary).
+                output = output_str
             elif _artifact_backend is not None:
                 try:
                     # write() appends to _artifact_collector (same list as `artifacts`)

@@ -10,8 +10,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError
 
 from monet import (
+    Signal,
+    SignalType,
     agent,
     emit_progress,
+    emit_signal,
     get_agent_manifest,
     get_run_logger,
     write_artifact,
@@ -20,6 +23,12 @@ from monet.config._env import agent_model
 from monet.orchestration._state import WorkBrief
 
 from .._prompts import extract_text, make_env
+
+#: Max number of follow-up questions the planner may ask in one turn.
+#: Keeps the form manageable for the human and discourages "ten shallow
+#: questions" over "three pointed ones". Enforced in both prompt and
+#: post-parse validation.
+MAX_FOLLOWUP_QUESTIONS = 5
 
 _env = make_env(Path(__file__).parent)
 
@@ -103,28 +112,41 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
 async def planner_plan(
     task: str, context: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
-    """Build a structured work brief with flat routing DAG.
+    """Build a work brief **or** ask follow-up questions when ambiguous.
 
-    Returns inline output with ``work_brief_artifact_id`` (keyed artifact
-    in the store) and ``routing_skeleton`` (flat DAG for the
-    execution graph). The orchestrator never reads the full brief —
-    workers resolve it via the inject_plan_context hook at invocation
-    time.
+    Output is one of two shapes, discriminated by the ``kind`` field:
+
+    - ``{"kind": "plan", "work_brief_artifact_id", "routing_skeleton"}``
+      — the happy path. Work brief written to the artifact store, flat
+      routing DAG inlined for the execution graph.
+    - ``{"kind": "questions", "questions": [...]}`` — the planner can't
+      plan without more info. Emits a ``NEEDS_CLARIFICATION`` signal so
+      the orchestrator knows to pause and collect answers. The follow-up
+      loop is bounded elsewhere (chat graph + pipelines); the agent's
+      sole job is to emit accurate questions, not to manage attempts.
+
+    Orchestrators resolve the full brief via ``inject_plan_context`` at
+    invocation time; neither output dict is read for content beyond the
+    discriminator + pointer.
     """
     emit_progress({"status": "planning", "agent": "planner"})
 
     feedback = ""
+    clarification_answers: list[dict[str, Any]] = []
     for entry in context or []:
         if entry.get("type") == "instruction":
             feedback = entry.get("content", "")
-            break
+        elif entry.get("type") == "user_clarification":
+            clarification_answers.append(entry)
 
     roster = [cap for cap in _build_roster() if cap["agent_id"] not in _PLANNER_EXCLUDE]
     prompt = _env.get_template("plan.j2").render(
         task=task,
         context=context or [],
         feedback=feedback,
+        clarification_answers=clarification_answers,
         roster=roster,
+        max_followup_questions=MAX_FOLLOWUP_QUESTIONS,
     )
     response = await _get_model(_model_string()).ainvoke(
         [{"role": "user", "content": prompt}]
@@ -136,10 +158,55 @@ async def planner_plan(
         msg = f"Planner returned non-JSON output: {exc}"
         raise ValueError(msg) from exc
 
-    # Validate shape before writing anything. WorkBrief validation guarantees
-    # to_routing_skeleton() succeeds without its own validation pass.
+    if not isinstance(payload, dict):
+        msg = f"Planner output must be a JSON object, got {type(payload).__name__}"
+        raise ValueError(msg)
+
+    kind = payload.get("kind")
+    if kind == "questions":
+        return _emit_questions(payload)
+    # Legacy outputs without a ``kind`` field are treated as plans for
+    # backwards compatibility with any consumer that still posts the flat
+    # WorkBrief shape directly.
+    return await _emit_plan(payload)
+
+
+def _emit_questions(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate + emit a clarification output.
+
+    Also fires a :data:`SignalType.NEEDS_CLARIFICATION` signal so the
+    orchestrator can route on the signal group rather than on dict-shape
+    inspection. Over-limit question lists are truncated — better to ask
+    five good questions than reject the whole turn.
+    """
+    raw_questions = payload.get("questions")
+    if not isinstance(raw_questions, list) or not raw_questions:
+        msg = "Planner 'questions' output must include a non-empty questions list"
+        raise ValueError(msg)
+    questions = [str(q).strip() for q in raw_questions if str(q).strip()]
+    if not questions:
+        msg = "Planner questions list had no usable entries after trimming"
+        raise ValueError(msg)
+    if len(questions) > MAX_FOLLOWUP_QUESTIONS:
+        questions = questions[:MAX_FOLLOWUP_QUESTIONS]
+    reason = str(payload.get("reasoning") or "Planner needs more information")
+    emit_signal(
+        Signal(
+            type=SignalType.NEEDS_CLARIFICATION,
+            reason=reason,
+            metadata={"question_count": len(questions)},
+        )
+    )
+    return {"kind": "questions", "questions": questions, "reasoning": reason}
+
+
+async def _emit_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a WorkBrief payload, persist it, return the dispatch shape."""
+    # Strip discriminator before WorkBrief validation — pydantic would
+    # reject it otherwise since WorkBrief has no ``kind`` field.
+    work_brief_payload = {k: v for k, v in payload.items() if k != "kind"}
     try:
-        work_brief = WorkBrief.model_validate(payload)
+        work_brief = WorkBrief.model_validate(work_brief_payload)
     except ValidationError as exc:
         msg = f"Planner output failed WorkBrief validation: {exc}"
         raise ValueError(msg) from exc
@@ -156,6 +223,7 @@ async def planner_plan(
     )
 
     return {
+        "kind": "plan",
         "work_brief_artifact_id": pointer["artifact_id"],
         "routing_skeleton": routing_skeleton.model_dump(),
     }

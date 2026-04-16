@@ -31,8 +31,14 @@ from pydantic import BaseModel, Field
 
 from monet.config import ChatConfig
 from monet.orchestration._invoke import invoke_agent
+from monet.signals import SignalType
 
 PLAN_MAX_REVISIONS = 3
+#: Ceiling on follow-up question rounds the planner may request per turn.
+#: On the (MAX+1)th invocation the planner is instructed to produce a
+#: best-effort plan regardless of remaining ambiguity — we'd rather ship
+#: an imperfect plan the user can reject than loop forever on questions.
+MAX_FOLLOWUP_ATTEMPTS = 1
 
 
 def _artifact_url(artifact_id: str) -> str:
@@ -69,28 +75,49 @@ class ChatState(TypedDict, total=False):
     ``command_meta`` carry routing decisions written by
     ``parse_command_node`` or ``triage_node``; they guide the
     conditional dispatch to ``respond`` / ``planner`` / ``specialist``.
-    ``pending_plan`` is reserved for async plan approval and is unused
-    in the current node set — kept in the schema so downstream UIs can
-    rely on the field being addressable.
+
+    Planner follow-up state (all first-class so durable execution
+    survives worker restart without losing loop counters):
+
+    - ``followup_attempts``: number of times planner has asked questions.
+    - ``followup_answers``: most recent human answers, injected into
+      context on the next planner invocation.
+    - ``pending_questions``: questions the planner emitted; consumed by
+      ``questionnaire_node``.
+    - ``plan_revisions``: count of revise cycles after a plan was shown.
+    - ``plan_feedback``: latest revise feedback, injected into context
+      on the next planner invocation.
+    - ``last_plan_output``: planner's most recent plan dict; consumed
+      by ``approval_node``.
     """
 
     messages: Annotated[list[dict[str, Any]], _message_reducer]
     route: str | None
     command_meta: dict[str, Any]
-    pending_plan: dict[str, Any] | None
+    followup_attempts: int
+    followup_answers: list[dict[str, Any]] | None
+    pending_questions: list[str] | None
+    plan_revisions: int
+    plan_feedback: str | None
+    last_plan_output: dict[str, Any] | None
 
 
 class ChatTriageResult(BaseModel):
-    """Structured output from the triage classifier.
+    """Structured output from the triage classifier — information only.
 
-    ``route`` is the dispatch target. When ``clarification_needed`` is
-    True the response node renders ``clarification_prompt`` inline
-    instead of routing elsewhere — ambiguous intent should not silently
-    escalate into planning.
+    The classifier answers **"is this conversational or does it need a
+    plan?"**. It does not pick a specific agent or command — that's the
+    planner's job. Keeping the decision surface small here (chat vs
+    plan) leaves agent-selection where it belongs and avoids
+    hallucinated specialist routing.
+
+    ``clarification_needed`` allows the classifier to refuse both
+    routes when the user's intent is genuinely ambiguous — the response
+    node renders ``clarification_prompt`` inline so the user can restate
+    before either path fires.
     """
 
-    route: Literal["chat", "planner", "specialist"]
-    specialist: str | None = None
+    route: Literal["chat", "plan"]
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     clarification_needed: bool = False
     clarification_prompt: str | None = None
@@ -186,11 +213,17 @@ def _to_langchain(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _format_agent_result(result: Any, *, label: str) -> dict[str, str]:
-    """Render an :class:`AgentResult` as an assistant chat message."""
+    """Render an :class:`AgentResult` as an assistant chat message.
+
+    Always appends artifact URLs when ``result.artifacts`` is non-empty
+    so agents that write outputs to the store (researcher, writer, qa)
+    surface a clickable link, not just the inline preview.
+    """
     if result is None:
         return {"role": "assistant", "content": f"[{label}] no result."}
     success = getattr(result, "success", True)
     output = getattr(result, "output", None)
+    artifacts = getattr(result, "artifacts", ()) or ()
     if not success:
         signals = getattr(result, "signals", []) or []
         reason = "; ".join(
@@ -201,12 +234,37 @@ def _format_agent_result(result: Any, *, label: str) -> dict[str, str]:
         content = f"[{label}] failed"
         if reason:
             content += f": {reason}"
-        return {"role": "assistant", "content": content}
+        return {
+            "role": "assistant",
+            "content": _append_artifact_links(content, artifacts),
+        }
     if output is None:
-        return {"role": "assistant", "content": f"[{label}] complete."}
-    if isinstance(output, dict):
-        return {"role": "assistant", "content": _summarise_dict_output(label, output)}
-    return {"role": "assistant", "content": f"[{label}] {output}"}
+        body = f"[{label}] complete."
+    elif isinstance(output, dict):
+        body = _summarise_dict_output(label, output)
+    else:
+        body = f"[{label}] {output}"
+    return {
+        "role": "assistant",
+        "content": _append_artifact_links(body, artifacts),
+    }
+
+
+def _append_artifact_links(content: str, artifacts: Any) -> str:
+    """Append ``→ <url>`` lines for every artifact with an ``artifact_id``."""
+    links: list[str] = []
+    for artifact in artifacts or ():
+        if not isinstance(artifact, dict):
+            continue
+        artifact_id = str(artifact.get("artifact_id") or "").strip()
+        if not artifact_id:
+            continue
+        key = str(artifact.get("key") or "").strip()
+        label = f" ({key})" if key else ""
+        links.append(f"→ artifact{label}: {_artifact_url(artifact_id)}")
+    if not links:
+        return content
+    return content + "\n\n" + "\n".join(links)
 
 
 def _summarise_dict_output(label: str, output: dict[str, Any]) -> str:
@@ -259,18 +317,17 @@ async def parse_command_node(state: ChatState) -> dict[str, Any]:
 
 
 async def triage_node(state: ChatState) -> dict[str, Any]:
-    """Classify free-form user text into chat / planner / specialist.
+    """Classify free-form user text as ``chat`` or ``plan``.
 
-    Uses the small/fast model configured in :class:`ChatConfig`. Grounds
-    the classifier in the live agent manifest so the ``specialist``
-    branch cannot hallucinate agent ids that are not registered. Any
-    hallucinated specialist falls back to ``planner`` (the pipeline
-    can decompose the task); parse failures fall back to ``chat``.
+    The classifier is a small/fast model that returns *information*
+    (route + confidence + optional clarification prompt) — it does not
+    pick an agent. Agent selection is the planner's job. Parse
+    failures fall back to ``chat`` (a direct-LLM response is cheaper
+    than an unnecessary plan).
     """
     cfg = ChatConfig.load()
     messages = state.get("messages") or []
-    roster = _known_agent_ids()
-    payload = _triage_payload(messages, roster)
+    payload = _triage_payload(messages)
     llm = _load_model(cfg.triage_model).with_structured_output(ChatTriageResult)
     try:
         result = await llm.ainvoke(payload)
@@ -283,54 +340,31 @@ async def triage_node(state: ChatState) -> dict[str, Any]:
     if result.clarification_needed and result.clarification_prompt:
         meta["clarification_prompt"] = result.clarification_prompt
         return {"route": "chat", "command_meta": meta}
-    if result.route == "specialist":
-        chosen = (result.specialist or "").strip()
-        if not chosen or (roster and chosen not in roster):
-            # Hallucinated or empty — hand off to the planner so the
-            # pipeline can decompose the task properly.
-            return {"route": "planner", "command_meta": meta}
-        meta["specialist"] = chosen
-        meta["mode"] = "fast"
-    return {"route": result.route, "command_meta": meta}
-
-
-def _known_agent_ids() -> set[str]:
-    """Return the set of agent ids declared in the live manifest."""
-    try:
-        from monet.core.agent_manifest import get_agent_manifest
-    except Exception:
-        return set()
-    try:
-        manifest = get_agent_manifest()
-        if not manifest.is_configured():
-            return set()
-        return {cap["agent_id"] for cap in manifest.list_agents()}
-    except Exception:
-        return set()
+    # Map the "plan" classification to the "planner" edge name.
+    node_route = "planner" if result.route == "plan" else "chat"
+    return {"route": node_route, "command_meta": meta}
 
 
 def _triage_payload(
     messages: list[dict[str, Any]],
-    roster: set[str],
 ) -> list[dict[str, Any]]:
-    """Prepend a system message listing real agent ids for grounding."""
+    """Prepend a system message explaining the chat-vs-plan decision."""
     base = _to_langchain(messages)
-    if not roster:
-        system = (
-            "You classify chat input. Routes: 'chat' for conversational, "
-            "'planner' for multi-step tasks, 'specialist' only when a single "
-            "registered agent directly handles the task. No specialist "
-            "agents are registered on this server, so never pick 'specialist'."
-        )
-    else:
-        listed = ", ".join(sorted(roster))
-        system = (
-            "You classify chat input. Routes: 'chat' for conversational, "
-            "'planner' for multi-step tasks, 'specialist' only when one of "
-            f"these registered agents handles it directly: {listed}. "
-            "If the user's request does not obviously match a single agent "
-            "from that list, pick 'planner' (never invent an agent id)."
-        )
+    system = (
+        "You classify the latest user message. Return one of two routes:\n"
+        "- 'chat': conversational, informational, or a question answerable "
+        "directly in natural language without tools or multi-step work.\n"
+        "- 'plan': the user wants something done that requires research, "
+        "generation, analysis, tool use, or multiple agent steps — "
+        "anything beyond a plain reply.\n\n"
+        "Do NOT pick a specific agent or command; that is the planner's "
+        "job. If the user's intent is genuinely ambiguous, set "
+        "clarification_needed and include a clarification_prompt asking "
+        "them to restate. Bias toward 'plan' when unsure between plan "
+        "and chat — producing an unnecessary plan (the user can reject "
+        "it) is cheaper than silently downgrading a real task to a chat "
+        "reply."
+    )
     return [{"role": "system", "content": system}, *base]
 
 
@@ -362,87 +396,289 @@ async def respond_node(state: ChatState) -> dict[str, Any]:
 
 
 async def planner_node(state: ChatState) -> dict[str, Any]:
-    """Plan + HITL approval loop.
+    """Invoke the planner agent. One LLM call per visit, no inner loop.
 
-    Invokes the planner agent, surfaces the plan to the user via a
-    form-schema ``interrupt()`` with approve/revise/reject options, and
-    loops back into the planner with human feedback on revise. Bounded
-    by :data:`PLAN_MAX_REVISIONS` to prevent runaway iterations.
+    Consumes ``plan_feedback`` (from a prior revise) and
+    ``followup_answers`` (from the questionnaire), injects them as
+    context, then invokes ``planner:plan``. The result is either:
+
+    - A plan — stored in ``last_plan_output``, routed to
+      :func:`approval_node`.
+    - Follow-up questions (signal ``NEEDS_CLARIFICATION``) — stored in
+      ``pending_questions``, routed to :func:`questionnaire_node`.
+    - Questions emitted on the forced pass (``followup_attempts >=
+      MAX_FOLLOWUP_ATTEMPTS``) — treated as give-up; planner_node
+      emits an apology message and terminates.
+
+    All inputs are read from state so LangGraph's durable execution can
+    resume this node from a crash without losing loop counters or
+    pending plan data.
     """
     meta = state.get("command_meta") or {}
     task = str(meta.get("task") or _last_user_message(state.get("messages") or []))
-    base_context = _build_context(state.get("messages") or [])
-    emitted: list[dict[str, str]] = []
-    feedback: str | None = None
-    revisions = 0
+    attempts = state.get("followup_attempts") or 0
+    force_plan = attempts >= MAX_FOLLOWUP_ATTEMPTS
+    context = _build_planner_context(state, force_plan=force_plan)
 
-    while True:
-        context = list(base_context)
-        if feedback:
-            context.append(
+    try:
+        result = await invoke_agent(
+            "planner",
+            command="plan",
+            task=task,
+            context=context,
+        )
+    except Exception as exc:
+        return {
+            "messages": [
+                {"role": "assistant", "content": f"Planner invocation failed: {exc}"}
+            ],
+            "last_plan_output": None,
+            "pending_questions": None,
+            "plan_feedback": None,
+            "followup_answers": None,
+        }
+
+    output = getattr(result, "output", None)
+    signals = list(getattr(result, "signals", ()) or ())
+    questions_signalled = any(
+        s.get("type") == SignalType.NEEDS_CLARIFICATION
+        for s in signals
+        if isinstance(s, dict)
+    )
+    is_questions = isinstance(output, dict) and (
+        output.get("kind") == "questions" or questions_signalled
+    )
+
+    # Clear consumed inputs regardless of path — they've been passed
+    # into context and shouldn't re-apply on the next visit.
+    cleared: dict[str, Any] = {"plan_feedback": None, "followup_answers": None}
+
+    if is_questions:
+        questions = []
+        if isinstance(output, dict):
+            raw = output.get("questions") or []
+            questions = [str(q).strip() for q in raw if str(q).strip()]
+        if force_plan or not questions:
+            # Planner asked despite the force-plan instruction (or
+            # returned no usable questions). Give up gracefully.
+            plan_message = _format_agent_result(result, label="planner/plan")
+            return {
+                "messages": [
+                    plan_message,
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "Couldn't produce a plan without more specifics. "
+                            "Please restate the task with the details you have."
+                        ),
+                    },
+                ],
+                "last_plan_output": None,
+                "pending_questions": None,
+                **cleared,
+            }
+        return {
+            "pending_questions": questions,
+            "last_plan_output": None,
+            **cleared,
+        }
+
+    # Plan path (explicit kind="plan" or legacy output without kind).
+    if not isinstance(output, dict):
+        # Unknown output shape — surface raw message and stop.
+        plan_message = _format_agent_result(result, label="planner/plan")
+        return {
+            "messages": [plan_message],
+            "last_plan_output": None,
+            "pending_questions": None,
+            **cleared,
+        }
+    return {
+        "last_plan_output": output,
+        "pending_questions": None,
+        **cleared,
+    }
+
+
+def _build_planner_context(
+    state: ChatState, *, force_plan: bool
+) -> list[dict[str, Any]]:
+    """Assemble planner context: transcript + feedback + answers + force flag.
+
+    Kept separate from :func:`planner_node` so the context shape is
+    testable in isolation — the prompt is the real contract with the
+    agent, and its context block is the richest place for bugs to hide.
+    """
+    messages = state.get("messages") or []
+    context: list[dict[str, Any]] = list(_build_context(messages))
+
+    feedback = state.get("plan_feedback")
+    if feedback:
+        context.append(
+            {
+                "type": "instruction",
+                "summary": "Human feedback on the previous plan",
+                "content": feedback,
+            }
+        )
+
+    for answer in state.get("followup_answers") or []:
+        context.append(answer)
+
+    if force_plan:
+        context.append(
+            {
+                "type": "instruction",
+                "summary": "Force-plan override",
+                "content": (
+                    "Produce a best-effort plan now — do NOT return more "
+                    "questions. The user will review and can reject or "
+                    "revise. If any parameter is still unknown, pick a "
+                    "reasonable default and note it in `assumptions`."
+                ),
+            }
+        )
+    return context
+
+
+async def questionnaire_node(state: ChatState) -> dict[str, Any]:
+    """Render pending planner questions as a form, interrupt, collect answers.
+
+    Uses the ``select_or_text`` field type so each question gets a
+    pre-filled "I don't know" / "skip" option plus free-form text —
+    matches the claude-code-style questionnaire idiom. Follow-up
+    attempts are bumped in state so the planner can detect the
+    force-plan condition on the next visit.
+    """
+    questions = list(state.get("pending_questions") or [])
+    attempts = state.get("followup_attempts") or 0
+    if not questions:
+        # Defensive — routed here without questions. Clear flags and
+        # loop back to planner (which will produce a plan).
+        return {"pending_questions": None, "followup_attempts": attempts}
+
+    form = _followup_form(questions)
+    decision = interrupt(form)
+
+    answers: list[dict[str, Any]] = []
+    if isinstance(decision, dict):
+        for idx, question in enumerate(questions):
+            raw = decision.get(f"q{idx}")
+            if raw in (None, "", "__skip__"):
+                continue
+            answers.append(
                 {
-                    "type": "instruction",
-                    "summary": "Human feedback on the previous plan",
-                    "content": feedback,
+                    "type": "user_clarification",
+                    "summary": question,
+                    "content": f"Q: {question}\nA: {raw}",
                 }
             )
-        try:
-            result = await invoke_agent(
-                "planner",
-                command="plan",
-                task=task,
-                context=context,
-            )
-        except Exception as exc:
-            emitted.append(
-                {"role": "assistant", "content": f"Planner invocation failed: {exc}"}
-            )
-            return {"messages": emitted}
 
-        plan_message = _format_agent_result(result, label="planner/plan")
-        emitted.append(plan_message)
+    return {
+        "pending_questions": None,
+        "followup_attempts": attempts + 1,
+        "followup_answers": answers,
+    }
 
-        output = getattr(result, "output", None)
-        if not isinstance(output, dict):
-            return {"messages": emitted}
 
-        decision = interrupt(_plan_approval_form(output, plan_message["content"]))
+def _followup_form(questions: list[str]) -> dict[str, Any]:
+    """Form-schema payload for the planner's follow-up questionnaire."""
+    fields: list[dict[str, Any]] = []
+    for idx, question in enumerate(questions):
+        fields.append(
+            {
+                "name": f"q{idx}",
+                "type": "select_or_text",
+                "label": question,
+                "options": [
+                    {"value": "__skip__", "label": "Skip / I don't know"},
+                ],
+                "default": "__skip__",
+            }
+        )
+    return {
+        "prompt": (
+            "The planner needs more information before it can build a plan. "
+            "Answer each question, or pick 'Skip' if you don't know — the "
+            "planner will use its best judgement for skipped items."
+        ),
+        "render": "inline",
+        "fields": fields,
+    }
 
-        if not isinstance(decision, dict):
-            emitted.append({"role": "assistant", "content": "Plan cancelled."})
-            return {"messages": emitted}
 
-        action = decision.get("action") or "reject"
-        if action == "approve":
-            emitted.append({"role": "assistant", "content": "Plan approved."})
-            return {"messages": emitted}
-        if action == "revise":
-            revisions += 1
-            new_feedback = str(decision.get("feedback") or "").strip()
-            if not new_feedback:
-                emitted.append(
+async def approval_node(state: ChatState) -> dict[str, Any]:
+    """Show the plan to the user, interrupt for approve/revise/reject.
+
+    Revision counter lives in state (``plan_revisions``) so LangGraph
+    replay after a crash sees the same value and doesn't re-offer
+    already-consumed revise slots. On exceeded revisions or reject the
+    node terminates; on revise with feedback it clears the plan and
+    routes back to :func:`planner_node` for another attempt.
+    """
+    plan_output = state.get("last_plan_output") or {}
+    revisions = state.get("plan_revisions") or 0
+
+    plan_message_text = _summarise_dict_output("planner/plan", plan_output)
+    form = _plan_approval_form(plan_output, plan_message_text)
+    decision = interrupt(form)
+
+    plan_message = {"role": "assistant", "content": plan_message_text}
+
+    if not isinstance(decision, dict):
+        return {
+            "messages": [
+                plan_message,
+                {"role": "assistant", "content": "Plan cancelled."},
+            ],
+            "last_plan_output": None,
+        }
+
+    action = decision.get("action") or "reject"
+    if action == "approve":
+        approved = {"role": "assistant", "content": "Plan approved."}
+        return {
+            "messages": [plan_message, approved],
+            "last_plan_output": None,
+        }
+    if action == "revise":
+        feedback = str(decision.get("feedback") or "").strip()
+        if not feedback:
+            return {
+                "messages": [
+                    plan_message,
                     {
                         "role": "assistant",
                         "content": "Revise requested but no feedback provided; "
                         "treating as rejection.",
-                    }
-                )
-                return {"messages": emitted}
-            if revisions > PLAN_MAX_REVISIONS:
-                emitted.append(
+                    },
+                ],
+                "last_plan_output": None,
+            }
+        if revisions + 1 > PLAN_MAX_REVISIONS:
+            return {
+                "messages": [
+                    plan_message,
                     {
                         "role": "assistant",
                         "content": (
                             f"Exceeded {PLAN_MAX_REVISIONS} revisions; stopping."
                         ),
-                    }
-                )
-                return {"messages": emitted}
-            feedback = new_feedback
-            continue
-        # reject or unknown action
-        emitted.append({"role": "assistant", "content": "Plan rejected."})
-        return {"messages": emitted}
+                    },
+                ],
+                "last_plan_output": None,
+            }
+        return {
+            "messages": [plan_message],
+            "plan_feedback": feedback,
+            "plan_revisions": revisions + 1,
+            "last_plan_output": None,
+        }
+    # reject or unknown action
+    return {
+        "messages": [plan_message, {"role": "assistant", "content": "Plan rejected."}],
+        "last_plan_output": None,
+    }
 
 
 def _plan_approval_form(
@@ -533,9 +769,33 @@ def _route_after_triage(state: ChatState) -> str:
     route = state.get("route")
     if route == "planner":
         return "planner"
-    if route == "specialist":
-        return "specialist"
     return "respond"
+
+
+def _route_after_planner(state: ChatState) -> str:
+    """Three-way fork: questionnaire, approval, or terminal message.
+
+    ``pending_questions`` and ``last_plan_output`` are mutually
+    exclusive outputs of :func:`planner_node` — this router just picks
+    which follow-up node to visit. When planner_node emits an apology
+    (both fields cleared, messages written) we route to END.
+    """
+    if state.get("pending_questions"):
+        return "questionnaire"
+    if state.get("last_plan_output"):
+        return "approval"
+    return "__end__"
+
+
+def _route_after_approval(state: ChatState) -> str:
+    """Route revise back into planner; approve/reject terminate.
+
+    Approval writes ``plan_feedback`` only on revise; its presence is
+    the signal to re-enter the planner loop.
+    """
+    if state.get("plan_feedback"):
+        return "planner"
+    return "__end__"
 
 
 # --- Graph builder --------------------------------------------------------
@@ -545,12 +805,19 @@ def build_chat_graph() -> StateGraph[ChatState]:
     """Build the chat graph. Returns uncompiled ``StateGraph[ChatState]``.
 
     Aegra / LangGraph Server compiles it and attaches the checkpointer.
+
+    The planner flow is a three-node state machine — ``planner``
+    (invoke agent), ``questionnaire`` (clarify with the human),
+    ``approval`` (HITL plan review). Conditional edges route on
+    first-class ChatState fields so every loop counter is durable.
     """
     graph: StateGraph[ChatState] = StateGraph(ChatState)
     graph.add_node("parse", parse_command_node)
     graph.add_node("triage", triage_node)
     graph.add_node("respond", respond_node)
     graph.add_node("planner", planner_node)
+    graph.add_node("questionnaire", questionnaire_node)
+    graph.add_node("approval", approval_node)
     graph.add_node("specialist", specialist_node)
 
     graph.add_edge(START, "parse")
@@ -570,10 +837,26 @@ def build_chat_graph() -> StateGraph[ChatState]:
         {
             "respond": "respond",
             "planner": "planner",
-            "specialist": "specialist",
+        },
+    )
+    graph.add_conditional_edges(
+        "planner",
+        _route_after_planner,
+        {
+            "questionnaire": "questionnaire",
+            "approval": "approval",
+            "__end__": END,
+        },
+    )
+    graph.add_edge("questionnaire", "planner")
+    graph.add_conditional_edges(
+        "approval",
+        _route_after_approval,
+        {
+            "planner": "planner",
+            "__end__": END,
         },
     )
     graph.add_edge("respond", END)
-    graph.add_edge("planner", END)
     graph.add_edge("specialist", END)
     return graph

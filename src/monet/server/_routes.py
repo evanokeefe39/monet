@@ -23,6 +23,13 @@ _log = logging.getLogger("monet.server.routes")
 __all__ = ["router"]
 
 
+#: Max characters of a node's ``task`` rendered inside a DAG box.
+#: Longer strings are truncated with an ellipsis so node boxes stay
+#: scannable — the full task remains in the raw JSON and in the work
+#: brief artifact itself.
+_DAG_TASK_CHAR_BUDGET = 160
+
+
 # -- Dependency injection helpers ------------------------------------------
 
 
@@ -513,38 +520,19 @@ def _render_artifact_html(
 
 
 def _render_work_brief_html(brief: dict[str, Any]) -> str:
-    """Render a WorkBrief dict (goal + nodes + assumptions) as HTML cards."""
+    """Render a WorkBrief dict (goal + nodes + assumptions) as HTML cards.
+
+    The DAG card renders the plan as a top-to-bottom Mermaid graph where
+    each node box carries the agent/command (top, accent colour), the
+    node id, and the task description. No separate step list — the DAG
+    boxes are the canonical step view. Mermaid is loaded from the
+    jsDelivr CDN (see ``_ARTIFACT_HTML_TEMPLATE``).
+    """
     import html as _html
 
     goal = str(brief.get("goal") or "(no goal)")
     nodes = brief.get("nodes") or []
     assumptions = brief.get("assumptions") or []
-
-    node_cards: list[str] = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node_id = str(node.get("id") or "")
-        agent_id = str(node.get("agent_id") or "")
-        command = str(node.get("command") or "")
-        task = str(node.get("task") or "")
-        deps = node.get("depends_on") or []
-        dep_html = (
-            "<div class='deps'>← "
-            + ", ".join(f"<code>{_html.escape(str(d))}</code>" for d in deps)
-            + "</div>"
-            if deps
-            else "<div class='deps muted'>no dependencies · root step</div>"
-        )
-        node_cards.append(
-            "<article class='node'>"
-            f"<header><code class='node-id'>{_html.escape(node_id)}</code>"
-            f"<span class='badge'>{_html.escape(agent_id)}/"
-            f"{_html.escape(command)}</span></header>"
-            f"{dep_html}"
-            f"<p class='task'>{_html.escape(task)}</p>"
-            "</article>"
-        )
 
     assumption_list = ""
     if assumptions:
@@ -554,12 +542,98 @@ def _render_work_brief_html(brief: dict[str, Any]) -> str:
             f"<ul class='assumptions'>{items}</ul></section>"
         )
 
+    dag_card = _render_work_brief_dag(nodes)
+
     return (
         "<section class='card'><h2>Goal</h2>"
         f"<p class='goal'>{_html.escape(goal)}</p></section>"
-        f"<section class='card'><h2>Steps ({len(node_cards)})</h2>"
-        f"<div class='nodes'>{''.join(node_cards)}</div></section>"
+        f"{dag_card}"
         f"{assumption_list}"
+    )
+
+
+def _render_work_brief_dag(nodes: list[Any]) -> str:
+    """Emit a Mermaid ``graph TB`` card for the plan's node dependencies.
+
+    Each node box contains three stacked labels:
+
+    1. ``agent_id/command`` on top, accent-coloured monospace so the
+       agent responsible is visible at a glance.
+    2. The plan's ``node_id`` in the middle.
+    3. The task description at the bottom, muted, truncated to
+       ``_DAG_TASK_CHAR_BUDGET`` chars to keep the DAG scannable.
+
+    Node ids are rewritten to ``n<idx>`` so arbitrary characters in the
+    planner's ids (dashes, colons) can never break Mermaid parsing — the
+    user-visible label keeps the original id. Direction is top-to-bottom
+    so long plans scroll naturally in the browser.
+    """
+    import html as _html
+
+    diagram_lines: list[str] = ["graph TB"]
+    id_map: dict[str, str] = {}
+
+    for idx, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        nid = str(node.get("id") or f"node{idx}")
+        alias = f"n{idx}"
+        id_map[nid] = alias
+        agent = str(node.get("agent_id") or "")
+        command = str(node.get("command") or "")
+        badge = f"{agent}/{command}".strip("/")
+        task = str(node.get("task") or "")
+        if len(task) > _DAG_TASK_CHAR_BUDGET:
+            task = task[: _DAG_TASK_CHAR_BUDGET - 1].rstrip() + "…"
+        label_id = _mermaid_escape(nid)
+        label_badge = _mermaid_escape(badge)
+        label_task = _mermaid_escape(task)
+        caption_parts: list[str] = []
+        if label_badge:
+            caption_parts.append(
+                f"<span style='color:#a855f7;font-family:monospace;"
+                f"font-weight:600'>{label_badge}</span>"
+            )
+        caption_parts.append(label_id)
+        if label_task:
+            caption_parts.append(
+                f"<span style='color:#9ca3af;font-size:0.85em'>{label_task}</span>"
+            )
+        caption = "<br/>".join(caption_parts)
+        diagram_lines.append(f'  {alias}["{caption}"]')
+
+    for idx, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        nid = str(node.get("id") or f"node{idx}")
+        target = id_map.get(nid)
+        if not target:
+            continue
+        for dep in node.get("depends_on") or []:
+            src = id_map.get(str(dep))
+            if src:
+                diagram_lines.append(f"  {src} --> {target}")
+
+    if len(diagram_lines) == 1:
+        return ""
+
+    diagram = "\n".join(diagram_lines)
+    # HTML-escape angle brackets and ampersands so the browser's text
+    # content shows ``<br/>`` verbatim for Mermaid to parse as a label
+    # line break. ``"`` is left raw (Mermaid label quote) — we've already
+    # replaced any user ``"`` with the Mermaid ``#quot;`` escape.
+    escaped = _html.escape(diagram, quote=False)
+    return (
+        "<section class='card'><h2>DAG</h2>"
+        f'<div class="mermaid">{escaped}</div>'
+        "</section>"
+    )
+
+
+def _mermaid_escape(text: str) -> str:
+    """Escape characters that would break a Mermaid label."""
+    return (
+        text.replace("\\", "/").replace('"', "#quot;").replace("<", "").replace(">", "")
     )
 
 
@@ -698,6 +772,14 @@ _ARTIFACT_HTML_TEMPLATE = """<!doctype html>
     }}
     .raw-link a {{ color: var(--muted); }}
     .raw-link a:hover {{ color: var(--link); }}
+    .mermaid {{
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem;
+      overflow-x: auto;
+      text-align: center;
+    }}
   </style>
 </head>
 <body>
@@ -710,6 +792,16 @@ _ARTIFACT_HTML_TEMPLATE = """<!doctype html>
       <a href="{raw_url}">view raw bytes →</a>
     </p>
   </main>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({{
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "loose",
+      flowchart: {{ htmlLabels: true, curve: "basis" }},
+    }});
+    mermaid.run({{ querySelector: ".mermaid" }});
+  </script>
 </body>
 </html>
 """

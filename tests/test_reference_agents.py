@@ -97,6 +97,41 @@ async def test_planner_plan_returns_brief() -> None:
     # Planner registers a keyed artifact.
     assert len(result.artifacts) == 1
     assert result.artifacts[0].get("key") == "work_brief"
+    # Discriminator present for downstream routing.
+    assert result.output["kind"] == "plan"
+
+
+async def test_planner_plan_questions_path_emits_signal() -> None:
+    """When the task is ambiguous, planner returns questions + NEEDS_CLARIFICATION."""
+    from monet.signals import SignalType
+
+    payload = (
+        '{"kind": "questions",'
+        ' "questions": ["What topic?", "What audience?"],'
+        ' "reasoning": "Blog request without a topic"}'
+    )
+    with patch("monet.agents.planner._get_model", return_value=_mock(payload)):
+        result = await invoke_agent("planner", command="plan", task="write a blog post")
+    assert result.success
+    assert isinstance(result.output, dict)
+    assert result.output["kind"] == "questions"
+    assert result.output["questions"] == ["What topic?", "What audience?"]
+    signal_types = {s.get("type") for s in result.signals}
+    assert SignalType.NEEDS_CLARIFICATION in signal_types
+    # No work brief artifact written on the clarification path.
+    assert result.artifacts == ()
+
+
+async def test_planner_plan_questions_truncates_over_limit() -> None:
+    """Over-limit question lists are trimmed, not rejected."""
+    from monet.agents.planner import MAX_FOLLOWUP_QUESTIONS
+
+    over = ", ".join(f'"q{i}"' for i in range(MAX_FOLLOWUP_QUESTIONS + 3))
+    payload = f'{{"kind": "questions", "questions": [{over}], "reasoning": "x"}}'
+    with patch("monet.agents.planner._get_model", return_value=_mock(payload)):
+        result = await invoke_agent("planner", command="plan", task="ambiguous")
+    assert isinstance(result.output, dict)
+    assert len(result.output["questions"]) == MAX_FOLLOWUP_QUESTIONS
 
 
 async def test_researcher_fast_returns_content(monkeypatch: pytest.MonkeyPatch) -> None:

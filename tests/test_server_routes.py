@@ -251,3 +251,80 @@ async def test_fail_task(
     )
     assert fail_resp.status_code == 200
     assert fail_resp.json()["status"] == "ok"
+
+
+# --- WorkBrief DAG render -------------------------------------------------
+
+
+def test_work_brief_dag_renders_mermaid_with_edges() -> None:
+    from monet.server._routes import _render_work_brief_dag
+
+    nodes = [
+        {
+            "id": "a",
+            "agent_id": "planner",
+            "command": "fast",
+            "task": "draft outline",
+            "depends_on": [],
+        },
+        {
+            "id": "b",
+            "agent_id": "writer",
+            "command": "deep",
+            "task": "write body",
+            "depends_on": ["a"],
+        },
+        {
+            "id": "c",
+            "agent_id": "qa",
+            "command": "check",
+            "task": "review output",
+            "depends_on": ["a", "b"],
+        },
+    ]
+    html = _render_work_brief_dag(nodes)
+    assert 'class="mermaid"' in html
+    # Vertical (TB) so long plans scroll top-to-bottom.
+    assert "graph TB" in html
+    assert "n0[" in html and "n1[" in html and "n2[" in html
+    # Agent badge is on top (appears before the raw node id in each box).
+    assert "planner/fast" in html
+    # Agent span is coloured with the accent purple.
+    assert "&lt;span style='color:#a855f7" in html
+    # Task text appears inside each node box.
+    assert "draft outline" in html
+    assert "write body" in html
+    assert "review output" in html
+    # Edges use aliases, not raw ids.
+    assert "n0 --&gt; n1" in html
+    assert "n1 --&gt; n2" in html
+
+
+def test_work_brief_dag_truncates_long_task() -> None:
+    from monet.server._routes import _DAG_TASK_CHAR_BUDGET, _render_work_brief_dag
+
+    long = "x" * (_DAG_TASK_CHAR_BUDGET + 50)
+    nodes = [
+        {"id": "a", "agent_id": "p", "command": "c", "task": long, "depends_on": []},
+    ]
+    html = _render_work_brief_dag(nodes)
+    # Ellipsis appended; full string not present.
+    assert "…" in html
+    assert long not in html
+
+
+def test_work_brief_dag_empty_when_no_nodes() -> None:
+    from monet.server._routes import _render_work_brief_dag
+
+    assert _render_work_brief_dag([]) == ""
+
+
+def test_work_brief_dag_escapes_quotes_in_labels() -> None:
+    from monet.server._routes import _render_work_brief_dag
+
+    nodes = [
+        {"id": 'weird"id', "agent_id": "x", "command": "y", "depends_on": []},
+    ]
+    html = _render_work_brief_dag(nodes)
+    # User quote replaced with Mermaid escape, not raw "
+    assert "weird#quot;id" in html
