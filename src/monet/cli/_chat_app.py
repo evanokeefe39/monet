@@ -27,7 +27,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.command import Hit, Hits, Provider
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
 from textual.widgets import (
     Button,
@@ -159,8 +159,13 @@ class SlashCommandProvider(Provider):
 # --- Interrupt (HITL) form screen -----------------------------------------
 
 
-class InterruptScreen(Screen[dict[str, Any]]):
-    """Full-page screen that renders a :class:`Form` as interactive widgets.
+class InterruptScreen(ModalScreen[dict[str, Any]]):
+    """Modal dialog that renders a :class:`Form` as interactive widgets.
+
+    Uses :class:`ModalScreen` (not bare :class:`Screen`) because dialogs
+    need centered overlay, automatic focus capture, and click-event
+    isolation from the underlying chat surface — bare ``Screen`` left
+    keystrokes and clicks unrouted in some terminals.
 
     ``FieldType`` → widget mapping:
 
@@ -187,18 +192,17 @@ class InterruptScreen(Screen[dict[str, Any]]):
     DEFAULT_CSS = """
     InterruptScreen {
         padding: 1 2;
+        background: $background;
     }
 
-    InterruptScreen .interrupt-prompt {
+    InterruptScreen > #interrupt-prompt {
         padding-bottom: 1;
         text-style: bold;
     }
 
-    InterruptScreen #interrupt-body {
+    InterruptScreen > #interrupt-body {
         height: auto;
         max-height: 1fr;
-        border: round $primary;
-        padding: 0 1;
     }
 
     InterruptScreen .field-label {
@@ -210,7 +214,7 @@ class InterruptScreen(Screen[dict[str, Any]]):
         height: 6;
     }
 
-    InterruptScreen #interrupt-buttons {
+    InterruptScreen > #interrupt-buttons {
         dock: bottom;
         height: 3;
         padding: 1 0 0 0;
@@ -230,15 +234,24 @@ class InterruptScreen(Screen[dict[str, Any]]):
 
     def compose(self) -> ComposeResult:
         prompt = str(self._form.get("prompt") or "Please respond:")
-        yield Static(prompt, classes="interrupt-prompt")
-        with VerticalScroll(id="interrupt-body"):
-            for field in self._fields:
-                widget = self._compose_field(field)
-                if widget is not None:
-                    yield widget
-        with Horizontal(id="interrupt-buttons"):
-            yield Button("Submit", id="submit", variant="primary")
-            yield Button("Cancel", id="cancel")
+        yield Static(prompt, classes="interrupt-prompt", id="interrupt-prompt")
+        yield VerticalScroll(
+            *self._compose_field_widgets(),
+            id="interrupt-body",
+        )
+        yield Horizontal(
+            Button("Submit", id="submit", variant="primary"),
+            Button("Cancel", id="cancel"),
+            id="interrupt-buttons",
+        )
+
+    def _compose_field_widgets(self) -> list[Any]:
+        widgets: list[Any] = []
+        for field in self._fields:
+            widget = self._compose_field(field)
+            if widget is not None:
+                widgets.append(widget)
+        return widgets
 
     def action_submit(self) -> None:
         self.dismiss(self._collect())
