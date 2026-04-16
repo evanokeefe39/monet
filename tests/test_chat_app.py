@@ -135,16 +135,19 @@ def test_parse_approval_reply_recognises_action_keywords() -> None:
     }
 
 
-def test_parse_approval_reply_freeform_treated_as_revise() -> None:
-    assert _parse_approval_reply("please add detail") == {
-        "action": "revise",
-        "feedback": "please add detail",
-    }
+def test_parse_approval_reply_unknown_returns_none() -> None:
+    """Typos like 'aprove' must not silently fall through to revise."""
+    assert _parse_approval_reply("aprove") is None
+    assert _parse_approval_reply("please add detail") is None
 
 
 def test_parse_text_reply_approval_form_parses_action() -> None:
     payload = _parse_text_reply(_APPROVAL_FORM, "approve")
     assert payload == {"action": "approve", "feedback": ""}
+
+
+def test_parse_text_reply_approval_form_unknown_returns_none() -> None:
+    assert _parse_text_reply(_APPROVAL_FORM, "aprove") is None
 
 
 def test_parse_text_reply_single_field_takes_whole_text() -> None:
@@ -213,6 +216,36 @@ async def test_collect_resume_uses_next_prompt_submission() -> None:
         assert "approve | revise" in joined
         # User submits "approve" via the prompt.
         prompt = app.query_one("#prompt", Input)
+        prompt.value = "approve"
+        await pilot.press("enter")
+        await pilot.pause()
+        await task
+        app.exit()
+    assert result_holder["payload"] == {"action": "approve", "feedback": ""}
+
+
+async def test_collect_resume_reprompts_on_typo() -> None:
+    """A typo (``aprove``) re-asks instead of silently rejecting."""
+    import asyncio
+
+    app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result_holder: dict[str, Any] = {}
+
+        async def _drive() -> None:
+            result_holder["payload"] = await app._collect_resume(_APPROVAL_FORM)
+
+        task = asyncio.create_task(_drive())
+        await pilot.pause()
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "aprove"  # typo
+        await pilot.press("enter")
+        await pilot.pause()
+        # Error line should appear, payload not yet resolved.
+        assert "didn't recognise" in "\n".join(app._transcript_lines)
+        assert "payload" not in result_holder
+        # Now type it correctly.
         prompt.value = "approve"
         await pilot.press("enter")
         await pilot.pause()

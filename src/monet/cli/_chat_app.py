@@ -217,8 +217,13 @@ def _format_form_prompt(form: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _parse_approval_reply(text: str) -> dict[str, Any]:
-    """Turn ``approve|reject|revise <feedback>`` into a resume payload."""
+def _parse_approval_reply(text: str) -> dict[str, Any] | None:
+    """Turn ``approve|reject|revise <feedback>`` into a resume payload.
+
+    Returns ``None`` when the reply doesn't match a recognised action —
+    the caller re-prompts so a typo (``aprove``) never silently becomes
+    a revise with the typo as feedback.
+    """
     head, _, rest = text.strip().partition(" ")
     head_l = head.lower()
     if head_l in {"a", "approve", "y", "yes", "ok"}:
@@ -227,20 +232,22 @@ def _parse_approval_reply(text: str) -> dict[str, Any]:
         return {"action": "reject", "feedback": ""}
     if head_l in {"revise", "rev", "edit"}:
         return {"action": "revise", "feedback": rest.strip()}
-    # Anything else: best-guess as a revise with the whole text as feedback.
-    return {"action": "revise", "feedback": text.strip()}
+    return None
 
 
 def _parse_text_reply(form: dict[str, Any], text: str) -> dict[str, Any] | None:
     """Convert raw user text into a resume payload for *form*.
 
     Returns ``None`` when *form* has a shape this parser doesn't handle
-    — the caller surfaces that as an error instead of dispatching a
-    half-formed payload.
+    OR when the reply doesn't match a recognised pattern — the caller
+    surfaces either as an error and re-prompts.
     """
     payload: dict[str, Any] = dict(_hidden_defaults(form))
     if _is_approval_form(form):
-        payload.update(_parse_approval_reply(text))
+        approval = _parse_approval_reply(text)
+        if approval is None:
+            return None
+        payload.update(approval)
         # Carry through any other visible fields with their defaults.
         for f in _visible_fields(form):
             name = str(f.get("name") or "")
@@ -708,33 +715,42 @@ class ChatApp(App[None]):
         self,
         form: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Render *form* in the transcript and parse the next user reply."""
+        """Render *form* in the transcript and parse the next user reply.
+
+        Loops on parse failure so a typo (``aprove``) becomes a re-prompt
+        rather than a silent reject.
+        """
         for line in _format_form_prompt(form):
             self._append_line(line)
-        # Pause "busy" so the user can submit; the spinner stays off
-        # until the resume kicks the next stream.
-        self._busy = False
-        self._set_spinner(False)
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str] = loop.create_future()
-        self._pending_resume = future
-        # Make sure the prompt has focus so the user can just type.
-        import contextlib
+        first = True
+        while True:
+            if not first:
+                self._append_line(
+                    "[error] didn't recognise that — reply: "
+                    "approve | revise <feedback> | reject"
+                )
+            first = False
+            # Pause "busy" so the user can submit; spinner stays off
+            # until the resume kicks the next stream.
+            self._busy = False
+            self._set_spinner(False)
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[str] = loop.create_future()
+            self._pending_resume = future
+            import contextlib
 
-        with contextlib.suppress(Exception):
-            self.query_one("#prompt", Input).focus()
-        try:
-            text = await future
-        finally:
-            self._pending_resume = None
-        # Re-arm busy state for the resume stream.
-        self._busy = True
-        self._set_spinner(True)
-        payload = _parse_text_reply(form, text)
-        if payload is None:
-            self._append_line("[error] could not parse reply for this interrupt")
-            return None
-        return payload
+            with contextlib.suppress(Exception):
+                self.query_one("#prompt", Input).focus()
+            try:
+                text = await future
+            finally:
+                self._pending_resume = None
+            payload = _parse_text_reply(form, text)
+            if payload is not None:
+                # Re-arm busy state for the resume stream.
+                self._busy = True
+                self._set_spinner(True)
+                return payload
 
     async def _drain_stream(
         self,

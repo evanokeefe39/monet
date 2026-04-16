@@ -638,7 +638,20 @@ async def approval_node(state: ChatState) -> dict[str, Any]:
 
     action = decision.get("action") or "reject"
     if action == "approve":
-        approved = {"role": "assistant", "content": "Plan approved."}
+        # Chat doesn't drive execution itself (yet) — the chat graph is
+        # planning-only. Tell the user how to run the approved plan so
+        # the experience doesn't dead-end.
+        artifact_id = str(plan_output.get("work_brief_artifact_id") or "")
+        link = f"\n→ work_brief: {_artifact_url(artifact_id)}" if artifact_id else ""
+        approved = {
+            "role": "assistant",
+            "content": (
+                "Plan approved. Chat doesn't run execution yet — start it "
+                'with `monet run "<your topic>"` (re-uses the planner) '
+                "or call `MonetClient.run('default', task_input(topic, ''))`."
+                f"{link}"
+            ),
+        }
         return {
             "messages": [plan_message, approved],
             "last_plan_output": None,
