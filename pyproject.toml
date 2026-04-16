@@ -60,7 +60,7 @@ examples = [
     "langchain-groq>=0.2",
     "tavily-python>=0.5",
     "exa-py>=1.0",
-    "python-dotenv>=1.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.urls]
