@@ -15,7 +15,9 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
+
+_BASELINE_REVISION = "0001_baseline"
 
 
 def _alembic_config(db_url: str | None = None) -> Config:
@@ -48,9 +50,42 @@ def apply_migrations(db_url: str) -> None:
 
     Always dispatches with a sync driver URL to avoid nested asyncio
     loops when invoked from within an async context.
+
+    Detects the pre-alembic case — ``artifacts`` table present but no
+    ``alembic_version`` row — and auto-stamps the baseline before
+    running later revisions. Otherwise the baseline ``CREATE TABLE
+    artifacts`` would crash with ``table already exists`` every boot
+    on upgraded installs.
     """
-    cfg = _alembic_config(_sync_url(db_url))
+    sync_url = _sync_url(db_url)
+    cfg = _alembic_config(sync_url)
+    if _is_pre_alembic(sync_url):
+        # Stamp the baseline revision so later revisions run on top
+        # of the existing legacy schema. Does not re-create tables.
+        command.stamp(cfg, _BASELINE_REVISION)
     command.upgrade(cfg, "head")
+
+
+def _is_pre_alembic(sync_url: str) -> bool:
+    """True if the DB has an ``artifacts`` table but no recorded revision.
+
+    Covers two legacy cases seen in the wild:
+
+    - ``alembic_version`` table missing entirely (pre-alembic install).
+    - ``alembic_version`` present but empty (aborted / interrupted boot
+      before the first ``command.upgrade`` could insert a row).
+    """
+    engine = create_engine(sync_url)
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        if "artifacts" not in tables:
+            return False
+        with engine.connect() as conn:
+            mc = MigrationContext.configure(conn)
+            return mc.get_current_revision() is None
+    finally:
+        engine.dispose()
 
 
 def current_revision(db_url: str) -> str | None:

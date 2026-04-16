@@ -17,24 +17,23 @@ import pytest
 from monet.client import Interrupt, MonetClient, RunComplete, RunFailed
 from monet.client._wire import task_input
 
-# Known open issues preventing these from passing reliably:
+# Remaining open issue preventing reliable pass: triage nondeterminism
+# — the stock planner/fast prompt sometimes classifies an explicitly
+# multi-step topic as ``simple``, short-circuiting past planning so no
+# Interrupt is emitted. Tracked as I7.
 #
-# 1. Triage nondeterminism — the stock planner/fast prompt sometimes
-#    classifies even an explicitly multi-step topic as ``simple``,
-#    short-circuiting past planning so no Interrupt is emitted.
-# 2. ``client.resume(...)`` races with the still-draining ``client.run``
-#    iterator: by the time resume reaches Aegra, the thread has moved
-#    past the interrupt and the server responds 400
-#    ``Cannot resume: thread is not in interrupted state``.
+# The former resume/stream race (I6) is resolved —
+# ``MonetClient._await_interrupted_status`` polls the thread row until
+# Aegra commits ``status="interrupted"`` before dispatching resume, so
+# the prior 400 race is now a deterministic no-op when hit.
 #
-# Both need harness changes (prompt-level stub or full iterator
-# cancellation before resume). Track B's graph-side correctness is
-# already validated by ``tests/test_default_compound_graph.py`` and the
-# auto-approve E2E-01; leaving these HITL scenarios as ``xfail`` until
-# the harness tweak lands.
+# Track B's graph-side correctness is already validated by
+# ``tests/test_default_compound_graph.py`` and the auto-approve E2E-01;
+# leaving these HITL scenarios as ``xfail`` until the triage prompt
+# tweak (I7) lands.
 pytestmark = pytest.mark.xfail(
     reason=(
-        "e2e HITL harness: triage nondeterminism + resume/stream race. "
+        "e2e HITL harness: triage nondeterminism (I7). "
         "Unit-level coverage in test_default_compound_graph.py."
     ),
     strict=False,

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -20,8 +21,14 @@ import click
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Any
 
-from monet._ports import STANDARD_DEV_PORT, state_file
+from monet._ports import (
+    STANDARD_DEV_PORT,
+    STANDARD_POSTGRES_PORT,
+    STANDARD_REDIS_PORT,
+    state_file,
+)
 from monet.cli._setup import check_env
 
 
@@ -45,12 +52,22 @@ from monet.cli._setup import check_env
     default=False,
     help="Show raw Aegra server output instead of monet's curated log.",
 )
+@click.option(
+    "--clean",
+    is_flag=True,
+    default=False,
+    help=(
+        "Wipe this example's Postgres/Redis volumes before starting. "
+        "Use to drop checkpoints, threads, and runs from prior sessions."
+    ),
+)
 @click.pass_context
 def dev(
     ctx: click.Context,
     port: int,
     config_path: str | None,
     verbose: bool,
+    clean: bool,
 ) -> None:
     """Start the Aegra dev server with monet's default graphs.
 
@@ -82,13 +99,19 @@ def dev(
             "aegra-cli not found.\nInstall with: pip install aegra-cli"
         )
 
+    # Port preflight — a second ``monet dev`` on the standard ports
+    # would silently fail partway through (Aegra boots but Postgres
+    # bind conflicts, or vice versa). Fail loudly now so the user
+    # knows to stop the other instance.
+    _check_ports_free(port)
+
     # Build merged config.
+    cwd = Path.cwd()
     if config_path is not None:
         # Explicit config — use as-is, no merging.
         resolved_config = Path(config_path)
     else:
         config = default_config()
-        cwd = Path.cwd()
 
         # Merge with user's aegra.json or langgraph.json if present.
         user_config_path = cwd / "aegra.json"
@@ -117,14 +140,43 @@ def dev(
         _teardown_previous(current_compose)
         _record_active_example(current_compose)
 
+    # --clean removes this example's Postgres/Redis volumes so the
+    # next boot starts with a fresh checkpoint store. Stop the
+    # current example's containers first so the volumes detach.
+    if clean:
+        if current_compose is not None and current_compose.exists():
+            _stop_compose_containers(current_compose)
+        _wipe_example_volumes(cwd.name)
+
     cmd = ["aegra", "dev", "--config", str(resolved_config), "--port", str(port)]
 
-    if verbose:
-        click.echo(f"Starting dev server on port {port}... (verbose)")
-        sys.exit(subprocess.call(cmd))
+    # Every example's compose lives at ``<example>/.monet/docker-compose.yml``,
+    # so Docker defaults the project name to ``.monet`` → ``monet`` for every
+    # one of them. That collapses all examples onto the same
+    # ``monet_postgres_data`` volume and they collide on first launch after
+    # a switch. Pin the project name to the example's directory so each
+    # example gets its own namespaced volumes. Derive from cwd rather than
+    # the compose path — on first boot Aegra has not generated the compose
+    # yet, so ``current_compose`` is ``None``.
+    compose_env = os.environ.copy()
+    compose_env["COMPOSE_PROJECT_NAME"] = cwd.name
 
-    click.echo(f"Starting dev server on port {port}...")
-    sys.exit(_run_curated(cmd, port))
+    try:
+        if verbose:
+            click.echo(f"Starting dev server on port {port}... (verbose)")
+            exit_code = subprocess.call(cmd, env=compose_env)
+        else:
+            click.echo(f"Starting dev server on port {port}...")
+            exit_code = _run_curated(cmd, port, env=compose_env)
+    finally:
+        # Tear down the current example's docker stack on exit so
+        # Postgres/Redis containers don't linger after Ctrl-C. Volumes
+        # are preserved; re-entering the example keeps its data.
+        if current_compose is not None:
+            click.echo(f"Tearing down: {current_compose}")
+            _stop_compose_containers(current_compose)
+            _clear_active_example()
+    sys.exit(exit_code)
 
 
 @dev.command("down")
@@ -172,25 +224,41 @@ def _current_compose_path(aegra_config: Path) -> Path | None:
     return None
 
 
-def _read_active_example() -> Path | None:
-    """Return the compose path of the currently active example, if any."""
+def _read_active_state() -> dict[str, Any]:
+    """Return the parsed ``state.json`` contents, or an empty dict."""
     sf = state_file()
     if not sf.exists():
-        return None
+        return {}
     try:
         data = json.loads(sf.read_text())
     except (OSError, json.JSONDecodeError):
-        return None
-    compose = data.get("active_compose")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_active_example() -> Path | None:
+    """Return the compose path of the currently active example, if any."""
+    compose = _read_active_state().get("active_compose")
     if not compose:
         return None
     return Path(compose)
 
 
+def _read_active_pid() -> int | None:
+    """Return the PID of the currently active ``monet dev`` process, if any."""
+    raw = _read_active_state().get("pid")
+    if isinstance(raw, int):
+        return raw
+    return None
+
+
 def _record_active_example(compose: Path) -> None:
-    """Persist ``compose`` as the active example for later teardown."""
+    """Persist ``compose`` + this process's PID as the active example."""
     sf = state_file()
-    payload: dict[str, str] = {"active_compose": str(compose)}
+    payload: dict[str, Any] = {
+        "active_compose": str(compose),
+        "pid": os.getpid(),
+    }
     with contextlib.suppress(OSError):
         sf.write_text(json.dumps(payload, indent=2))
 
@@ -200,6 +268,44 @@ def _clear_active_example() -> None:
     sf = state_file()
     with contextlib.suppress(OSError):
         sf.write_text(json.dumps({}))
+
+
+def _wipe_example_volumes(project: str) -> None:
+    """Remove the Postgres + Redis named volumes for *project*.
+
+    Volume names follow Docker Compose's convention
+    ``<project>_<volume_name>``. ``docker volume rm`` is idempotent
+    via a suppressed non-zero exit, so missing volumes no-op.
+    """
+    volumes = [f"{project}_postgres_data", f"{project}_redis_data"]
+    for name in volumes:
+        subprocess.run(
+            ["docker", "volume", "rm", name],
+            check=False,
+            capture_output=True,
+        )
+    click.echo(f"Wiped volumes: {', '.join(volumes)}")
+
+
+def _kill_process_tree(pid: int) -> None:
+    """Best-effort kill of a process + its descendants.
+
+    Silently no-ops if the process no longer exists. Used when
+    reclaiming ports from a stale ``monet dev`` whose containers were
+    taken down but whose parent process (Aegra + uvicorn reloader)
+    still holds :2026.
+    """
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            check=False,
+            capture_output=True,
+        )
+    else:
+        import signal
+
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)
 
 
 def _teardown_previous(current: Path) -> None:
@@ -263,7 +369,11 @@ def _stop_compose_containers(compose: Path) -> bool:
     return stopped > 0
 
 
-def _run_curated(cmd: list[str], port: int) -> int:
+def _run_curated(
+    cmd: list[str],
+    port: int,
+    env: dict[str, str] | None = None,
+) -> int:
     """Run the Aegra subprocess and emit a simplified, monet-branded log.
 
     Readiness is detected by probing the server's ``/health`` endpoint.
@@ -273,7 +383,7 @@ def _run_curated(cmd: list[str], port: int) -> int:
     # Force utf-8 on the child process stdout so emojis in langgraph output
     # don't crash on Windows cp1252 consoles before we get a chance to filter.
     # PYTHONUNBUFFERED=1 ensures any pass-through error lines flush promptly.
-    env = os.environ.copy()
+    env = dict(env) if env is not None else os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env["PYTHONUNBUFFERED"] = "1"
 
@@ -441,3 +551,70 @@ _LOGO = r"""
 def _print_logo() -> None:
     """Print the monet CLI logo."""
     click.echo(_LOGO)
+
+
+def _check_ports_free(dev_port: int) -> None:
+    """Ensure the standard monet dev ports are free, reclaiming if needed.
+
+    If any of the standard ports (2026, 5432, 6379) is already bound
+    AND ``~/.monet/state.json`` points to a known monet example, tear
+    that example's containers down and proceed — this handles the
+    common "Ctrl-C didn't fully close the last run" case on Windows.
+
+    If ports are still bound after that (or were bound by an unrelated
+    process to begin with), fail fast with a clear message.
+    """
+    busy = _busy_standard_ports(dev_port)
+    if not busy:
+        return
+
+    previous = _read_active_example()
+    previous_pid = _read_active_pid()
+    if previous is not None and previous.exists():
+        click.echo(f"Reclaiming standard ports from previous monet dev: {previous}")
+        # Kill the parent process tree first — that holds :2026 via
+        # uvicorn. Stopping only the docker containers leaves a zombie
+        # Aegra bound to the host port.
+        if previous_pid is not None:
+            _kill_process_tree(previous_pid)
+        _stop_compose_containers(previous)
+        _clear_active_example()
+        # Give the OS a beat to release the host-port bindings before
+        # re-checking. One second is enough in practice on Windows.
+        time.sleep(1.0)
+        busy = _busy_standard_ports(dev_port)
+        if not busy:
+            return
+
+    lines = [f"  :{p} ({label})" for p, label in busy]
+    detail = "\n".join(lines)
+    raise click.ClickException(
+        "Standard monet dev ports are already in use:\n"
+        f"{detail}\n\n"
+        "No tracked monet example was able to free them — another "
+        "process is holding these ports. Stop it (check `docker ps` "
+        "and any running `monet dev`), then retry."
+    )
+
+
+def _busy_standard_ports(dev_port: int) -> list[tuple[int, str]]:
+    """Return the (port, label) pairs currently bound on localhost."""
+    candidates = [
+        (dev_port, "Aegra dev server"),
+        (STANDARD_POSTGRES_PORT, "Postgres"),
+        (STANDARD_REDIS_PORT, "Redis"),
+    ]
+    return [(p, label) for p, label in candidates if _port_in_use(p)]
+
+
+def _port_in_use(port: int) -> bool:
+    """True if ``port`` is currently bound on localhost."""
+    # Use connect() rather than bind() — bind() on Windows succeeds even
+    # for ports held by another process due to SO_REUSEADDR quirks.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        try:
+            sock.connect(("127.0.0.1", port))
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            return False
+        return True

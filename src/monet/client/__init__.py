@@ -20,6 +20,7 @@ Typical library usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from typing import TYPE_CHECKING, Any, cast
@@ -285,6 +286,12 @@ class MonetClient:
             raise AmbiguousInterrupt(run_id, list(nxt))
         if nxt[0] != tag:
             raise InterruptTagMismatch(run_id, expected=nxt[0], got=tag)
+
+        # Checkpointer exposes `next` the moment the graph hits interrupt(),
+        # but Aegra's resume validator rejects until ThreadORM.status is
+        # committed to "interrupted" via finalize_run. Poll briefly so the
+        # failure mode is a deterministic timeout, not a 400 race.
+        await self._await_interrupted_status(thread)
 
         _log.info(
             "resume",
@@ -613,3 +620,31 @@ class MonetClient:
         if not tid:
             raise RunNotInterrupted(run_id)
         return tid, graph_id
+
+    async def _await_interrupted_status(
+        self,
+        thread_id: str,
+        *,
+        timeout: float = 3.0,
+        interval: float = 0.05,
+    ) -> None:
+        """Poll ``thread.status`` until ``"interrupted"`` or timeout.
+
+        Aegra's resume validator rejects unless the thread row is
+        committed to ``status="interrupted"``. That commit runs after
+        the graph stream exits but before the broker "end" event; in
+        practice scheduling can leave a brief window where the client
+        has observed the interrupt but the DB has not.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            thread = await self._client.threads.get(thread_id)
+            if thread.get("status") == "interrupted":
+                return
+            if loop.time() >= deadline:
+                raise MonetClientError(
+                    f"thread {thread_id!r} did not reach "
+                    f"'interrupted' status within {timeout}s"
+                )
+            await asyncio.sleep(interval)
