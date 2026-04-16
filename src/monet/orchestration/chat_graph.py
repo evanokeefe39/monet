@@ -31,7 +31,10 @@ from pydantic import BaseModel, Field
 
 from monet.config import ChatConfig
 from monet.orchestration._invoke import invoke_agent
+from monet.orchestration._state import _append_reducer
+from monet.orchestration.execution_graph import build_execution_subgraph
 from monet.signals import SignalType
+from monet.types import ArtifactPointer, find_artifact
 
 PLAN_MAX_REVISIONS = 3
 #: Ceiling on follow-up question rounds the planner may request per turn.
@@ -100,6 +103,14 @@ class ChatState(TypedDict, total=False):
     plan_revisions: int
     plan_feedback: str | None
     last_plan_output: dict[str, Any] | None
+    # Execution-phase fields. Populated by ``planner_node`` from the
+    # planner's keyed ``work_brief`` artifact, consumed by the
+    # execution subgraph mounted as the ``execution`` node.
+    work_brief_pointer: ArtifactPointer | None
+    routing_skeleton: dict[str, Any] | None
+    completed_node_ids: list[str]
+    wave_results: Annotated[list[dict[str, Any]], _append_reducer]
+    wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
 
 
 class ChatTriageResult(BaseModel):
@@ -493,9 +504,16 @@ async def planner_node(state: ChatState) -> dict[str, Any]:
             "pending_questions": None,
             **cleared,
         }
+    # Pull the FULL ArtifactPointer from result.artifacts (not just the
+    # id from the dict output) so the execution subgraph can resolve
+    # the work brief without a second store lookup.
+    artifacts = getattr(result, "artifacts", ()) or ()
+    pointer = find_artifact(tuple(artifacts), "work_brief")
     return {
         "last_plan_output": output,
         "pending_questions": None,
+        "work_brief_pointer": pointer,
+        "routing_skeleton": output.get("routing_skeleton"),
         **cleared,
     }
 
@@ -638,20 +656,14 @@ async def approval_node(state: ChatState) -> dict[str, Any]:
 
     action = decision.get("action") or "reject"
     if action == "approve":
-        # Chat doesn't drive execution itself (yet) — the chat graph is
-        # planning-only. Tell the user how to run the approved plan so
-        # the experience doesn't dead-end.
-        artifact_id = str(plan_output.get("work_brief_artifact_id") or "")
-        link = f"\n→ work_brief: {_artifact_url(artifact_id)}" if artifact_id else ""
         approved = {
             "role": "assistant",
-            "content": (
-                "Plan approved. Chat doesn't run execution yet — start it "
-                'with `monet run "<your topic>"` (re-uses the planner) '
-                "or call `MonetClient.run('default', task_input(topic, ''))`."
-                f"{link}"
-            ),
+            "content": "Plan approved — running execution.",
         }
+        # Keep ``work_brief_pointer`` + ``routing_skeleton`` in state
+        # (set by planner_node). The execution subgraph mounted on the
+        # next node consumes them. ``last_plan_output`` is cleared
+        # because the plan has been consumed.
         return {
             "messages": [plan_message, approved],
             "last_plan_output": None,
@@ -766,6 +778,46 @@ async def specialist_node(state: ChatState) -> dict[str, Any]:
     }
 
 
+async def execution_summary_node(state: ChatState) -> dict[str, Any]:
+    """Render the execution subgraph's ``wave_results`` as one chat message.
+
+    Without this the user sees only ``[progress]`` lines while
+    execution runs and silence at the end. The summary lists each
+    completed node's agent + status so the chat transcript records
+    what just happened.
+    """
+    waves = state.get("wave_results") or []
+    if not waves:
+        return {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "Execution finished — no results recorded.",
+                }
+            ]
+        }
+    lines = ["Execution finished:"]
+    for entry in waves:
+        if not isinstance(entry, dict):
+            continue
+        node_id = str(entry.get("node_id") or "?")
+        agent_id = str(entry.get("agent_id") or "?")
+        result = entry.get("result") or {}
+        success = (
+            bool(result.get("success", True)) if isinstance(result, dict) else True
+        )
+        marker = "ok" if success else "fail"
+        artifacts = result.get("artifacts") if isinstance(result, dict) else None
+        link = ""
+        if isinstance(artifacts, list | tuple):
+            for a in artifacts:
+                if isinstance(a, dict) and a.get("artifact_id"):
+                    link = f" → {_artifact_url(str(a['artifact_id']))}"
+                    break
+        lines.append(f"  {marker} {node_id} ({agent_id}){link}")
+    return {"messages": [{"role": "assistant", "content": "\n".join(lines)}]}
+
+
 # --- Edge routers ---------------------------------------------------------
 
 
@@ -803,13 +855,18 @@ def _route_after_planner(state: ChatState) -> str:
 
 
 def _route_after_approval(state: ChatState) -> str:
-    """Route revise back into planner; approve/reject terminate.
+    """Route revise → planner; approve → execution; reject → END.
 
-    Approval writes ``plan_feedback`` only on revise; its presence is
-    the signal to re-enter the planner loop.
+    Approval writes ``plan_feedback`` only on revise; its presence
+    routes back to the planner loop. An approved plan leaves
+    ``work_brief_pointer`` + ``routing_skeleton`` in state, which is
+    the signal to dispatch execution. Anything else (reject, missing
+    pointer, etc.) terminates the chat turn.
     """
     if state.get("plan_feedback"):
         return "planner"
+    if state.get("work_brief_pointer") and state.get("routing_skeleton"):
+        return "execution"
     return "__end__"
 
 
@@ -834,6 +891,12 @@ def build_chat_graph() -> StateGraph[ChatState]:
     graph.add_node("questionnaire", questionnaire_node)
     graph.add_node("approval", approval_node)
     graph.add_node("specialist", specialist_node)
+    # Mount the execution subgraph as a node. ChatState shares the
+    # ``work_brief_pointer``, ``routing_skeleton``, ``completed_node_ids``,
+    # ``wave_results``, and ``wave_reflections`` field names with
+    # ExecutionState so values flow through name-matching.
+    graph.add_node("execution", build_execution_subgraph().compile())
+    graph.add_node("execution_summary", execution_summary_node)
 
     graph.add_edge(START, "parse")
     graph.add_conditional_edges(
@@ -869,9 +932,12 @@ def build_chat_graph() -> StateGraph[ChatState]:
         _route_after_approval,
         {
             "planner": "planner",
+            "execution": "execution",
             "__end__": END,
         },
     )
+    graph.add_edge("execution", "execution_summary")
+    graph.add_edge("execution_summary", END)
     graph.add_edge("respond", END)
     graph.add_edge("specialist", END)
     return graph

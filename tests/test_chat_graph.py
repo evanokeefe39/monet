@@ -445,6 +445,101 @@ async def test_approval_node_reject_terminates() -> None:
     assert "plan_feedback" not in out
 
 
+async def test_approval_node_approve_keeps_pointer_and_skeleton_for_execution() -> None:
+    """Approve returns no field deltas for pointer/skeleton (kept in state)."""
+    plan = {"goal": "Do it", "routing_skeleton": {"goal": "Do it", "nodes": []}}
+    with patch(
+        "monet.orchestration.chat_graph.interrupt",
+        return_value={"action": "approve"},
+    ):
+        out = await approval_node({"last_plan_output": plan})
+    # Approval clears the consumed plan output but does NOT clear the
+    # pointer / skeleton — the execution node reads those.
+    assert out["last_plan_output"] is None
+    assert "work_brief_pointer" not in out
+    assert "routing_skeleton" not in out
+
+
+def test_route_after_approval_routes_execution_when_pointer_present() -> None:
+    from monet.orchestration.chat_graph import _route_after_approval
+
+    state: dict[str, Any] = {
+        "work_brief_pointer": {"artifact_id": "abc", "url": "x"},
+        "routing_skeleton": {"goal": "g", "nodes": []},
+    }
+    assert _route_after_approval(state) == "execution"  # type: ignore[arg-type]
+
+
+def test_route_after_approval_terminates_when_pointer_missing() -> None:
+    from monet.orchestration.chat_graph import _route_after_approval
+
+    assert _route_after_approval({}) == "__end__"
+
+
+def test_route_after_approval_revise_wins_over_execution() -> None:
+    from monet.orchestration.chat_graph import _route_after_approval
+
+    state: dict[str, Any] = {
+        "plan_feedback": "narrow it",
+        "work_brief_pointer": {"artifact_id": "abc", "url": "x"},
+        "routing_skeleton": {"goal": "g", "nodes": []},
+    }
+    assert _route_after_approval(state) == "planner"  # type: ignore[arg-type]
+
+
+async def test_planner_node_writes_pointer_and_skeleton_from_artifact() -> None:
+    """planner_node extracts the full ArtifactPointer from result.artifacts."""
+    pointer = {"artifact_id": "abc-123", "url": "/v1/abc-123", "key": "work_brief"}
+    skel = {"goal": "g", "nodes": []}
+    with patch(
+        "monet.orchestration.chat_graph.invoke_agent",
+        AsyncMock(
+            return_value=_result(
+                output={
+                    "kind": "plan",
+                    "work_brief_artifact_id": "abc-123",
+                    "routing_skeleton": skel,
+                },
+                artifacts=(pointer,),
+            )
+        ),
+    ):
+        out = await planner_node({"messages": [{"role": "user", "content": "go"}]})
+    assert out["work_brief_pointer"] == pointer
+    assert out["routing_skeleton"] == skel
+
+
+async def test_execution_summary_node_renders_wave_results() -> None:
+    from monet.orchestration.chat_graph import execution_summary_node
+
+    state: dict[str, Any] = {
+        "wave_results": [
+            {
+                "node_id": "research_topic",
+                "agent_id": "researcher",
+                "result": {"success": True, "artifacts": []},
+            },
+            {
+                "node_id": "qa_report",
+                "agent_id": "qa",
+                "result": {"success": False},
+            },
+        ]
+    }
+    out = await execution_summary_node(state)  # type: ignore[arg-type]
+    msg = out["messages"][0]["content"]
+    assert "Execution finished" in msg
+    assert "ok research_topic (researcher)" in msg
+    assert "fail qa_report (qa)" in msg
+
+
+async def test_execution_summary_node_no_results_one_line() -> None:
+    from monet.orchestration.chat_graph import execution_summary_node
+
+    out = await execution_summary_node({})  # type: ignore[arg-type]
+    assert "no results" in out["messages"][0]["content"].lower()
+
+
 async def test_approval_node_revise_writes_feedback_and_bumps_revisions() -> None:
     plan = {"goal": "Do it"}
     with patch(
