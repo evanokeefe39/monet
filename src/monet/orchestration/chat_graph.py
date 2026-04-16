@@ -802,12 +802,12 @@ async def execution_summary_node(state: ChatState) -> dict[str, Any]:
             continue
         node_id = str(entry.get("node_id") or "?")
         agent_id = str(entry.get("agent_id") or "?")
-        result = entry.get("result") or {}
-        success = (
-            bool(result.get("success", True)) if isinstance(result, dict) else True
-        )
+        # ``agent_node`` writes a flat shape: ``{node_id, agent_id,
+        # command, output, artifacts, signals, success}`` — artifacts
+        # and success live on ``entry`` directly, not under ``result``.
+        success = bool(entry.get("success", True))
         marker = "ok" if success else "fail"
-        artifacts = result.get("artifacts") if isinstance(result, dict) else None
+        artifacts = entry.get("artifacts") or []
         link = ""
         if isinstance(artifacts, list | tuple):
             for a in artifacts:

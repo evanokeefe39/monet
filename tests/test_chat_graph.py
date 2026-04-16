@@ -510,6 +510,7 @@ async def test_planner_node_writes_pointer_and_skeleton_from_artifact() -> None:
 
 
 async def test_execution_summary_node_renders_wave_results() -> None:
+    """Summary reads ``agent_node``'s flat shape (artifacts/success at top)."""
     from monet.orchestration.chat_graph import execution_summary_node
 
     state: dict[str, Any] = {
@@ -517,19 +518,22 @@ async def test_execution_summary_node_renders_wave_results() -> None:
             {
                 "node_id": "research_topic",
                 "agent_id": "researcher",
-                "result": {"success": True, "artifacts": []},
+                "success": True,
+                "artifacts": [{"artifact_id": "abc-123", "url": "/v1/abc-123"}],
             },
             {
                 "node_id": "qa_report",
                 "agent_id": "qa",
-                "result": {"success": False},
+                "success": False,
+                "artifacts": [],
             },
         ]
     }
     out = await execution_summary_node(state)  # type: ignore[arg-type]
     msg = out["messages"][0]["content"]
     assert "Execution finished" in msg
-    assert "ok research_topic (researcher)" in msg
+    assert "ok research_topic (researcher) → " in msg
+    assert "abc-123" in msg
     assert "fail qa_report (qa)" in msg
 
 
