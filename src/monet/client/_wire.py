@@ -99,7 +99,14 @@ async def stream_run(
     Pass either *input* (to start a new run) or *command* (to resume
     an interrupt).
     """
-    kwargs: dict[str, Any] = {"stream_mode": ["updates", "custom"]}
+    kwargs: dict[str, Any] = {
+        "stream_mode": ["updates", "custom"],
+        # ``stream_subgraphs=True`` surfaces ``custom`` events emitted
+        # inside subgraphs (e.g. ``emit_progress`` from agents running
+        # under chat's execution subgraph). Without it, only top-level
+        # graph events reach the client.
+        "stream_subgraphs": True,
+    }
     if command is not None:
         kwargs["command"] = command
     else:
