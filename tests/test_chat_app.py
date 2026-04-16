@@ -220,6 +220,87 @@ async def test_interrupt_screen_focuses_first_field_on_mount() -> None:
         host.exit()
 
 
+async def test_interrupt_screen_tab_moves_focus_across_fields() -> None:
+    """Tab cycles focus from RadioSet → TextArea → Submit on the screen.
+
+    Regression guard for the report that Tab / click / arrow keys did
+    nothing on the plan-approval screen in a real terminal.
+    """
+    form: Any = {
+        "prompt": "Approve?",
+        "fields": [
+            {
+                "name": "action",
+                "type": "radio",
+                "options": [{"value": "approve", "label": "Approve"}],
+                "default": "approve",
+            },
+            {
+                "name": "feedback",
+                "type": "textarea",
+                "default": "",
+            },
+        ],
+    }
+
+    class _Host(ChatApp):
+        def __init__(self) -> None:
+            super().__init__(client=_fake_client(), thread_id="t")
+
+        def on_mount(self) -> None:
+            super().on_mount()
+            self.push_screen(InterruptScreen(form), lambda _r: None)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        # First focus lands on the RadioSet.
+        radio = host.screen.query_one("#f-action")
+        assert radio.has_focus
+        # Tab moves off the RadioSet. Pressing Tab twice should land
+        # somewhere other than the initial radio.
+        await pilot.press("tab")
+        await pilot.pause()
+        assert not radio.has_focus, "Tab did not move focus away from RadioSet"
+        host.exit()
+
+
+async def test_interrupt_screen_ctrl_s_submits() -> None:
+    """ctrl+s fires the submit action without needing to click."""
+    form: Any = {
+        "prompt": "Approve?",
+        "fields": [
+            {
+                "name": "action",
+                "type": "radio",
+                "options": [{"value": "approve", "label": "Approve"}],
+                "default": "approve",
+            },
+        ],
+    }
+
+    captured: dict[str, Any] = {}
+
+    def _done(result: dict[str, Any] | None) -> None:
+        captured["result"] = result or {}
+
+    class _Host(ChatApp):
+        def __init__(self) -> None:
+            super().__init__(client=_fake_client(), thread_id="t")
+
+        def on_mount(self) -> None:
+            super().on_mount()
+            self.push_screen(InterruptScreen(form), _done)
+
+    host = _Host()
+    async with host.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        host.exit()
+    assert captured["result"]["action"] == "approve"
+
+
 async def test_check_action_disables_tab_on_sub_screen() -> None:
     """Priority Tab binding must not steal events from InterruptScreen."""
     form: Any = {
