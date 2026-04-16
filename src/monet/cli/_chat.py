@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
+import httpx
 
 if TYPE_CHECKING:
     from monet.client import MonetClient
@@ -118,6 +119,18 @@ def chat(
         )
     except KeyboardInterrupt:
         return
+    except (httpx.ConnectError, httpx.TimeoutException, ConnectionError, OSError):
+        click.secho(
+            f"Cannot reach monet server at {url}.",
+            err=True,
+            fg="red",
+        )
+        click.secho(
+            "Start it with `monet dev` and try again.",
+            err=True,
+            dim=True,
+        )
+        raise SystemExit(2) from None
 
 
 async def _chat_main(
