@@ -134,17 +134,20 @@ def dev(
 
     # Before aegra starts the current example's stack, tear down any
     # previously-active example stack so the standard ports (5432, 6379)
-    # are free. Only one example may run at a time.
-    current_compose = _current_compose_path(resolved_config)
-    if current_compose is not None:
-        _teardown_previous(current_compose)
-        _record_active_example(current_compose)
+    # are free. Only one example may run at a time. Derive the compose
+    # path from convention (cwd/.monet/docker-compose.yml) rather than
+    # by scanning — on first boot aegra hasn't generated it yet, and an
+    # unrelated docker-compose.yml in the example root (e.g. local's
+    # langfuse tracing stack) must not be picked up by mistake.
+    current_compose = (cwd / ".monet" / "docker-compose.yml").resolve()
+    _teardown_previous(current_compose)
+    _record_active_example(current_compose)
 
     # --clean removes this example's Postgres/Redis volumes so the
     # next boot starts with a fresh checkpoint store. Stop the
     # current example's containers first so the volumes detach.
     if clean:
-        if current_compose is not None and current_compose.exists():
+        if current_compose.exists():
             _stop_compose_containers(current_compose)
         _wipe_example_volumes(cwd.name)
 
@@ -172,10 +175,9 @@ def dev(
         # Tear down the current example's docker stack on exit so
         # Postgres/Redis containers don't linger after Ctrl-C. Volumes
         # are preserved; re-entering the example keeps its data.
-        if current_compose is not None:
-            click.echo(f"Tearing down: {current_compose}")
-            _stop_compose_containers(current_compose)
-            _clear_active_example()
+        click.echo(f"Tearing down: {current_compose}")
+        _stop_compose_containers(current_compose)
+        _clear_active_example()
     sys.exit(exit_code)
 
 
@@ -205,23 +207,6 @@ def dev_down() -> None:
 
 
 # ── state tracking + teardown ───────────────────────────────────────
-
-
-def _current_compose_path(aegra_config: Path) -> Path | None:
-    """Return the compose file a given aegra.json implies, if any.
-
-    Aegra's convention is ``<config-parent>/.monet/docker-compose.yml``
-    OR — when the aegra.json is itself inside ``.monet/`` — its sibling.
-    Returns ``None`` when no compose file is found.
-    """
-    candidates = [
-        aegra_config.parent / "docker-compose.yml",
-        aegra_config.parent.parent / "docker-compose.yml",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c.resolve()
-    return None
 
 
 def _read_active_state() -> dict[str, Any]:
