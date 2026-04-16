@@ -21,4 +21,6 @@ repos:
           - pytest>=8.0
           - click>=8.0
           - uvicorn>=0.30
+          - textual>=0.80
+          - rich>=13.0
         args: [--strict, --no-warn-unused-ignores]

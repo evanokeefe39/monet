@@ -15,6 +15,7 @@ actually picked up.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import monet.agents  # noqa: F401 — registers reference agents
@@ -67,6 +68,17 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
 # ── Server bootstrap (runs at import time) ─────────────────────────────
 _config = ServerConfig.load()
 _config.validate_for_boot()
+
+# Aegra routes stdlib ``logging`` records through structlog, so any
+# ``logging.getLogger("monet...").info(...)`` call lands in the same
+# server log stream the operator sees on stdout. But the root Python
+# logger defaults to WARNING, which silences every INFO-level monet
+# log (invoke_agent dispatch, worker claim/complete, chat node
+# transitions, etc.). Promote the ``monet`` namespace to INFO at boot
+# so operational activity is visible without a ``--verbose`` flag.
+# Respect an explicit ``MONET_LOG_LEVEL`` override for debug sessions.
+_monet_log_level = os.environ.get("MONET_LOG_LEVEL", "INFO").upper()
+logging.getLogger("monet").setLevel(getattr(logging, _monet_log_level, logging.INFO))
 
 configure_tracing(_config.observability)
 

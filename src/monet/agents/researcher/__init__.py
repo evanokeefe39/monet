@@ -43,7 +43,7 @@ MIN_RESEARCH_CONTENT_LENGTH = 500
 def _get_model(model_string: str) -> Any:
     from langchain.chat_models import init_chat_model  # type: ignore[import-not-found]
 
-    return init_chat_model(model_string)
+    return init_chat_model(model_string, max_tokens=_RESEARCHER_MAX_OUTPUT_TOKENS)
 
 
 _react_agent_cache: dict[str, Any] = {}
@@ -91,6 +91,13 @@ def _last_ai_message(messages: list[Any]) -> str:
 
 def _model_string() -> str:
     return agent_model("researcher", "google_genai:gemini-2.5-flash")
+
+
+#: Output token cap applied when the researcher synthesises its final
+#: markdown answer. Gemini Flash's default output is ~2048 tokens, which
+#: truncates longer briefings mid-sentence. Raise the cap so the chat
+#: transcript shows the whole synthesis.
+_RESEARCHER_MAX_OUTPUT_TOKENS = 8192
 
 
 async def _ainvoke_text(model_string: str, prompt: str) -> str:

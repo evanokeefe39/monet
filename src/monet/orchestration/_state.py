@@ -185,25 +185,24 @@ class RunState(TypedDict, total=False):
     """Slim public state schema for the compound default pipeline.
 
     Used as the parent state for ``build_default_graph`` — the
-    top-level graph that composes ``entry`` / ``planning`` /
-    ``execution`` subgraphs as nodes. Keys that phase subgraphs need
-    (``task``, ``triage``, ``work_brief_pointer``,
-    ``routing_skeleton``, …) flow through name-matching; fields only
-    the parent cares about pass through untouched, so user code can
-    extend via ``MyRunState(RunState, total=False)`` + extra keys and
-    add custom nodes around the built-in subgraphs.
+    top-level graph that composes ``planning`` and ``execution``
+    subgraphs as nodes. Keys that phase subgraphs need
+    (``task``, ``work_brief_pointer``, ``routing_skeleton``, …) flow
+    through name-matching; fields only the parent cares about pass
+    through untouched, so user code can extend via
+    ``MyRunState(RunState, total=False)`` + extra keys and add custom
+    nodes around the built-in subgraphs.
 
     Contract stability: additions are non-breaking (``total=False``);
     removals or renames ship with a major version bump. See
     ``docs/api/state.md`` for the versioning policy and the extension
-    pattern. Internal phase state (``EntryState``, ``PlanningState``,
-    ``ExecutionState``) stays private to the subgraph modules.
+    pattern. Internal phase state (``PlanningState``, ``ExecutionState``)
+    stays private to the subgraph modules.
     """
 
     task: str
     run_id: str
     trace_id: str
-    triage: dict[str, Any] | None
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None
     plan_approved: bool | None
@@ -212,16 +211,7 @@ class RunState(TypedDict, total=False):
     abort_reason: str | None
 
 
-# --- Three-graph supervisor topology state schemas ---
-
-
-class EntryState(TypedDict, total=False):
-    """State for the entry/triage graph."""
-
-    task: str
-    triage: dict[str, Any] | None
-    trace_id: str
-    run_id: str
+# --- Subgraph state schemas ---
 
 
 class PlanningState(TypedDict, total=False):

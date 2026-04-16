@@ -172,11 +172,24 @@ async def run_worker(
                 ):
                     handler = registry.lookup(agent_id, command)
                     if handler is None:
+                        logger.warning(
+                            "worker: no handler for %s/%s (task %s)",
+                            agent_id,
+                            command,
+                            task_id,
+                        )
                         await queue.fail(
                             task_id,
                             f"No handler for {agent_id}/{command} in worker registry",
                         )
                         return
+                    logger.info(
+                        "worker: executing %s/%s task=%s pool=%s",
+                        agent_id,
+                        command,
+                        task_id,
+                        pool,
+                    )
                     try:
                         result = await handler(record["context"])
                         # Flush progress BEFORE completing so subscribers
@@ -184,6 +197,13 @@ async def run_worker(
                         # wait_completion cleanup which terminates subscriptions.
                         await _flush_drain()
                         await queue.complete(task_id, result)
+                        logger.info(
+                            "worker: completed %s/%s task=%s success=%s",
+                            agent_id,
+                            command,
+                            task_id,
+                            getattr(result, "success", True),
+                        )
                     except Exception as exc:
                         logger.exception(
                             "Worker: unhandled exception executing %s/%s",

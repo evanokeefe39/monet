@@ -425,6 +425,7 @@ def test_server_redacted_summary_is_nested_dict() -> None:
         "artifacts",
         "observability",
         "orchestration",
+        "chat",
     }
 
 

@@ -52,16 +52,14 @@ class MyRunState(RunState, total=False):
 ```
 
 `MyRunState` is a superset of monet's public `RunState`. LangGraph
-maps shared keys (`task`, `triage`, `wave_results`, …) by name
-between the parent and each built-in subgraph. Subgraph-private
-fields never leak up; user-only fields pass through subgraph nodes
-untouched.
+maps shared keys (`task`, `wave_results`, …) by name between the
+parent and each built-in subgraph. Subgraph-private fields never
+leak up; user-only fields pass through subgraph nodes untouched.
 
 ### Subgraph composition
 
 ```python
 g = StateGraph(MyRunState)
-g.add_node("entry",     build_entry_subgraph().compile())
 g.add_node("planning",  build_planning_subgraph().compile())
 g.add_node("execution", build_execution_subgraph().compile())
 g.add_node("review",    review_node)   # user node

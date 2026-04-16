@@ -32,6 +32,7 @@ dependencies = [
     "uvicorn[standard]>=0.34",
     "click>=8.0",
     "pydantic>=2.0",
+    "textual>=0.80",
 ]
 
 [project.scripts]

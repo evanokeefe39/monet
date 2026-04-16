@@ -12,15 +12,19 @@ from typing import Any
 def default_config() -> dict[str, Any]:
     """Return the built-in Aegra config for monet's default graphs.
 
-    Serves two graphs: ``default`` (the compound entry→planning→
-    execution pipeline) and ``chat`` (the multi-turn conversational
-    graph). Also mounts monet's worker/task routes via the ``http.app``
-    custom-routes field.
+    Serves two graphs: ``default`` (the compound planning→execution
+    pipeline) and ``chat`` (the multi-turn conversational graph). The
+    chat graph's dotted path is resolved from :class:`ChatConfig` — set
+    ``MONET_CHAT_GRAPH`` or ``[chat] graph`` in ``monet.toml`` to swap
+    in an agentic implementation. Also mounts monet's worker/task
+    routes via the ``http.app`` custom-routes field.
     """
+    from monet.config import ChatConfig
+
     return {
         "dependencies": ["."],
         "graphs": {
-            "chat": "monet.server.default_graphs:build_chat_graph",
+            "chat": ChatConfig.load().graph,
             "default": "monet.server.default_graphs:build_default_graph",
         },
         "http": {
@@ -84,7 +88,7 @@ def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, 
     Aegra's graph loader only supports filesystem paths and splits on
     the first ``:``, so absolute Windows paths (``C:\\...``) break the
     parser.  This converts module-style entries like
-    ``monet.server.default_graphs:build_entry_graph`` to a POSIX
+    ``monet.server.default_graphs:build_chat_graph`` to a POSIX
     relative path from *config_dir* (the ``.monet/`` directory where
     ``aegra.json`` lives), e.g. ``../src/monet/server/default_graphs.py``.
 

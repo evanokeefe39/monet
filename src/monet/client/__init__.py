@@ -72,6 +72,37 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("monet.client")
 
+
+def _extract_interrupt_payload(state: Any) -> dict[str, Any]:
+    """Pull the first interrupt payload off a LangGraph state snapshot.
+
+    The payload lives on ``state.tasks[0].interrupts[0].value`` in the
+    LangGraph SDK response; it is not mirrored into
+    ``state.values["__interrupt__"]``. Tolerates both mapping-style and
+    attribute-style access because the SDK returns plain dicts for some
+    endpoints and pydantic-esque objects for others.
+    """
+
+    def _get(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    tasks = _get(state, "tasks") or []
+    for task in tasks:
+        interrupts = _get(task, "interrupts") or []
+        for interrupt_item in interrupts:
+            value = _get(interrupt_item, "value")
+            if isinstance(value, dict):
+                return value
+    values = _get(state, "values") or {}
+    if isinstance(values, dict):
+        fallback = values.get("__interrupt__")
+        if isinstance(fallback, dict):
+            return fallback
+    return {}
+
+
 __all__ = [
     "AgentProgress",
     "AlreadyResolved",
@@ -382,6 +413,26 @@ class MonetClient:
             return []
         return [cast("Capability", item) for item in data if isinstance(item, dict)]
 
+    async def slash_commands(self) -> list[str]:
+        """Return the client-visible slash-command vocabulary.
+
+        Mirrors :meth:`monet.core.manifest.AgentManifest.slash_commands`
+        from the server side: the framework-reserved prefixes (``/plan``)
+        followed by ``/<agent_id>:<command>`` for each declared
+        capability. Feeds the Textual chat REPL's completion suggester
+        and command palette.
+        """
+        from monet.core.manifest import RESERVED_SLASH
+
+        out: list[str] = list(RESERVED_SLASH)
+        seen: set[str] = set(out)
+        for cap in await self.list_capabilities():
+            cmd = f"/{cap['agent_id']}:{cap['command']}"
+            if cmd not in seen:
+                out.append(cmd)
+                seen.add(cmd)
+        return out
+
     async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
         """List recent runs with status and completed stages.
 
@@ -541,25 +592,90 @@ class MonetClient:
         return summaries
 
     async def send_message(self, thread_id: str, message: str) -> AsyncIterator[str]:
-        """Send a user message to a chat thread and yield response tokens."""
+        """Send a user message to a chat thread and yield response tokens.
+
+        Yields assistant message content from every node that writes to
+        ``messages`` — ``respond``, ``planner``, and ``specialist`` all
+        produce assistant replies in the chat graph, so the client
+        surfaces content from all of them uniformly.
+        """
+        async for chunk in self._stream_chat_with_input(
+            thread_id, input=chat_input(message)
+        ):
+            yield chunk
+
+    async def _stream_chat_with_input(
+        self,
+        thread_id: str,
+        *,
+        input: dict[str, Any] | None = None,
+        command: dict[str, Any] | None = None,
+    ) -> AsyncIterator[str]:
         async for mode, data in stream_run(
             self._client,
             thread_id,
             self._chat_graph_id,
-            input=chat_input(message),
+            input=input,
+            command=command,
         ):
             if mode == "error":
                 raise RuntimeError(f"server error: {data}")
             if mode == "updates" and isinstance(data, dict):
-                messages = data.get("messages") or data.get("respond", {}).get(
-                    "messages", []
+                # ``updates`` mode delivers ``{node_name: patch}`` dicts.
+                # Scan every node patch for new assistant messages.
+                patches: list[Any] = []
+                if "messages" in data:
+                    # Some server paths also emit flat state dicts.
+                    patches.append(data)
+                patches.extend(
+                    value for value in data.values() if isinstance(value, dict)
                 )
-                if isinstance(messages, list):
+                for patch in patches:
+                    messages = patch.get("messages")
+                    if not isinstance(messages, list):
+                        continue
                     for msg in messages:
                         if isinstance(msg, dict) and msg.get("role") == "assistant":
                             content = msg.get("content", "")
                             if content:
                                 yield content
+
+    async def get_chat_interrupt(self, thread_id: str) -> dict[str, Any] | None:
+        """Return the pending interrupt payload for *thread_id*, or ``None``.
+
+        Returns ``{"tag": <node name>, "values": <form-schema payload>}``
+        when the chat graph is paused inside an ``interrupt()``. Callers
+        render ``values`` via the form-schema convention and then call
+        :meth:`resume_chat` with the user's response.
+
+        The payload lives on ``state.tasks[0].interrupts[0].value`` —
+        LangGraph does not mirror it into ``state.values["__interrupt__"]``
+        so reading through :func:`get_state_values` would return ``{}``
+        and the TUI would render an empty modal.
+        """
+        state = await self._client.threads.get_state(thread_id)
+        nxt = list(state.get("next") or [])
+        if not nxt:
+            return None
+        payload = _extract_interrupt_payload(state)
+        return {"tag": nxt[0], "values": payload}
+
+    async def resume_chat(
+        self,
+        thread_id: str,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[str]:
+        """Resume a paused chat thread and yield any follow-up messages.
+
+        Sends ``Command(resume=payload)`` to the chat graph and streams
+        assistant content produced after the resume. The caller should
+        subsequently re-check :meth:`get_chat_interrupt` — the resumed
+        run may pause again (e.g. the plan-approval revise loop).
+        """
+        async for chunk in self._stream_chat_with_input(
+            thread_id, command={"resume": payload}
+        ):
+            yield chunk
 
     async def send_context(self, thread_id: str, content: str) -> None:
         """Append a system-context message to a chat thread."""

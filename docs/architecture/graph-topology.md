@@ -2,28 +2,41 @@
 
 ## Overview
 
-The system is structured as three graphs with clean handoffs between them. Each graph has a single, focused responsibility and is independently testable, restartable from its own checkpoint, and independently deployable.
+The system is structured as two pipeline graphs (`planning`, `execution`) plus a standalone `chat` graph. Each has a single, focused responsibility and is independently testable, restartable from its own checkpoint, and independently deployable.
 
-## Entry point -- triage
+Triage is a chat concern, not a pipeline concern. When a caller invokes `monet run <task>` or types `/plan <task>` in chat, they have explicitly committed to planning. There is no entry-time short-circuit that can silently short-circuit that intent — the compound default graph dispatches straight into planning.
 
-Every user message enters through a lightweight triage node. The triage node calls the planner in `fast` mode to classify the request and return a structured decision.
+## Chat graph -- conversational routing
+
+Free-form user text and slash commands both enter the chat graph. A pure-string parser handles slash commands; free-form text is routed by a small/fast LLM classifier.
 
 ```
 user message
      |
      v
-  [triage: planner/fast]
+  [parse]
+     |-- /plan <task> -----------> [planner_node]    --> END
+     |                              (invoke planner/plan, return result)
      |
-     |-- simple ----------> [responder] --> END
-     |                       (direct answer, no agent)
+     |-- /<agent>:<cmd> <task> --> [specialist_node] --> END
+     |                              (invoke <agent>/<cmd>)
      |
-     |-- bounded ----------> [direct agent, fast] --> END
-     |                       (one agent, no planning)
+     |-- /<unknown> -------------> [respond_node]    --> END
+     |                              (inline error, no LLM)
      |
-     +-- complex ----------> [PLANNING GRAPH]
+     +-- free-form text --------> [triage]
+                                    |
+                                    |-- chat ------> [respond_node]    --> END
+                                    |                 (direct LLM reply)
+                                    |
+                                    |-- planner ---> [planner_node]    --> END
+                                    |
+                                    +-- specialist-> [specialist_node] --> END
 ```
 
-Simple requests get a direct response. Bounded requests invoke a single agent without a work brief. Complex requests enter the planning graph. This prevents planning overhead from being applied to every message.
+`respond_node` makes a direct LangChain `init_chat_model` call — no `invoke_agent`, no dependency on any registered agent. `triage_node` uses structured output (`ChatTriageResult` via `with_structured_output`) against the small/fast model configured in `MONET_CHAT_TRIAGE_MODEL`. Clarification-needed triage results stay in chat with an inline follow-up question rather than escalating with unclear intent.
+
+Swap the whole chat graph with a different implementation (e.g. an agentic variant that delegates response generation to a `conversationalist` agent) via `MONET_CHAT_GRAPH=<module.path>:<factory>` or `[chat] graph = ...` in `monet.toml`.
 
 ## Planning graph
 

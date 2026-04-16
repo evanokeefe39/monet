@@ -1,24 +1,22 @@
 # Orchestration
 
-The orchestration layer integrates monet agents with LangGraph. It provides a three-graph supervisor topology, a task queue for decoupled dispatch, and pointer-only state management.
+The orchestration layer integrates monet agents with LangGraph. It provides a two-graph pipeline topology (plus a standalone chat graph), a task queue for decoupled dispatch, and pointer-only state management.
 
-## Three-graph topology
+## Topology
 
-Every user message flows through three graphs with clean handoffs:
+`monet run` and chat's `/plan` both drive the compound default graph: `planning → execution`. Triage is a chat-only concern — there is no pipeline entry-time short-circuit. Conversational routing (chat vs planner vs specialist) lives inside `build_chat_graph`.
 
-1. **Entry graph** — triage via planner/fast. Classifies as simple or complex.
-2. **Planning graph** — planner/plan generates a work brief. Human approval gate with bounded revision count.
-3. **Execution graph** — wave-based parallel execution via LangGraph `Send`. QA reflection gates. Retry budget. Signal routing.
+1. **Planning graph** — planner/plan generates a work brief pointer + routing skeleton. Human approval gate with bounded revision count; revise-with-feedback loops back to planner (max 3 rounds).
+2. **Execution graph** — wave-based parallel execution via LangGraph `Send`. QA reflection gates. Retry budget. Signal routing.
 
 See [Graph Topology](../architecture/graph-topology.md) for the full topology diagrams.
 
 ## State schemas
 
-Each graph has its own TypedDict state:
+Each subgraph has its own TypedDict state:
 
-- `EntryState` — task, triage result, trace/run IDs
-- `PlanningState` — task, work brief, planning context, human feedback, revision count
-- `ExecutionState` — work brief, phase/wave indices, wave results (append-only), wave reflections, signals, abort reason, pending context
+- `PlanningState` — task, work brief pointer, routing skeleton, planning context, human feedback, revision count
+- `ExecutionState` — work brief pointer, routing skeleton, completed node ids, wave results (append-only), wave reflections, signals, abort reason
 
 State is pointer-only: `pending_context` entries contain summaries and artifact store artifact pointers, never full content. Agents that need upstream content call `resolve_context()`.
 

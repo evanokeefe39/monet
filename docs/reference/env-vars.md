@@ -55,7 +55,15 @@ tries to instantiate a model doesn't fail far from the cause.
 
 | Variable | Type | Default | Required | Purpose |
 |---|---|---|---|---|
-| `MONET_GRAPH_{ROLE}` | string | role default | no | Override a graph role mapping. Example: `MONET_GRAPH_ENTRY=triage-v2`. |
+| `MONET_GRAPH_{ROLE}` | string | role default | no | Override a graph role mapping. Example: `MONET_GRAPH_CHAT=chat-v2`. |
+
+## Chat graph
+
+| Variable | Type | Default | Required | Purpose |
+|---|---|---|---|---|
+| `MONET_CHAT_GRAPH` | string | `monet.orchestration.chat_graph:build_chat_graph` | no | Dotted `module.path:factory` for the chat graph factory. `ChatConfig.validate_for_boot` imports the module and checks the attribute, so a typo fails fast at server boot. Swap in an agentic chat graph without code changes. **Aegra loads the factory module by filesystem path under a synthetic `aegra_graphs.*` package, so the module must only use absolute imports (`from myapp.foo import bar`), not relative imports (`from .foo import bar`) — relative imports resolve to `aegra_graphs.foo` at load time and fail.** |
+| `MONET_CHAT_RESPOND_MODEL` | string | `google_genai:gemini-2.5-flash` | no | LangChain model string (`provider:name`) for `respond_node`'s direct LLM call. |
+| `MONET_CHAT_TRIAGE_MODEL` | string | `google_genai:gemini-2.5-flash-lite` | no | Small/fast model string for `triage_node`'s structured-output classifier — free-form text routing (chat / planner / specialist) happens here, so keep the model cheap. |
 
 ## Pools
 

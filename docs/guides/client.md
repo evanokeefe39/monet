@@ -151,7 +151,7 @@ print(detail.pending_interrupt) # Interrupt | None
 from monet.pipelines.default import DefaultPipelineRunDetail
 
 view = DefaultPipelineRunDetail.from_run_detail(detail)
-print(view.triage, view.routing_skeleton, view.wave_results, view.wave_reflections)
+print(view.routing_skeleton, view.wave_results, view.wave_reflections)
 ```
 
 ### List pending decisions

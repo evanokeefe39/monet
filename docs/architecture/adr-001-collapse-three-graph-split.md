@@ -143,7 +143,40 @@ LangGraph properties this design depends on:
    parent node name and resume cleanly across the cycle.
 
 The compound graph itself is exercised by
-``tests/test_default_compound_graph.py``: simple-triage short-circuit,
-pause-at-planning-interrupt, approve-and-drive, and reject-halts-
-pipeline. End-to-end coverage against a real ``monet dev`` server
+``tests/test_default_compound_graph.py``: pause-at-planning-interrupt,
+approve-and-drive, reject-halts-pipeline, and the no-entry-node shape
+check. End-to-end coverage against a real ``monet dev`` server
 lives behind the ``e2e`` pytest marker in ``tests/e2e/``.
+
+## Addendum (2026-04-16) — Further collapse to two pipeline graphs
+
+The original collapse retained an ``entry`` subgraph whose sole job was
+``simple_triage_node`` — a planner-fast call that could short-circuit
+the pipeline back to ``END`` when the task was classified ``simple``.
+Subsequent review rejected that short-circuit:
+
+- ``monet run <task>`` and chat's ``/plan <task>`` are **explicit**
+  commitments to planning. Silently bailing out with a direct answer
+  contradicts the caller's intent.
+- Triage as a routing primitive belongs in the chat graph, where the
+  input is free-form and the routing targets (``chat`` /
+  ``planner`` / ``specialist``) span multiple dispatch modes.
+
+The ``entry`` subgraph was removed. ``build_default_graph`` is now::
+
+    build_default_graph()  →  StateGraph[RunState]
+      ├── add_node("planning",  build_planning_subgraph().compile())
+      └── add_node("execution", build_execution_subgraph().compile())
+      ├── add_edge(START, "planning")
+      ├── add_conditional_edges("planning", _route_after_planning, …)
+      └── add_edge("execution", END)
+
+Revise-with-feedback is preserved inside ``build_planning_subgraph``:
+``route_from_approval`` re-enters ``planner`` with
+``state["human_feedback"]`` attached, bounded by ``MAX_REVISIONS=3``.
+Collapsing entry does not touch planning internals.
+
+Triage moved into the chat graph as ``triage_node`` — a
+LangChain structured-output classifier that routes free-form chat
+input to ``chat`` / ``planner`` / ``specialist``. Slash commands bypass
+the triage node entirely.

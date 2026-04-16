@@ -170,6 +170,14 @@ async def invoke_agent(
     }
 
     tracer = trace.get_tracer("monet.orchestration")
+    _log.info(
+        "invoke_agent dispatch agent=%s command=%s pool=%s task_id=%s run_id=%s",
+        agent_id,
+        command,
+        pool,
+        task_id,
+        resolved_run_id,
+    )
     with tracer.start_as_current_span(
         f"agent.{agent_id}.{command}",
         attributes={
@@ -194,6 +202,15 @@ async def invoke_agent(
             result = await wait_completion(_task_queue, task_id, timeout=timeout)
             span.set_attribute("agent.success", result.success)
             span.set_attribute("agent.signal_count", len(result.signals))
+            _log.info(
+                "invoke_agent result agent=%s command=%s success=%s "
+                "signals=%d task_id=%s",
+                agent_id,
+                command,
+                result.success,
+                len(result.signals),
+                task_id,
+            )
             return result
         finally:
             progress_task.cancel()
