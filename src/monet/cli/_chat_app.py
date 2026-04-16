@@ -628,13 +628,21 @@ class ChatApp(App[None]):
     # ── Input submission ──────────────────────────────────────────
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Dispatch each submission and return immediately.
+
+        The actual chat turn / interrupt-resume work runs in a worker
+        so the Input widget's message pump stays free — otherwise a
+        long-running ``await`` (especially the ``_pending_resume`` future
+        used by HITL) would block the pump and the user could not type
+        the next message.
+        """
         text = event.value.strip()
         if not text:
             return
         event.input.value = ""
         # If a turn is mid-flight waiting on a HITL resume, hand this
-        # submission to the awaiting coroutine instead of starting a
-        # new chat turn. The resumer will print [user] for it.
+        # submission to the awaiting worker instead of starting a new
+        # chat turn. The resumer prints [user] when it consumes it.
         pending = self._pending_resume
         if pending is not None and not pending.done():
             self._pending_resume = None
@@ -643,6 +651,11 @@ class ChatApp(App[None]):
             return
         if self._busy:
             return
+        # Detach. Worker reads `_busy` itself; we don't await it here.
+        self.run_worker(self._handle_user_text(text), exclusive=False)
+
+    async def _handle_user_text(self, text: str) -> None:
+        """Run one user submission to completion in a worker context."""
         log = self.query_one("#transcript", RichLog)
         self._append_line(f"[user] {text}")
         _log.info("user submit thread=%s text=%r", self._chat_thread_id, text)
