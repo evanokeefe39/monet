@@ -181,6 +181,7 @@ class InterruptScreen(Screen[dict[str, Any]]):
 
     BINDINGS: ClassVar = [
         Binding("escape", "cancel", "Cancel", show=False),
+        Binding("ctrl+s", "submit", "Submit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -194,7 +195,8 @@ class InterruptScreen(Screen[dict[str, Any]]):
     }
 
     InterruptScreen #interrupt-body {
-        height: 1fr;
+        height: auto;
+        max-height: 1fr;
         border: round $primary;
         padding: 0 1;
     }
@@ -202,6 +204,10 @@ class InterruptScreen(Screen[dict[str, Any]]):
     InterruptScreen .field-label {
         padding-top: 1;
         color: $text-muted;
+    }
+
+    InterruptScreen TextArea {
+        height: 6;
     }
 
     InterruptScreen #interrupt-buttons {
@@ -234,6 +240,9 @@ class InterruptScreen(Screen[dict[str, Any]]):
             yield Button("Submit", id="submit", variant="primary")
             yield Button("Cancel", id="cancel")
 
+    def action_submit(self) -> None:
+        self.dismiss(self._collect())
+
     def _compose_field(self, field: Field) -> Any:
         return _build_field_widget(
             field,
@@ -246,13 +255,18 @@ class InterruptScreen(Screen[dict[str, Any]]):
 
         for widget in self._widget_index.values():
             with contextlib.suppress(Exception):
-                widget.focus()
+                # Use Screen.set_focus for explicit screen-scoped focus
+                # ownership — bare widget.focus() can race when the
+                # screen has only just been pushed.
+                self.set_focus(widget)
                 break
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "submit":
+            event.stop()
             self.dismiss(self._collect())
         elif event.button.id == "cancel":
+            event.stop()
             self.dismiss({})
 
     def action_cancel(self) -> None:
