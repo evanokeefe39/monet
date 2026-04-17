@@ -1,0 +1,11 @@
+[project]
+name = "monet-custom-stack"
+version = "0.0.0"
+description = "Fully custom agents + chat graph + pipeline on top of monet core."
+requires-python = ">=3.12"
+dependencies = [
+    "monet",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }
