@@ -62,6 +62,7 @@ from monet.cli._chat_view import (
 from monet.cli._namegen import random_chat_name
 from monet.client._events import AgentProgress
 from monet.config import MONET_CHAT_BORDER_COLOR, MONET_CHAT_PULSE
+from monet.config._user_chat import UserChatStyle as _UserChatStyle
 
 _log = logging.getLogger("monet.cli.chat")
 
@@ -230,6 +231,7 @@ class ChatApp(App[None]):
         thread_id: str,
         slash_commands: list[str] | None = None,
         history: list[dict[str, Any]] | None = None,
+        style: _UserChatStyle | None = None,
     ) -> None:
         super().__init__()
         self._client: MonetClient = client
@@ -253,11 +255,20 @@ class ChatApp(App[None]):
         # property list (see RenderStyles.ANIMATABLE) so we interpolate
         # manually via Color.blend.
         self._pulse_timers: dict[str, Any] = {}
-        # Live palette — mutable copies seeded from defaults / env so the
-        # ``/colors`` command can rebind tag styles and the pulse peak
-        # without touching module-level state.
-        self._tag_styles: dict[str, str] = dict(_DEFAULT_TAG_STYLES)
-        self._border_color_override: str = _CUSTOM_BORDER_COLOR
+        # Profile baseline — merged from built-in defaults + user profile.
+        # ``/colors reset`` returns here; individual ``/colors`` changes
+        # write to the live copies below without touching this baseline.
+        _profile = style or _UserChatStyle()
+        self._profile_tag_styles: dict[str, str] = _profile.tag_styles(
+            _DEFAULT_TAG_STYLES
+        )
+        self._profile_border_color: str = _profile.border_color or ""
+        # Live palette — starts from the profile baseline. MONET_CHAT_BORDER_COLOR
+        # env var wins over the profile for border (tmux pane differentiation).
+        self._tag_styles: dict[str, str] = dict(self._profile_tag_styles)
+        self._border_color_override: str = (
+            _CUSTOM_BORDER_COLOR or self._profile_border_color
+        )
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Disable slash-suggest bindings when a list picker is active.
@@ -431,7 +442,7 @@ class ChatApp(App[None]):
 
     def _idle_border_color(self) -> Color:
         """Dim colour used for inactive borders and as the pulse trough."""
-        return self._resolve_css_color(_IDLE_BORDER_VAR, "#475569")
+        return self._resolve_css_color(_IDLE_BORDER_VAR, "#1a1a2e")
 
     def _pulse_peak_color(self, peak_var: str) -> Color:
         """Bright colour at the crest of the pulse.
@@ -442,7 +453,7 @@ class ChatApp(App[None]):
         if self._border_color_override:
             with contextlib.suppress(Exception):
                 return Color.parse(self._border_color_override)
-        return self._resolve_css_color(peak_var, "#8b5cf6")
+        return self._resolve_css_color(peak_var, "#9b59b6")
 
     def _apply_idle_borders(self) -> None:
         """Paint both widget borders with the dim idle colour.
@@ -724,11 +735,15 @@ class ChatApp(App[None]):
         first_stream: Any,
     ) -> None:
         """Drive one user turn: stream, handle interrupts, loop until idle."""
-        await self._drain_stream(log, first_stream, source="initial")
+        had_output = await self._drain_stream(log, first_stream, source="initial")
         while True:
             pending = await self._client.chat.get_chat_interrupt(self._chat_thread_id)
             if not pending:
+                if not had_output:
+                    self._append_line("[info] (no assistant response)")
+                    _log.warning("turn ended with no output and no interrupt")
                 return
+            had_output = True  # interrupt form counts as output
             _log.info("interrupt pending tag=%s", pending.get("tag"))
             form = pending.get("values") or {}
             if not isinstance(form, dict) or not form.get("fields"):
@@ -741,7 +756,7 @@ class ChatApp(App[None]):
                 decision = {"action": "reject", "feedback": ""}
             _log.info("resume payload=%r", decision)
             stream = self._client.chat.resume_chat(self._chat_thread_id, decision)
-            await self._drain_stream(log, stream, source="resume")
+            had_output = await self._drain_stream(log, stream, source="resume")
 
     async def _collect_resume(
         self,
@@ -787,7 +802,8 @@ class ChatApp(App[None]):
         stream: Any,
         *,
         source: str,
-    ) -> None:
+    ) -> bool:
+        """Drain *stream*, render events. Returns True when something was shown."""
         streamed = False
         async for chunk in stream:
             if isinstance(chunk, AgentProgress):
@@ -807,22 +823,21 @@ class ChatApp(App[None]):
             _log.info("%s chunk len=%d", source, len(str(chunk)))
             streamed = True
         if streamed:
-            return
+            return True
         _log.info("%s stream yielded nothing; state read fallback", source)
         try:
             history = await self._client.chat.get_chat_history(self._chat_thread_id)
         except Exception as exc:
             self._append_line(f"[error] state read failed: {exc}")
             _log.exception("get_chat_history failed")
-            return
+            return True
         for msg in reversed(history):
             if isinstance(msg, dict) and msg.get("role") == "assistant":
                 content = str(msg.get("content") or "").strip()
                 if content:
                     self._append_line(f"[assistant] {content}")
-                return
-        self._append_line("[info] (no assistant response)")
-        _log.warning("%s fallback found no assistant message", source)
+                return True
+        return False
 
     # ── TUI-level slash commands ──────────────────────────────────
 
@@ -993,18 +1008,20 @@ class ChatApp(App[None]):
         Targets: ``border``, ``user``, ``assistant``, ``info``,
         ``progress``, ``error``. Colours accept any Textual-parseable
         string: hex (``#ff3366``), named (``red``, ``cyan``), or
-        ``rgb(...)``. Changes are session-only; use
-        ``MONET_CHAT_BORDER_COLOR`` for launch-time / tmux persistence.
+        ``rgb(...)``. Changes are session-only; persist them in
+        ``~/.monet/chat.toml [style]`` for a permanent profile.
         """
         parts = arg.split() if arg else []
         if not parts:
             self._print_color_palette()
             return
         if len(parts) == 1 and parts[0] == "reset":
-            self._tag_styles = dict(_DEFAULT_TAG_STYLES)
-            self._border_color_override = _CUSTOM_BORDER_COLOR
+            self._tag_styles = dict(self._profile_tag_styles)
+            self._border_color_override = (
+                _CUSTOM_BORDER_COLOR or self._profile_border_color
+            )
             self._refresh_active_pulse()
-            self._append_line("[info] colors reset to defaults")
+            self._append_line("[info] colors reset to profile")
             return
         if len(parts) != 2:
             self._append_line(
