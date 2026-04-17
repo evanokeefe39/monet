@@ -59,7 +59,7 @@ def check_env() -> None:
 def _parse_env_file(env_path: Path) -> dict[str, str]:
     """Parse a ``KEY=value`` env file, stripping quotes from values."""
     env_vars: dict[str, str] = {}
-    for raw in env_path.read_text().splitlines():
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

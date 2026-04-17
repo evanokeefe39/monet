@@ -5,8 +5,11 @@ All types used across the SDK, artifact store, and orchestration layers.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
+
+from pydantic import BaseModel, ConfigDict
 
 from .signals import SignalType
 
@@ -14,12 +17,132 @@ __all__ = [
     "AgentMeta",
     "AgentResult",
     "AgentRunContext",
+    "ApprovalAction",
     "ArtifactPointer",
+    "ChatMessage",
+    "EnvelopeField",
+    "EnvelopeFieldOption",
+    "InterruptEnvelope",
     "Signal",
     "SignalType",
     "build_artifact_pointer",
     "find_artifact",
 ]
+
+_log = logging.getLogger("monet.types")
+
+# --- Approval action (single canonical source) ---
+
+ApprovalAction = Literal["approve", "revise", "reject"]
+"""Canonical vocabulary for plan-approval HITL decisions.
+
+Both the orchestration layer (``_forms.py``) and the TUI
+(``_chat_app.py``) import from here so the literal strings live in
+exactly one place.
+"""
+
+
+# --- Chat message ---
+
+
+class ChatMessage(TypedDict):
+    """A single turn in a chat transcript (role + content)."""
+
+    role: Literal["user", "assistant", "system"]
+    content: str
+
+
+# --- Interrupt form envelope (validated wire contract) ---
+
+_KNOWN_FIELD_TYPES = frozenset(
+    {
+        "text",
+        "textarea",
+        "int",
+        "float",
+        "bool",
+        "select",
+        "radio",
+        "checkbox",
+        "date",
+        "artifact_ref",
+        "markdown",
+        "hidden",
+    }
+)
+
+
+class EnvelopeFieldOption(BaseModel):
+    """One selectable option inside a ``radio``/``checkbox``/``select`` field."""
+
+    model_config = ConfigDict(extra="allow")
+    value: str = ""
+    label: str = ""
+
+
+class EnvelopeField(BaseModel):
+    """A single input in an :class:`InterruptEnvelope`.
+
+    ``type`` is an open string for forward-compatibility — unknown types
+    are allowed and should be rendered as ``text`` by consumers that don't
+    recognise them.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    name: str = ""
+    type: str = "text"
+    label: str = ""
+    options: list[EnvelopeFieldOption] = []
+    default: Any = None
+    required: bool = True
+    help: str = ""
+    value: Any = None
+
+    def is_known_type(self) -> bool:
+        """Return True when ``type`` is in the closed field vocabulary."""
+        return self.type in _KNOWN_FIELD_TYPES
+
+
+class InterruptEnvelope(BaseModel):
+    """Validated wire contract for HITL interrupt payloads.
+
+    Graphs pass a dict to ``interrupt()``. Consumers call
+    ``InterruptEnvelope.model_validate(values)`` to get a typed view with
+    helper methods. Unknown extra fields are preserved (``extra="allow"``)
+    for forward-compatibility. Unknown ``field.type`` values are allowed
+    and should fall back to plain-text rendering.
+
+    ``protocol_version`` defaults to 1; future breaking vocab changes
+    bump the version.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    protocol_version: int = 1
+    prompt: str = ""
+    fields: list[EnvelopeField] = []
+    context: dict[str, Any] = {}
+    render: Literal["inline", "modal"] = "modal"
+
+    def is_approval_form(self) -> bool:
+        """True when the form has an ``action`` radio with approve/reject options."""
+        for f in self.fields:
+            if f.name == "action" and f.type == "radio":
+                values = {o.value for o in f.options}
+                if {"approve", "reject"}.issubset(values):
+                    return True
+        return False
+
+    @classmethod
+    def from_interrupt_values(cls, values: Any) -> InterruptEnvelope | None:
+        """Parse *values* from an interrupt payload. Returns None on failure."""
+        if not isinstance(values, dict):
+            return None
+        try:
+            return cls.model_validate(values)
+        except Exception:
+            _log.debug("InterruptEnvelope parse failed", exc_info=True)
+            return None
+
 
 # --- Signals (list-based accumulation model) ---
 

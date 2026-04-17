@@ -33,7 +33,9 @@ from monet.core.tracing import (
 )
 from monet.types import ArtifactPointer  # noqa: TC001 — runtime type for TypedDict
 
+from ._forms import build_execution_interrupt_form
 from ._invoke import invoke_agent
+from ._planner_outcome import format_signal_reasons
 from ._signal_router import EXECUTION_ROUTER
 from ._state import ExecutionState, RoutingSkeleton, SignalsSummary
 
@@ -220,11 +222,7 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
     artifacts_data = [dict(a) for a in result.artifacts]
 
     if not result.success:
-        failure_reasons = "; ".join(
-            str(s.get("reason", "")).splitlines()[0][:200]
-            for s in signals_data
-            if s.get("reason")
-        )
+        failure_reasons = "; ".join(format_signal_reasons(signals_data))
         emit_progress(
             {
                 "status": AGENT_FAILED_EVENT_STATUS,
@@ -251,14 +249,9 @@ async def collect_batch(state: ExecutionState) -> dict[str, Any]:
     """Merge node results, mark completed, summarise signals."""
     all_results = state.get("wave_results") or []
     completed = set(state.get("completed_node_ids") or [])
-    # "New" results are those not yet reflected in completed_node_ids
-    # and not in the prior failure tracker.
+    # "New" results are those not yet reflected in completed_node_ids.
     new_results = [
-        r
-        for r in all_results
-        if r.get("node_id")
-        and r["node_id"] not in completed
-        and not _is_prior_failure(state, r)
+        r for r in all_results if r.get("node_id") and r["node_id"] not in completed
     ]
 
     newly_completed = [r["node_id"] for r in new_results if r.get("success")]
@@ -288,16 +281,6 @@ async def collect_batch(state: ExecutionState) -> dict[str, Any]:
         update["abort_reason"] = f"Node failure: {reasons}"
 
     return update
-
-
-def _is_prior_failure(state: ExecutionState, result: dict[str, Any]) -> bool:
-    """Skip results already accounted for in a prior abort (should not re-handle)."""
-    # For now: rely on append-only wave_results. collect_batch is only
-    # entered after a new batch of Send() calls, so "new" results are
-    # those since the last collect. Track via a cursor on `signals`
-    # wave_item_count if needed — for v1, we use the completed_node_ids
-    # set and assume no result is reprocessed after success.
-    return False
 
 
 def route_after_collect(state: ExecutionState) -> str:
@@ -331,32 +314,7 @@ async def human_interrupt(state: ExecutionState) -> dict[str, Any]:
     """
     results = state.get("wave_results") or []
     last = results[-1] if results else {}
-    decision = interrupt(
-        {
-            "prompt": "Execution paused — retry or abort?",
-            "fields": [
-                {
-                    "name": "action",
-                    "type": "radio",
-                    "label": "Decision",
-                    "options": [
-                        {"value": "retry", "label": "Retry"},
-                        {"value": "abort", "label": "Abort"},
-                    ],
-                },
-                {
-                    "name": "feedback",
-                    "type": "textarea",
-                    "label": "Reason (optional)",
-                    "required": False,
-                },
-            ],
-            "context": {
-                "reason": "Blocking signal from node execution",
-                "last_result": last,
-            },
-        }
-    )
+    decision = interrupt(build_execution_interrupt_form(last_result=last))
     if isinstance(decision, dict) and decision.get("action") == "abort":
         return {"abort_reason": decision.get("feedback") or "Aborted by human"}
     return {}
@@ -378,11 +336,9 @@ def build_execution_subgraph(
             each batch dispatch and ``after_wave_server`` after each
             collection.
     """
-    _dispatch_inner = dispatch_node
-    _collect_inner = collect_batch
 
     async def _dispatch_with_hooks(state: ExecutionState) -> dict[str, Any]:
-        update = await _dispatch_inner(state)
+        update = await dispatch_node(state)
         if hooks:
             wave_ctx: dict[str, Any] = {
                 "completed_node_ids": list(state.get("completed_node_ids") or []),
@@ -391,7 +347,7 @@ def build_execution_subgraph(
         return update
 
     async def _collect_with_hooks(state: ExecutionState) -> dict[str, Any]:
-        update = await _collect_inner(state)
+        update = await collect_batch(state)
         if hooks:
             update["signals"] = await hooks.run("after_wave_server", update["signals"])
         return update

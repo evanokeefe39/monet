@@ -7,6 +7,7 @@ previous stack on entry (see ``src/monet/cli/_dev.py``).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Final
 
@@ -46,12 +47,31 @@ def state_file() -> Path:
     return state_dir() / "state.json"
 
 
+# ── Artifact URL ────────────────────────────────────────────────────
+
+
+def artifact_view_url(artifact_id: str) -> str:
+    """Return a clickable view URL for an artifact id.
+
+    Uses ``MONET_SERVER_URL`` when set, else defaults to the monet dev
+    port. The server exposes artifacts via
+    ``GET /api/v1/artifacts/{id}/view`` so any terminal that
+    auto-linkifies URLs can open the rendered artifact in a browser.
+    """
+    base = (
+        os.environ.get("MONET_SERVER_URL", "").rstrip("/")
+        or f"http://localhost:{STANDARD_DEV_PORT}"
+    )
+    return f"{base}/api/v1/artifacts/{artifact_id}/view"
+
+
 __all__ = [
     "MAX_INLINE_PAYLOAD_BYTES",
     "STANDARD_DEV_PORT",
     "STANDARD_LANGFUSE_PORT",
     "STANDARD_POSTGRES_PORT",
     "STANDARD_REDIS_PORT",
+    "artifact_view_url",
     "state_dir",
     "state_file",
 ]
