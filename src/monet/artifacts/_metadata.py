@@ -18,5 +18,6 @@ class ArtifactMetadata(TypedDict):
     agent_id: str | None
     run_id: str | None
     trace_id: str | None
+    thread_id: str | None
     tags: dict[str, Any]
     created_at: str  # ISO 8601

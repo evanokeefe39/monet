@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 AGENT_FAILED_EVENT_STATUS = "agent failed"
 
 
-class NodeItem(TypedDict):
+class NodeItem(TypedDict, total=False):
     """Payload sent to ``agent_node`` via ``Send()``.
 
     The worker-side ``inject_plan_context`` hook resolves the full task
@@ -64,12 +64,13 @@ class NodeItem(TypedDict):
     trace_id: str
     run_id: str
     trace_carrier: dict[str, str]
+    thread_id: str
 
 
 async def initialise_execution(
     state: ExecutionState, config: RunnableConfig
 ) -> dict[str, Any]:
-    """Validate state, attach trace context. No artifact read."""
+    """Validate state, attach trace context, source thread_id. No artifact read."""
     skeleton_raw = state.get("routing_skeleton")
     if not skeleton_raw:
         return {"abort_reason": "No routing_skeleton in execution state."}
@@ -81,6 +82,18 @@ async def initialise_execution(
     pointer = state.get("work_brief_pointer")
     if not pointer:
         return {"abort_reason": "No work_brief_pointer in execution state."}
+
+    # LangGraph / Aegra pass thread_id in the RunnableConfig. Propagate it
+    # into state so agent_node can hand it to invoke_agent; artifacts
+    # written by the agent then carry thread_id provenance automatically.
+    thread_id: str = ""
+    try:
+        configurable = (config or {}).get("configurable") or {}
+        tid = configurable.get("thread_id")
+        if isinstance(tid, str):
+            thread_id = tid
+    except Exception:
+        pass
 
     # Attach upstream trace context and open the execution-graph root span.
     upstream_carrier = extract_carrier_from_config(config)
@@ -104,6 +117,7 @@ async def initialise_execution(
         "signals": None,
         "abort_reason": None,
         "trace_carrier": carrier,
+        "thread_id": thread_id,
     }
 
 
@@ -130,6 +144,7 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
     wave_results = state.get("wave_results") or []
     results_by_id = {r["node_id"]: r for r in wave_results}
     deps_by_id = {n.id: list(n.depends_on) for n in skeleton.nodes}
+    thread_id = state.get("thread_id", "") or ""
     return [
         Send(
             "agent_node",
@@ -142,6 +157,7 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
                 trace_id=state.get("trace_id", ""),
                 run_id=state.get("run_id", ""),
                 trace_carrier=trace_carrier,
+                thread_id=thread_id,
             ),
         )
         for node in ready
@@ -216,6 +232,7 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
             ],
             trace_id=item.get("trace_id", ""),
             run_id=item.get("run_id", ""),
+            thread_id=item.get("thread_id") or None,
         )
 
     signals_data = [dict(s) for s in result.signals]

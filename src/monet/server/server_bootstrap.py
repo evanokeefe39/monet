@@ -1,15 +1,18 @@
-"""Default graph exports for Aegra / LangGraph dev servers.
+"""Server bootstrap + default graph factories for Aegra / LangGraph.
 
-Point ``aegra.json`` (or ``langgraph.json``) at this module to serve the
-four monet graphs with zero configuration.
+Dual role:
 
-Importing this module performs one-shot server bootstrap: load +
-validate a :class:`~monet.config.ServerConfig`, then wire tracing,
-artifacts, and the task queue. A typo in ``MONET_QUEUE_BACKEND`` or a
-missing ``MONET_API_KEY`` in distributed mode fails here — loud — rather
-than 500-ing on a later request. The resolved, redacted config is
-logged at ``INFO`` so an operator can see what the running process
-actually picked up.
+1. **Bootstrap** (runs once on import): load + validate a
+   :class:`~monet.config.ServerConfig`, wire tracing, artifacts, the
+   task queue, the lazy worker, and the agent manifest. A typo in
+   ``MONET_QUEUE_BACKEND`` or a missing ``MONET_API_KEY`` in distributed
+   mode fails here — loud — rather than 500-ing on a later request.
+   The resolved, redacted config is logged at ``INFO``.
+
+2. **Graph factories**: 0-arg wrappers (``build_default_graph``,
+   ``build_chat_graph``, ``build_execution_graph``) for Aegra's loader.
+   Point ``aegra.json`` at these to serve the default monet graphs
+   with zero configuration.
 """
 
 from __future__ import annotations
@@ -26,6 +29,9 @@ from monet.orchestration import (
 )
 from monet.orchestration import (
     build_default_graph as _build_default_graph,
+)
+from monet.orchestration import (
+    build_execution_subgraph as _build_execution_subgraph,
 )
 from monet.orchestration import (
     configure_queue,
@@ -122,8 +128,31 @@ def build_default_graph() -> StateGraph:  # type: ignore[type-arg]
     return _build_default_graph()
 
 
+def build_execution_graph() -> StateGraph:  # type: ignore[type-arg]
+    """0-arg wrapper exposing the execution subgraph as an invocable graph.
+
+    Drives a pre-approved ``WorkBrief`` (pointer + routing skeleton) through
+    the flat-DAG executor without a planning step. Input shape::
+
+        {
+            "work_brief_pointer": {"artifact_id": "...", "url": "..."},
+            "routing_skeleton": {"goal": "...", "nodes": [...]},
+            "run_id": "...",
+            "trace_id": "...",
+        }
+
+    Scheduled / unattended runs feed frozen briefs through this entrypoint.
+    Interactive runs use the compound ``default`` graph so planning + HITL
+    still apply.
+    """
+    import monet.agents  # noqa: F401 — registers reference agents on first compile only
+
+    return _build_execution_subgraph()
+
+
 __all__ = [
     "build_chat_graph",
     "build_default_graph",
+    "build_execution_graph",
     "queue",
 ]

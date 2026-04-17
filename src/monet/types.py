@@ -216,11 +216,16 @@ def build_artifact_pointer(raw: dict[str, Any]) -> ArtifactPointer:
 # --- Agent run context ---
 
 
-class AgentRunContext(TypedDict):
+class AgentRunContext(TypedDict, total=False):
     """Runtime context available inside a decorated agent function.
 
     Set via ContextVar by the decorator. Accessible via get_run_context()
     or by declaring matching parameter names on the agent function.
+
+    ``thread_id`` is optional — populated for agent calls that originate
+    under a LangGraph / Aegra thread (chat or the default pipeline).
+    Tools that need thread-scoped telemetry (e.g. ``artifact_query`` in
+    the chat TUI) read it from here.
     """
 
     task: str
@@ -230,6 +235,7 @@ class AgentRunContext(TypedDict):
     run_id: str
     agent_id: str
     skills: list[str]
+    thread_id: str
 
 
 # --- Agent result ---

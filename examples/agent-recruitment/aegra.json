@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "default": "server_graphs:build_default_graph",
+    "execution": "server_graphs:build_execution_graph"
+  },
+  "env": ".env"
+}

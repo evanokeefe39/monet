@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import agents  # noqa: F401 — registers @agent capabilities
 
-from monet.server.default_graphs import (
+from monet.server.server_bootstrap import (
     build_chat_graph,
     build_default_graph,
 )

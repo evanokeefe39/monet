@@ -9,9 +9,19 @@ All exports from `monet.artifacts`.
 class ArtifactClient(Protocol):
     def write(self, content: bytes, metadata: ArtifactMetadata) -> ArtifactPointer: ...
     def read(self, artifact_id: str) -> tuple[bytes, ArtifactMetadata]: ...
+    def query_recent(
+        self,
+        *,
+        agent_id: str | None = None,
+        tag: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[ArtifactMetadata]: ...
 ```
 
-Protocol for artifact store implementations. Any class with `write` and `read` methods satisfying these signatures is a valid client.
+Protocol for artifact store implementations. Any class with `write`, `read`, and `query_recent` methods satisfying these signatures is a valid client.
+
+`query_recent` returns artifact metadata ordered by `created_at` descending. All filters are optional; `tag` matches a tag *key* in the stored tag dict; `since` is an ISO-8601 timestamp. Implementations that cannot efficiently query may raise `NotImplementedError` — callers handle that case when swapping in backends like read-only S3.
 
 ## `ArtifactMetadata`
 

@@ -105,6 +105,7 @@ async def invoke_agent(
     trace_id: str | None = None,
     run_id: str | None = None,
     skills: list[str] | None = None,
+    thread_id: str | None = None,
     **kwargs: Any,
 ) -> AgentResult:
     """Invoke an agent by ID and command via the task queue.
@@ -112,6 +113,10 @@ async def invoke_agent(
     Standard envelope fields are explicit parameters. Agent-specific
     parameters pass as **kwargs but must not shadow reserved fields.
     Routing is always driven by AgentResult.signals, never by kwargs values.
+
+    ``thread_id`` propagates into ``AgentRunContext`` so artifacts
+    written by the agent carry thread provenance — the chat TUI reads
+    this via ``query_recent(thread_id=...)`` to show per-thread counts.
     """
     conflicts = _RESERVED_FIELDS & set(kwargs)
     if conflicts:
@@ -140,6 +145,8 @@ async def invoke_agent(
         "agent_id": agent_id,
         "skills": skills or [],
     }
+    if thread_id:
+        ctx["thread_id"] = thread_id
 
     # Pool routing via the agent manifest handle.
     from monet.core.agent_manifest import get_agent_manifest

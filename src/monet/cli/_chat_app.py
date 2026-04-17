@@ -85,8 +85,21 @@ TUI_COMMANDS: tuple[str, ...] = (
     "/exit",
 )
 
-#: Default hints shown in the toolbar center.
-_DEFAULT_TOOLBAR_HINTS = "/new  ·  /threads  ·  /agents  ·  /quit"
+#: Fallback text for the toolbar indicator before first refresh / when
+#: the registry is unreachable. Real content is ``● N agents · 📎 M
+#: artifacts``, refreshed on mount + after every turn completes.
+_DEFAULT_TOOLBAR_HINTS = "● … · 📎 …"
+
+#: Slash-command hints shown once, inline, at the start of each chat
+#: session. Intentionally **not persisted** to the thread backend — the
+#: hint is UX only and should never leak into LLM context on a resume.
+_WELCOME_HINT = (
+    "Slash commands: /new · /threads · /switch · /agents · /help · /quit "
+    "(or ctrl+c twice)"
+)
+
+#: How often the toolbar indicator repolls the registry + artifact store.
+_INDICATOR_REFRESH_SECONDS = 5.0
 
 #: Seconds the toolbar holds the confirm-exit hint before disarming ctrl+c.
 _EXIT_CONFIRM_TIMEOUT = 5.0
@@ -255,6 +268,13 @@ class ChatApp(App[None]):
         # property list (see RenderStyles.ANIMATABLE) so we interpolate
         # manually via Color.blend.
         self._pulse_timers: dict[str, Any] = {}
+        # Toolbar indicator state. ``_indicator_text`` holds the most
+        # recent "● N agents · 📎 M artifacts" string; transient hints
+        # (confirm-exit, error flash) set ``_indicator_override`` so the
+        # periodic refresher knows not to clobber them. Restoring the
+        # indicator just clears the override.
+        self._indicator_text: str = _DEFAULT_TOOLBAR_HINTS
+        self._indicator_override: bool = False
         # Profile baseline — merged from built-in defaults + user profile.
         # ``/colors reset`` returns here; individual ``/colors`` changes
         # write to the live copies below without touching this baseline.
@@ -327,13 +347,56 @@ class ChatApp(App[None]):
             role = str(msg.get("role") or "user")
             content = str(msg.get("content") or "")
             self._append_line(f"[{role}] {content}")
+        # Ephemeral welcome banner — rendered into the transcript, not
+        # written to the thread backend. A returning user who scrolls up
+        # or resumes a thread sees the banner only on the current session.
+        self._append_line(f"[hint] {_WELCOME_HINT}")
         self.query_one("#prompt", Input).focus()
         self.run_worker(self._load_thread_name(), exclusive=False)
+        # Kick off the toolbar indicator (agent count + artifact count).
+        self._refresh_indicator()
+        self.set_interval(_INDICATOR_REFRESH_SECONDS, self._refresh_indicator)
         # Paint both borders dim so the idle pulse reads as a clear swing
         # against a quiet baseline, then kick off the idle pulse itself.
         if _PULSE_ENABLED:
             self._apply_idle_borders()
         self._set_busy(False)
+
+    def _refresh_indicator(self) -> None:
+        """Recompute the toolbar indicator (agent count · artifact count).
+
+        Agents come from the in-process registry (always available).
+        Artifacts come from ``get_artifacts().query_recent(thread_id=...)``
+        — best-effort, swallowed on any error so a missing backend never
+        surfaces in the toolbar.
+        """
+        self.run_worker(self._refresh_indicator_async(), exclusive=False)
+
+    async def _refresh_indicator_async(self) -> None:
+        from monet.core.registry import default_registry
+
+        try:
+            agents = default_registry.registered_agents()
+            agent_count = len({agent_id for agent_id, _ in agents})
+        except Exception:
+            agent_count = 0
+
+        artifact_count = 0
+        try:
+            from monet.core.artifacts import get_artifacts
+
+            rows = await get_artifacts().query_recent(
+                thread_id=self._chat_thread_id, limit=10_000
+            )
+            artifact_count = len(rows)
+        except Exception:
+            artifact_count = 0
+
+        text = f"● {agent_count} agents · 📎 {artifact_count} artifacts"
+        self._indicator_text = text
+        # Don't clobber a transient hint (e.g. confirm-exit).
+        if not self._indicator_override:
+            self._set_toolbar_hints(text)
 
     def on_unmount(self) -> None:
         """Stop any running pulse before teardown so no tick fires against
@@ -689,6 +752,7 @@ class ChatApp(App[None]):
             self._cancel_exit_arm()
             self.exit()
             return
+        self._indicator_override = True
         self._set_toolbar_hints(
             f"press ctrl+c again within {int(_EXIT_CONFIRM_TIMEOUT)}s to exit"
         )
@@ -699,13 +763,15 @@ class ChatApp(App[None]):
 
     def _reset_exit_arm(self) -> None:
         self._exit_arm_handle = None
-        self._set_toolbar_hints(_DEFAULT_TOOLBAR_HINTS)
+        self._indicator_override = False
+        self._set_toolbar_hints(self._indicator_text)
 
     def _cancel_exit_arm(self) -> None:
         if self._exit_arm_handle is not None:
             self._exit_arm_handle.cancel()
             self._exit_arm_handle = None
-        self._set_toolbar_hints(_DEFAULT_TOOLBAR_HINTS)
+        self._indicator_override = False
+        self._set_toolbar_hints(self._indicator_text)
 
     async def _handle_user_text(self, text: str) -> None:
         """Run one user submission to completion in a worker context."""
@@ -728,6 +794,8 @@ class ChatApp(App[None]):
             _log.exception("chat turn failed")
         self.sub_title = ""
         self._set_busy(False)
+        # Turn finished — any new artifacts now want counting.
+        self._refresh_indicator()
 
     async def _run_turn(
         self,
@@ -882,6 +950,9 @@ class ChatApp(App[None]):
             thread_input.value = generated_name
             thread_input.placeholder = self._thread_name_placeholder()
         self._reset_transcript(f"[info] new thread · {generated_name} · {new_id[:8]}")
+        # Re-render welcome banner + refresh artifact count for the new thread.
+        self._append_line(f"[hint] {_WELCOME_HINT}")
+        self._refresh_indicator()
 
     async def _cmd_list_threads(self, log: RichLog) -> None:
         try:
@@ -931,6 +1002,8 @@ class ChatApp(App[None]):
             role = str(msg.get("role") or "user")
             content = str(msg.get("content") or "")
             self._append_line(f"[{role}] {content}")
+        self._append_line(f"[hint] {_WELCOME_HINT}")
+        self._refresh_indicator()
 
     def _reset_transcript(self, first_line: str | None = None) -> None:
         """Clear the transcript RichLog and its copy buffer in lockstep."""

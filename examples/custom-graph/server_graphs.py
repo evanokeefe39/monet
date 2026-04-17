@@ -1,7 +1,7 @@
 """Graph exports for Aegra dev / serve.
 
 Configures infrastructure (tracing, artifacts, queue, worker) at import
-time — same pattern as monet's built-in ``default_graphs.py``. Imports
+time — same pattern as monet's built-in ``server_bootstrap.py``. Imports
 the custom agents and hooks so they register into the handler registry
 and hook registry respectively.
 

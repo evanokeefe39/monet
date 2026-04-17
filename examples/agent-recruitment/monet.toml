@@ -1,0 +1,4 @@
+# Inherits the default entrypoints: default, chat, execution. No custom
+# entrypoints needed — the recruitment cycle composes through `default`
+# (interactive, with HITL) and later fires via `execution` (unattended,
+# frozen brief). See README.md for the plan-freeze workflow.
