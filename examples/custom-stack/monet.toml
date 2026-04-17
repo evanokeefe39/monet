@@ -1,0 +1,9 @@
+# Point the chat role at the user's bespoke chat graph. Aegra loads
+# this at server boot; monet chat resolves it at client start.
+[chat]
+graph = "myco.graphs.chat:build_chat_graph"
+
+# Declare the bespoke pipeline as an invocable entrypoint so
+# `monet run --graph custom_pipeline "topic"` drives it directly.
+[entrypoints.custom_pipeline]
+graph = "custom_pipeline"

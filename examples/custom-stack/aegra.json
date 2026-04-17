@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "chat": "server_graphs:build_chat_graph",
+    "custom_pipeline": "server_graphs:build_custom_pipeline"
+  },
+  "env": ".env"
+}
