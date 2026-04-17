@@ -26,7 +26,8 @@ def default_config() -> dict[str, Any]:
         "dependencies": ["."],
         "graphs": {
             "chat": ChatConfig.load().graph,
-            "default": "monet.server.default_graphs:build_default_graph",
+            "default": "monet.server.server_bootstrap:build_default_graph",
+            "execution": "monet.server.server_bootstrap:build_execution_graph",
         },
         "http": {
             "app": "monet.server._aegra_routes:app",
@@ -89,9 +90,9 @@ def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, 
     Aegra's graph loader only supports filesystem paths and splits on
     the first ``:``, so absolute Windows paths (``C:\\...``) break the
     parser.  This converts module-style entries like
-    ``monet.server.default_graphs:build_chat_graph`` to a POSIX
+    ``monet.server.server_bootstrap:build_chat_graph`` to a POSIX
     relative path from *config_dir* (the ``.monet/`` directory where
-    ``aegra.json`` lives), e.g. ``../src/monet/server/default_graphs.py``.
+    ``aegra.json`` lives), e.g. ``../src/monet/server/server_bootstrap.py``.
 
     File-style references (ending in ``.py`` or starting with ``./``
     / ``../``) are left unchanged.
@@ -106,7 +107,7 @@ def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, 
     # will later add everything in aegra.json ``dependencies`` (which
     # includes ``.``), but resolution here runs before Aegra boots.
     # Without this, a user's chat graph module referenced from
-    # ``monet.toml [chat]`` fails to import when ``default_graphs``
+    # ``monet.toml [chat]`` fails to import when ``server_bootstrap``
     # runs its module-level ``validate_for_boot``. Mirrors Aegra's
     # runtime sys.path layout so dev and serve see the same import
     # environment.
@@ -126,7 +127,7 @@ def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, 
             resolved_graphs[graph_id] = ref
             continue
         # Resolve the module to an absolute .py path.  Try import first
-        # (works for installed packages like monet.server.default_graphs),
+        # (works for installed packages like monet.server.server_bootstrap),
         # then fall back to looking for a local .py file (works for user
         # scripts like ``server_graphs`` in the working directory).
         abs_path: Path | None = None

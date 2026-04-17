@@ -1,0 +1,8 @@
+{
+  "baseline": {
+    "assertion_pass_rate": 0.8,
+    "max_duration_ms": 30000,
+    "require_ok": true
+  },
+  "criteria": ["correctness", "cost", "clarity"]
+}

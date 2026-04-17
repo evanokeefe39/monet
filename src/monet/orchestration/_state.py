@@ -266,6 +266,10 @@ class ExecutionState(TypedDict, total=False):
     # initialise_execution so agent_node can re-attach it and make
     # every agent span a child of the execution root span.
     trace_carrier: dict[str, str]
+    # Ambient thread id sourced from ``config["configurable"]["thread_id"]``
+    # in ``initialise_execution``. Propagated into every ``invoke_agent``
+    # call so artifacts written by agents carry thread provenance.
+    thread_id: str
 
 
 class WaveItem(TypedDict, total=False):

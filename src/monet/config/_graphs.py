@@ -47,15 +47,18 @@ class Entrypoint(TypedDict):
     graph: str
 
 
-# Default entrypoints. ``planning`` and ``execution`` are deliberately
-# absent — they are internal subgraphs of the default pipeline, not
-# things a user can call directly. ``monet run`` (no ``--graph``) uses
-# the ``default`` entrypoint; ``monet chat`` (no ``--graph``) uses
-# ``chat``. Override either by adding a ``[entrypoints.<name>]`` block
-# to ``monet.toml``.
+# Default entrypoints. ``planning`` is deliberately absent — it is an
+# internal subgraph of the default pipeline, not something a user calls
+# directly. ``execution`` is invocable so scheduled / unattended runs can
+# drive a pre-approved ``WorkBrief`` (pointer + routing skeleton) through
+# the flat-DAG executor without re-planning. ``monet run`` (no
+# ``--graph``) uses the ``default`` entrypoint; ``monet chat`` (no
+# ``--graph``) uses ``chat``. Override or add by declaring a
+# ``[entrypoints.<name>]`` block in ``monet.toml``.
 DEFAULT_ENTRYPOINTS: dict[str, Entrypoint] = {
     "default": {"graph": "default"},
     "chat": {"graph": "chat"},
+    "execution": {"graph": "execution"},
 }
 
 

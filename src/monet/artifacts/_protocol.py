@@ -39,3 +39,22 @@ class ArtifactClient(Protocol):
     ) -> tuple[bytes, ArtifactMetadata]:
         """Read content and metadata from the artifact store."""
         ...
+
+    async def query_recent(
+        self,
+        *,
+        agent_id: str | None = None,
+        thread_id: str | None = None,
+        tag: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[ArtifactMetadata]:
+        """List recent artifact metadata, filtered optionally.
+
+        Ordered by ``created_at`` descending. ``since`` is an ISO-8601
+        string. ``tag`` matches a tag key present in the artifact's
+        tag dict. ``thread_id`` filters to artifacts written by agents
+        running under a given chat / orchestrator thread. Backends that
+        cannot efficiently query may raise ``NotImplementedError``.
+        """
+        ...

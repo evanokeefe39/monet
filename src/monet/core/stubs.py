@@ -60,7 +60,14 @@ def emit_progress(data: dict[str, Any]) -> None:
 def emit_signal(signal: Signal) -> None:
     """Emit a signal alongside the agent result. Non-fatal — agent continues.
 
-    Signals accumulate. No-op outside the @agent decorator context.
+    Signals accumulate in the in-memory collector (routed into
+    ``AgentResult.signals`` by the decorator) **and** are recorded as an
+    OTel span event on the active agent span when one exists. The span
+    event is what makes signals queryable from ``otel_query`` after the
+    run — meta-agents score agents on signal mix without a duplicate
+    ``RunSummary`` artifact.
+
+    No-op outside the @agent decorator context.
 
     Use NeedsHumanReview / EscalationRequired as exceptions when the agent
     cannot usefully continue. Use emit_signal() when it can return a result
@@ -69,6 +76,23 @@ def emit_signal(signal: Signal) -> None:
     collector = _signal_collector.get()
     if collector is not None:
         collector.append(signal)
+    # Telemetry mirror — intentionally after the routing append so the
+    # collector remains the source of truth for in-flight routing.
+    from opentelemetry import trace
+
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return
+    attrs: dict[str, str] = {
+        "signal.type": str(signal.get("type", "")),
+        "signal.reason": str(signal.get("reason", ""))[:500],
+    }
+    metadata = signal.get("metadata")
+    if isinstance(metadata, dict):
+        for k, v in metadata.items():
+            if isinstance(v, str | int | float | bool):
+                attrs[f"signal.meta.{k}"] = str(v)
+    span.add_event("signal", attributes=attrs)
 
 
 async def write_artifact(

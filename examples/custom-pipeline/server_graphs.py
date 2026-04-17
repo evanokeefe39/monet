@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from graphs.reviewed import build_reviewed_graph as _build_reviewed_graph
 
-from monet.server.default_graphs import (
+from monet.server.server_bootstrap import (
     build_chat_graph,
     build_default_graph,
 )

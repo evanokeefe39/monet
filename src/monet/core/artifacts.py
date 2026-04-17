@@ -120,6 +120,44 @@ class ArtifactStoreHandle:
             raise NotImplementedError(msg)
         return await _artifact_backend.read(artifact_id)
 
+    async def query_recent(
+        self,
+        *,
+        agent_id: str | None = None,
+        thread_id: str | None = None,
+        tag: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[ArtifactMetadata]:
+        """List recent artifact metadata — passes through to backend.
+
+        Backends that implement only ``read``/``write`` raise
+        ``NotImplementedError`` for this call.
+        """
+        if _artifact_backend is None:
+            msg = (
+                "get_artifacts() requires an artifact store backend. "
+                "Call monet.artifacts.configure_artifacts(ArtifactService(...)) "
+                "at startup."
+            )
+            raise NotImplementedError(msg)
+        query = getattr(_artifact_backend, "query_recent", None)
+        if query is None:
+            msg = (
+                f"{type(_artifact_backend).__name__} does not implement "
+                "query_recent(). Use a backend such as ArtifactService that "
+                "supports metadata queries."
+            )
+            raise NotImplementedError(msg)
+        result: list[ArtifactMetadata] = await query(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            tag=tag,
+            since=since,
+            limit=limit,
+        )
+        return result
+
 
 _handle_instance = ArtifactStoreHandle()
 

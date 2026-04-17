@@ -127,6 +127,7 @@ def test_discover_reference_agents() -> None:
         ("researcher", "deep"),
         ("writer", "deep"),
         ("qa", "fast"),
+        ("qa", "eval"),
         ("publisher", "publish"),
     }
     assert expected == found, f"Missing: {expected - found}, Extra: {found - expected}"

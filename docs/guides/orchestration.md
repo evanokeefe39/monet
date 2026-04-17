@@ -6,10 +6,27 @@ The orchestration layer integrates monet agents with LangGraph. It provides a tw
 
 `monet run` and chat's `/plan` both drive the compound default graph: `planning → execution`. Triage is a chat-only concern — there is no pipeline entry-time short-circuit. Conversational routing (chat vs planner vs specialist) lives inside `build_chat_graph`.
 
-1. **Planning graph** — planner/plan generates a work brief pointer + routing skeleton. Human approval gate with bounded revision count; revise-with-feedback loops back to planner (max 3 rounds).
-2. **Execution graph** — wave-based parallel execution via LangGraph `Send`. QA reflection gates. Retry budget. Signal routing.
+1. **Planning graph** — planner/plan generates a work brief pointer + routing skeleton. Human approval gate with bounded revision count; revise-with-feedback loops back to planner (max 3 rounds). *Not* invocable via `monet run` — planning is an internal subgraph of the compound default graph.
+2. **Execution graph** — wave-based parallel execution via LangGraph `Send`. QA reflection gates. Retry budget. Signal routing. **Invocable** as `monet run --graph execution` with input `{work_brief_pointer, routing_skeleton, run_id, trace_id}`. Scheduled / unattended runs feed a frozen `WorkBrief` pointer (produced by a prior interactive planning session) through this entrypoint. The graph has no HITL approval gate — `--auto-approve` is not needed.
 
 See [Graph Topology](../architecture/graph-topology.md) for the full topology diagrams.
+
+## Plan-freeze workflow for recurring runs
+
+For recurring work, separate **plan iteration** (interactive, HITL) from **plan execution** (unattended, frozen DAG):
+
+1. Iterate the plan interactively in `monet chat` via `/plan → revise → approve`.
+2. The approved `WorkBrief` is written to the artifact store by the planning subgraph. The chat transcript prints the `work_brief_pointer`.
+3. Fire the frozen DAG directly:
+
+    ```bash
+    monet run --graph execution --input '{
+      "work_brief_pointer": {"artifact_id": "...", "url": "...", "key": "work_brief"},
+      "routing_skeleton": { ... }
+    }'
+    ```
+
+Each scheduled fire re-queries the world inside every agent invocation — the DAG shape is frozen, agent behaviour is not. See `examples/agent-recruitment/` for a worked example.
 
 ## State schemas
 

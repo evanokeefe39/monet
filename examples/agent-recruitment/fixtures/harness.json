@@ -1,0 +1,10 @@
+{
+  "fixture": {
+    "input": {"query": "summarise the following text in one sentence: monet orchestrates agents."}
+  },
+  "assertions": [
+    {"op": "stdout_contains", "value": "monet"},
+    {"op": "exit_code", "value": 0}
+  ],
+  "timeout_s": 30
+}

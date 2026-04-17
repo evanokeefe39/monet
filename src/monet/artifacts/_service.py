@@ -61,6 +61,7 @@ class ArtifactService:
         run_id: str | None = None
         trace_id: str | None = None
         agent_id: str | None = None
+        thread_id: str | None = None
         try:
             from monet.core.context import get_run_context
 
@@ -68,6 +69,7 @@ class ArtifactService:
             run_id = ctx.get("run_id")
             trace_id = ctx.get("trace_id")
             agent_id = ctx.get("agent_id")
+            thread_id = ctx.get("thread_id")  # type: ignore[typeddict-item]
         except (LookupError, RuntimeError):
             pass
 
@@ -83,6 +85,7 @@ class ArtifactService:
             agent_id=agent_id,
             run_id=run_id,
             trace_id=trace_id,
+            thread_id=thread_id,
             tags=dict(kwargs["tags"]) if "tags" in kwargs else {},  # type: ignore[call-overload]
             created_at=datetime.now(tz=UTC).isoformat(),
         )
@@ -94,3 +97,22 @@ class ArtifactService:
         """Read an artifact from storage."""
         await self._ensure_initialised()
         return await self._storage.read(artifact_id)
+
+    async def query_recent(
+        self,
+        *,
+        agent_id: str | None = None,
+        thread_id: str | None = None,
+        tag: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[ArtifactMetadata]:
+        """Pass-through to ``SQLiteIndex.query_recent`` — see protocol."""
+        await self._ensure_initialised()
+        return await self._index.query_recent(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            tag=tag,
+            since=since,
+            limit=limit,
+        )

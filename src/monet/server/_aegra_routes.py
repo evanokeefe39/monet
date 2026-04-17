@@ -3,7 +3,7 @@
 When running under Aegra (``aegra dev`` or ``aegra serve``), this module
 provides monet's distribution control-plane routes (worker registration,
 heartbeats, task claiming) as custom HTTP routes.  The task queue is
-shared with the graph execution layer via ``default_graphs.queue``.
+shared with the graph execution layer via ``server_bootstrap.queue``.
 
 Configure in ``aegra.json``::
 
@@ -67,10 +67,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(lifespan=_lifespan)
 
-# Wire dependencies — queue comes from default_graphs module-level init.
-# Aegra imports default_graphs first (to load graphs), so the queue is
+# Wire dependencies — queue comes from server_bootstrap module-level init.
+# Aegra imports server_bootstrap first (to load graphs), so the queue is
 # already configured by the time this module loads.
-from monet.server.default_graphs import queue  # noqa: E402
+from monet.server.server_bootstrap import queue  # noqa: E402
 
 app.state.queue = queue
 app.state.deployments = _deployments

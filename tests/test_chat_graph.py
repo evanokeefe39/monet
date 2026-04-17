@@ -267,7 +267,8 @@ async def test_specialist_node_invokes_named_agent_and_mode() -> None:
                     "mode": "deep",
                     "task": "x",
                 },
-            }
+            },
+            {"configurable": {}},
         )
     assert captured["agent_id"] == "researcher"
     assert captured["kwargs"]["command"] == "deep"
@@ -288,7 +289,8 @@ async def test_specialist_node_surfaces_artifact_links() -> None:
             {
                 "messages": [{"role": "user", "content": "/researcher:deep x"}],
                 "command_meta": meta,
-            }
+            },
+            {"configurable": {}},
         )
     content = out["messages"][0]["content"]
     assert "deep research content" in content
@@ -307,7 +309,8 @@ async def test_specialist_node_missing_capability_inline_message() -> None:
             {
                 "messages": [{"role": "user", "content": "/unknown:fast x"}],
                 "command_meta": {"specialist": "unknown", "mode": "fast", "task": "x"},
-            }
+            },
+            {"configurable": {}},
         )
     assert "unavailable" in out["messages"][0]["content"].lower()
 

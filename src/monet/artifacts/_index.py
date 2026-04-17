@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import Float, Index, Integer, String, Text, select
+from sqlalchemy import Float, Index, Integer, String, Text, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -30,17 +30,31 @@ class ArtifactRecord(Base):
     agent_id: Mapped[str | None] = mapped_column(String, nullable=True)
     run_id: Mapped[str | None] = mapped_column(String, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    thread_id: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[str] = mapped_column(Text, default="{}")  # JSON string
     created_at: Mapped[str] = mapped_column(String)
 
-    # Secondary indexes for the catalogue query patterns; the composite
+    # Secondary indexes for the catalogue query patterns. The composite
     # on (run_id, created_at) supports "chronological artifacts for a
-    # run" without a filesort.
+    # run" without a filesort; the composite on (agent_id, created_at)
+    # supports ``query_recent(agent_id=..., since=..., limit=...)`` —
+    # the hot path for the ``data_analyst(score_agents)`` telemetry
+    # pipeline. ``ix_artifacts_created_at`` covers the unfiltered
+    # "most-recent overall" path.
+    #
+    # NOTE on tag filtering: ``query_recent(tag=...)`` uses ``LIKE`` on
+    # the JSON-serialised ``tags`` column. That is unindexed — acceptable
+    # while tag vocabularies stay small but a latent perf cliff at scale.
+    # The fix (if a workload surfaces it) is a child table or a SQLite
+    # expression index on ``json_extract(tags, '$.<key>')``.
     __table_args__ = (
         Index("ix_artifacts_run_id", "run_id"),
         Index("ix_artifacts_agent_id", "agent_id"),
         Index("ix_artifacts_trace_id", "trace_id"),
         Index("ix_artifacts_run_created", "run_id", "created_at"),
+        Index("ix_artifacts_agent_created", "agent_id", "created_at"),
+        Index("ix_artifacts_created_at", "created_at"),
+        Index("ix_artifacts_thread_id", "thread_id"),
     )
 
 
@@ -127,6 +141,48 @@ class SQLiteIndex:
 
         async with AsyncSession(self._engine) as session:
             stmt = select(ArtifactRecord).where(ArtifactRecord.run_id == run_id)
+            rows = await session.execute(stmt)
+            results = []
+            for r in rows.scalars():
+                row_dict = {c.key: getattr(r, c.key) for c in r.__table__.columns}
+                row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
+                results.append(cast("ArtifactMetadata", row_dict))
+            return results
+
+    async def query_recent(
+        self,
+        *,
+        agent_id: str | None = None,
+        thread_id: str | None = None,
+        tag: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[ArtifactMetadata]:
+        """Query recent artifacts with optional agent/thread/tag/since filters.
+
+        Ordered by ``created_at`` descending. ``since`` is an ISO-8601
+        timestamp; lexicographic comparison matches the column's
+        ISO-8601 stored shape. ``tag`` matches tag *keys* via substring
+        on the stored JSON (small dict sizes, no index needed).
+        """
+        import json
+
+        clauses = []
+        if agent_id is not None:
+            clauses.append(ArtifactRecord.agent_id == agent_id)
+        if thread_id is not None:
+            clauses.append(ArtifactRecord.thread_id == thread_id)
+        if since is not None:
+            clauses.append(ArtifactRecord.created_at >= since)
+        if tag is not None:
+            clauses.append(ArtifactRecord.tags.like(f'%"{tag}"%'))
+
+        stmt = select(ArtifactRecord)
+        if clauses:
+            stmt = stmt.where(and_(*clauses))
+        stmt = stmt.order_by(ArtifactRecord.created_at.desc()).limit(limit)
+
+        async with AsyncSession(self._engine) as session:
             rows = await session.execute(stmt)
             results = []
             for r in rows.scalars():

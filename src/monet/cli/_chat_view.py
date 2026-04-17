@@ -19,6 +19,9 @@ DEFAULT_TAG_STYLES: dict[str, str] = {
     "[info]": "bold #e74c8b",
     "[progress]": "bold #f39c12",
     "[error]": "bold #27ae60",
+    # Ephemeral UX hints (welcome banner, transient guidance). Dim so
+    # users recognise them as advisory, not conversational.
+    "[hint]": "dim italic",
 }
 
 #: Mapping from ``/colors <role>`` argument to the matching transcript tag.

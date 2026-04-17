@@ -5,6 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langchain_core.runnables import (
+    RunnableConfig,  # noqa: TC002 — runtime import for LangGraph signature introspection
+)
+
 from monet.orchestration._invoke import invoke_agent
 
 from ._format import _format_agent_result
@@ -33,7 +37,7 @@ def _build_context(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-async def specialist_node(state: ChatState) -> dict[str, Any]:
+async def specialist_node(state: ChatState, config: RunnableConfig) -> dict[str, Any]:
     """Invoke a named specialist agent parsed from the slash command."""
     meta = state.get("command_meta") or {}
     agent_id = str(meta.get("specialist") or "").strip()
@@ -49,12 +53,17 @@ async def specialist_node(state: ChatState) -> dict[str, Any]:
     mode = str(meta.get("mode") or "fast")
     task = str(meta.get("task") or _last_user_message(state.get("messages") or []))
     messages = state.get("messages") or []
+    configurable = (config or {}).get("configurable") or {}
+    thread_id = (
+        configurable.get("thread_id") if isinstance(configurable, dict) else None
+    )
     try:
         result = await invoke_agent(
             agent_id,
             command=mode,
             task=task,
             context=_build_context(messages),
+            thread_id=thread_id if isinstance(thread_id, str) else None,
         )
     except Exception as exc:
         _log.warning(

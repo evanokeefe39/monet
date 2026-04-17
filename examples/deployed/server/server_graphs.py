@@ -7,7 +7,7 @@ file so ``aegra.json`` can reference them as ``./server_graphs.py:...``.
 
 from __future__ import annotations
 
-from monet.server.default_graphs import (
+from monet.server.server_bootstrap import (
     build_chat_graph,
     build_default_graph,
 )
