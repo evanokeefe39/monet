@@ -9,7 +9,9 @@ All exports from `monet.orchestration`.
 ```python
 class PlanningState(TypedDict, total=False):
     task: str
-    work_brief: dict[str, Any] | None
+    work_brief_pointer: ArtifactPointer | None
+    routing_skeleton: dict[str, Any] | None
+    planner_error: str | None
     planning_context: Annotated[list[dict[str, Any]], _append_reducer]
     human_feedback: str | None
     plan_approved: bool | None
@@ -22,18 +24,15 @@ class PlanningState(TypedDict, total=False):
 
 ```python
 class ExecutionState(TypedDict, total=False):
-    work_brief: dict[str, Any]
-    current_phase_index: int
-    current_wave_index: int
+    work_brief_pointer: ArtifactPointer
+    routing_skeleton: dict[str, Any]
+    completed_node_ids: list[str]
     wave_results: Annotated[list[dict[str, Any]], _append_reducer]
     wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
-    completed_phases: Annotated[list[int], _int_append_reducer]
     signals: SignalsSummary | None
     abort_reason: str | None
-    revision_count: int
     trace_id: str
     run_id: str
-    pending_context: list[dict[str, Any]]
     trace_carrier: dict[str, str]
 ```
 
@@ -57,14 +56,13 @@ class WaveItem(TypedDict, total=False):
 
 ```python
 class WaveResult(TypedDict):
-    phase_index: int
-    wave_index: int
-    item_index: int
+    node_id: str
     agent_id: str
     command: str
     output: str | dict[str, Any] | None
     artifacts: list[dict[str, Any]]
     signals: list[dict[str, Any]]
+    success: bool
 ```
 
 ## Functions

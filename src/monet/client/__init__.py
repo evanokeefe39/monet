@@ -54,16 +54,15 @@ from monet.client._events import (
 )
 from monet.client._run_state import _RunStore
 from monet.client._wire import (
-    MONET_CHAT_NAME_KEY,
     MONET_GRAPH_KEY,
     MONET_RUN_ID_KEY,
-    chat_input,
     create_thread,
     get_state_values,
     make_client,
     stream_run,
     task_input,
 )
+from monet.client.chat import ChatClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -108,6 +107,7 @@ __all__ = [
     "AlreadyResolved",
     "AmbiguousInterrupt",
     "Capability",
+    "ChatClient",
     "ChatSummary",
     "Field",
     "FieldOption",
@@ -180,8 +180,9 @@ class MonetClient:
       history.
     - **HITL** — :meth:`resume` dispatches a resume payload to a
       paused interrupt; :meth:`abort` terminates a run.
-    - **Chat** — :meth:`create_chat`, :meth:`send_message`, etc. drive
-      the chat graph resolved from ``monet.toml [graphs]``.
+    - **Chat** — :attr:`chat` exposes all chat-specific operations via
+      :class:`~monet.client.chat.ChatClient` (create, list, send, resume,
+      interrupt, history). Resolved from ``monet.toml [graphs]``.
 
     Interrupts surface as the generic :class:`Interrupt` event and are
     answered with :meth:`resume`. Form-schema convention (see
@@ -196,6 +197,7 @@ class MonetClient:
         api_key: str | None = None,
         graph_ids: dict[str, str] | None = None,
     ) -> None:
+        from monet.client.chat import ChatClient
         from monet.config import ClientConfig, load_entrypoints, load_graph_roles
 
         cfg = ClientConfig.load()
@@ -210,7 +212,10 @@ class MonetClient:
             self._graph_roles = dict(graph_ids)
         else:
             self._graph_roles = load_graph_roles()
-        self._chat_graph_id = self._graph_roles.get("chat", "chat")
+        self.chat = ChatClient(
+            self._client,
+            chat_graph_id=self._graph_roles.get("chat", "chat"),
+        )
 
     # ── Run lifecycle ───────────────────────────────────────────
 
@@ -550,183 +555,6 @@ class MonetClient:
                 seen.add(gid)
                 graph_ids.append(gid)
         return sorted(graph_ids)
-
-    # ── Chat ────────────────────────────────────────────────────
-
-    async def create_chat(self, *, name: str | None = None) -> str:
-        """Create a new chat thread and return its thread_id."""
-        metadata: dict[str, Any] = {MONET_GRAPH_KEY: "chat"}
-        if name:
-            metadata[MONET_CHAT_NAME_KEY] = name
-        return await create_thread(self._client, metadata=metadata)
-
-    async def list_chats(self, *, limit: int = 20) -> list[ChatSummary]:
-        """List recent chat sessions sorted by last activity."""
-        threads = await self._client.threads.search(
-            metadata={MONET_GRAPH_KEY: "chat"},
-            limit=limit,
-            sort_by="updated_at",
-            sort_order="desc",
-        )
-        summaries: list[ChatSummary] = []
-        for t in threads:
-            meta = t.get("metadata") or {}
-            tid = str(t.get("thread_id", ""))
-            name = str(meta.get(MONET_CHAT_NAME_KEY, ""))
-            msg_count = 0
-            try:
-                values, _ = await get_state_values(self._client, tid)
-                messages = values.get("messages") or []
-                msg_count = len(messages)
-            except Exception:
-                pass
-            summaries.append(
-                ChatSummary(
-                    thread_id=tid,
-                    name=name,
-                    message_count=msg_count,
-                    created_at=str(t.get("created_at", "")),
-                    updated_at=str(t.get("updated_at", "")),
-                )
-            )
-        return summaries
-
-    async def send_message(
-        self, thread_id: str, message: str
-    ) -> AsyncIterator[str | AgentProgress]:
-        """Send a user message to a chat thread and yield response tokens.
-
-        Yields assistant message content from every node that writes to
-        ``messages`` — ``respond``, ``planner``, and ``specialist`` all
-        produce assistant replies in the chat graph, so the client
-        surfaces content from all of them uniformly. Also yields
-        :class:`AgentProgress` for every ``emit_progress`` event the
-        running agents produce, so consumers can render real-time
-        feedback during long-running turns.
-        """
-        async for chunk in self._stream_chat_with_input(
-            thread_id, input=chat_input(message)
-        ):
-            yield chunk
-
-    async def _stream_chat_with_input(
-        self,
-        thread_id: str,
-        *,
-        input: dict[str, Any] | None = None,
-        command: dict[str, Any] | None = None,
-    ) -> AsyncIterator[str | AgentProgress]:
-        async for mode, data in stream_run(
-            self._client,
-            thread_id,
-            self._chat_graph_id,
-            input=input,
-            command=command,
-        ):
-            if mode == "error":
-                raise RuntimeError(f"server error: {data}")
-            if mode == "custom" and isinstance(data, dict):
-                # Custom stream carries ``emit_progress`` / ``emit_signal``
-                # payloads. Surface progress to the chat consumer; signals
-                # are routed inside the graph and don't need transcript
-                # rendering for now.
-                progress = _build_agent_progress("", data)
-                if progress is not None:
-                    yield progress
-                continue
-            if mode == "updates" and isinstance(data, dict):
-                # ``updates`` mode delivers ``{node_name: patch}`` dicts.
-                # Scan every node patch for new assistant messages.
-                patches: list[Any] = []
-                if "messages" in data:
-                    # Some server paths also emit flat state dicts.
-                    patches.append(data)
-                patches.extend(
-                    value for value in data.values() if isinstance(value, dict)
-                )
-                for patch in patches:
-                    messages = patch.get("messages")
-                    if not isinstance(messages, list):
-                        continue
-                    for msg in messages:
-                        if isinstance(msg, dict) and msg.get("role") == "assistant":
-                            content = msg.get("content", "")
-                            if content:
-                                yield content
-
-    async def get_chat_interrupt(self, thread_id: str) -> dict[str, Any] | None:
-        """Return the pending interrupt payload for *thread_id*, or ``None``.
-
-        Returns ``{"tag": <node name>, "values": <form-schema payload>}``
-        when the chat graph is paused inside an ``interrupt()``. Callers
-        render ``values`` via the form-schema convention and then call
-        :meth:`resume_chat` with the user's response.
-
-        The payload lives on ``state.tasks[0].interrupts[0].value`` —
-        LangGraph does not mirror it into ``state.values["__interrupt__"]``
-        so reading through :func:`get_state_values` would return ``{}``
-        and the TUI would render an empty modal.
-        """
-        state = await self._client.threads.get_state(thread_id)
-        nxt = list(state.get("next") or [])
-        if not nxt:
-            return None
-        payload = _extract_interrupt_payload(state)
-        return {"tag": nxt[0], "values": payload}
-
-    async def resume_chat(
-        self,
-        thread_id: str,
-        payload: dict[str, Any],
-    ) -> AsyncIterator[str | AgentProgress]:
-        """Resume a paused chat thread and yield any follow-up messages.
-
-        Sends ``Command(resume=payload)`` to the chat graph and streams
-        assistant content produced after the resume, plus any
-        :class:`AgentProgress` events agents emit while running. The
-        caller should subsequently re-check :meth:`get_chat_interrupt`
-        — the resumed run may pause again (e.g. the plan-approval
-        revise loop).
-        """
-        async for chunk in self._stream_chat_with_input(
-            thread_id, command={"resume": payload}
-        ):
-            yield chunk
-
-    async def send_context(self, thread_id: str, content: str) -> None:
-        """Append a system-context message to a chat thread."""
-        input_data = {"messages": [{"role": "system", "content": content}]}
-        async for mode, data in stream_run(
-            self._client,
-            thread_id,
-            self._chat_graph_id,
-            input=input_data,
-        ):
-            if mode == "error":
-                raise RuntimeError(f"server error: {data}")
-
-    async def get_chat_history(self, thread_id: str) -> list[dict[str, Any]]:
-        """Fetch the message history from a chat thread."""
-        values, _ = await get_state_values(self._client, thread_id)
-        return values.get("messages") or []
-
-    async def rename_chat(self, thread_id: str, name: str) -> None:
-        """Update a chat thread's display name."""
-        await self._client.threads.update(
-            thread_id, metadata={MONET_CHAT_NAME_KEY: name}
-        )
-
-    async def get_most_recent_chat(self) -> str | None:
-        """Return the thread_id of the most recently active chat."""
-        threads = await self._client.threads.search(
-            metadata={MONET_GRAPH_KEY: "chat"},
-            limit=1,
-            sort_by="updated_at",
-            sort_order="desc",
-        )
-        if not threads:
-            return None
-        return str(threads[0]["thread_id"])
 
     # ── Private helpers ─────────────────────────────────────────
 

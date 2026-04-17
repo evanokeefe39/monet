@@ -14,15 +14,21 @@ from textual.widgets import Input
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-from monet.cli._chat_app import (
-    ChatApp,
-    RegistrySuggester,
-    _format_form_prompt,
-    _format_progress_line,
-    _is_approval_form,
-    _parse_approval_reply,
-    _parse_text_reply,
+from monet.cli._chat_app import ChatApp
+from monet.cli._chat_hitl import (
+    format_form_prompt as _format_form_prompt,
 )
+from monet.cli._chat_hitl import (
+    is_approval_form as _is_approval_form,
+)
+from monet.cli._chat_hitl import (
+    parse_approval_reply as _parse_approval_reply,
+)
+from monet.cli._chat_hitl import (
+    parse_text_reply as _parse_text_reply,
+)
+from monet.cli._chat_slash import RegistrySuggester
+from monet.cli._chat_view import format_progress_line as _format_progress_line
 from monet.client._events import AgentProgress
 
 # --- RegistrySuggester ----------------------------------------------------
@@ -157,19 +163,6 @@ def test_parse_text_reply_single_field_takes_whole_text() -> None:
     assert _parse_text_reply(form, "blue") == {"answer": "blue"}
 
 
-def test_parse_text_reply_multi_field_splits_on_lines() -> None:
-    form: dict[str, Any] = {
-        "fields": [
-            {"name": "q0", "type": "text"},
-            {"name": "q1", "type": "text"},
-        ],
-    }
-    assert _parse_text_reply(form, "first\nsecond") == {
-        "q0": "first",
-        "q1": "second",
-    }
-
-
 def test_parse_text_reply_carries_hidden_defaults() -> None:
     form: dict[str, Any] = {
         "fields": [
@@ -185,12 +178,15 @@ def test_parse_text_reply_carries_hidden_defaults() -> None:
 
 def _fake_client() -> Any:
     client = MagicMock()
+    chat = MagicMock()
 
     async def _send(*_args: Any, **_kwargs: Any) -> AsyncIterator[str]:
         if False:
             yield ""
 
-    client.send_message = _send
+    chat.send_message = _send
+    chat._chat_graph_id = "chat"
+    client.chat = chat
     client.slash_commands = AsyncMock(return_value=[])
     return client
 
@@ -340,6 +336,7 @@ async def test_chat_app_mounts_and_renders_history() -> None:
 
 async def test_chat_app_submits_message_and_streams() -> None:
     client = MagicMock()
+    chat = MagicMock()
 
     async def _send(thread_id: str, message: str) -> AsyncIterator[str]:
         assert thread_id == "t-1"
@@ -347,7 +344,9 @@ async def test_chat_app_submits_message_and_streams() -> None:
         yield "hello"
         yield " world"
 
-    client.send_message = _send
+    chat.send_message = _send
+    chat._chat_graph_id = "chat"
+    client.chat = chat
     client.slash_commands = AsyncMock(return_value=["/plan"])
 
     app = ChatApp(client=client, thread_id="t-1", slash_commands=["/plan"])

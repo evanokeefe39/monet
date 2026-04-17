@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from monet.client import MonetClient
 
 from monet._ports import STANDARD_DEV_PORT
+from monet.cli._namegen import random_chat_name
 from monet.cli._setup import check_env
 from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
@@ -143,6 +144,7 @@ async def _chat_main(
     graph_override: str | None,
 ) -> None:
     from monet.cli._chat_app import ChatApp
+    from monet.cli._run import _preflight_server
     from monet.client import MonetClient
     from monet.config import load_entrypoints, load_graph_roles
 
@@ -156,7 +158,46 @@ async def _chat_main(
     elif graph_override:
         graph_ids["chat"] = graph_override
 
+    # Fail fast: server unreachable → clear error before TUI swallows stdout.
+    health_error = await _preflight_server(url, api_key=api_key)
+    if health_error:
+        click.secho(health_error, err=True, fg="red")
+        raise SystemExit(2)
+
     client = MonetClient(url, api_key=api_key, graph_ids=graph_ids)
+
+    # Fail fast: chat graph must be registered on the server. The TUI
+    # has no useful mode without it — every action it takes streams
+    # against this graph id. If the resolved id is not in the server's
+    # assistant list the server will fail later with an opaque error;
+    # surface it here with an actionable message instead.
+    chat_graph_id = graph_ids.get("chat") or "chat"
+    try:
+        registered = await client.list_graphs()
+    except Exception as exc:
+        click.secho(
+            f"Could not enumerate graphs on {url} ({exc}).",
+            err=True,
+            fg="red",
+        )
+        raise SystemExit(2) from None
+    if chat_graph_id not in registered:
+        click.secho(
+            (f"Chat graph '{chat_graph_id}' is not registered on the server at {url}."),
+            err=True,
+            fg="red",
+        )
+        click.secho(
+            (
+                "Register it via `aegra.json`, set "
+                '`[chat] graph = "<module>:<factory>"` in monet.toml, '
+                "or pass --graph to pick a different entrypoint. "
+                f"Graphs available now: {', '.join(registered) or '(none)'}."
+            ),
+            err=True,
+            dim=True,
+        )
+        raise SystemExit(2)
 
     if list_sessions:
         await _render_session_list(client)
@@ -177,7 +218,7 @@ async def _chat_main(
 
     history: list[dict[str, object]] = []
     try:
-        history = list(await client.get_chat_history(thread_id))
+        history = list(await client.chat.get_chat_history(thread_id))
     except Exception as exc:
         click.secho(f"(history load failed: {exc})", dim=True, err=True)
 
@@ -191,7 +232,7 @@ async def _chat_main(
 
 
 async def _render_session_list(client: MonetClient) -> None:
-    chats = await client.list_chats()
+    chats = await client.chat.list_chats()
     if not chats:
         click.echo("No chat sessions found.")
         return
@@ -222,17 +263,17 @@ async def _resolve_thread(
     if resume_id:
         return resume_id
     if session_name:
-        chats = await client.list_chats()
+        chats = await client.chat.list_chats()
         for c in chats:
             if c.name == session_name:
                 return c.thread_id
-        thread_id = await client.create_chat(name=session_name)
+        thread_id = await client.chat.create_chat(name=session_name)
         click.secho(f"Created session '{session_name}'", dim=True, err=True)
         return thread_id
     if force_new:
-        return await client.create_chat()
-    recent = await client.get_most_recent_chat()
+        return await client.chat.create_chat(name=random_chat_name())
+    recent = await client.chat.get_most_recent_chat()
     if recent is not None:
         return recent
     click.secho("Started new conversation.", dim=True, err=True)
-    return await client.create_chat()
+    return await client.chat.create_chat(name=random_chat_name())

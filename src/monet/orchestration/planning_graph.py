@@ -5,15 +5,32 @@ The orchestrator is pointer-only: planning state carries a ``work_brief_pointer`
 The full work brief artifact is never read on the orchestration side — workers
 resolve it via the ``inject_plan_context`` hook at invocation time.
 
-Resume after interrupt via:
-    Command(resume={"approved": bool, "feedback": str | None})
+Parameterised by ``max_followup_attempts``:
+
+- ``0`` (default, pipeline): planner questions are treated as failure.
+  Pipeline callers (``monet run``) cannot supply answers mid-stream, so
+  the planner is expected to plan from first call or fail cleanly.
+- ``>=1`` (chat): a questionnaire node interrupts with the questions,
+  answers feed back into ``planning_context``, and the planner is
+  re-invoked. After ``max_followup_attempts`` rounds the planner is
+  force-planned — a best-effort plan is requested regardless of
+  remaining ambiguity.
+
+Resume shapes:
+- Plan approval: ``{"action": "approve"|"revise"|"reject", "feedback": str|None}``
+- Questionnaire: ``{"q0": "answer", "q1": "skip", ...}``
 
 Returns an uncompiled StateGraph.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Hashable
+
+    from monet.core.hooks import GraphHookRegistry
 
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
@@ -21,40 +38,63 @@ from langchain_core.runnables import (
 from langgraph.graph import END, StateGraph
 from langgraph.types import interrupt
 from opentelemetry import trace
-from pydantic import ValidationError
 
 from monet.core.tracing import attached_trace, extract_carrier_from_config
-from monet.types import find_artifact
 
+from ._forms import build_plan_approval_form, parse_approval_decision
 from ._invoke import invoke_agent
+from ._planner_outcome import (
+    PlannerFailure,
+    PlanOutcome,
+    QuestionsOutcome,
+    classify_planner_result,
+)
 from ._retry_budget import check_budget, increment_budget
-from ._state import PlanningState, RoutingSkeleton
-
-if TYPE_CHECKING:
-    from monet.core.hooks import GraphHookRegistry
+from ._state import PlanningState
 
 MAX_REVISIONS = 3
 
 _tracer = trace.get_tracer("monet.orchestration.planning")
 
 
-async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str, Any]:
-    """Call planner/plan, store pointer + skeleton. Never read artifact content."""
-    context_entries: list[dict[str, Any]] = []
+def _build_context(state: PlanningState, *, force_plan: bool) -> list[dict[str, Any]]:
+    """Assemble planner context from planning_context + feedback + force flag."""
+    entries: list[dict[str, Any]] = []
     for entry in state.get("planning_context") or []:
-        context_entries.append(
+        entries.append(
             {
-                "type": "artifact",
-                "summary": entry.get("content", ""),
+                "type": entry.get("type") or "artifact",
+                "summary": entry.get("summary", ""),
                 "content": entry.get("content", ""),
             }
         )
     feedback = state.get("human_feedback")
     if feedback:
-        context_entries.append(
+        entries.append(
             {"type": "instruction", "summary": "Human feedback", "content": feedback}
         )
+    for answer in state.get("followup_answers") or []:
+        entries.append(answer)
+    if force_plan:
+        entries.append(
+            {
+                "type": "instruction",
+                "summary": "Force-plan override",
+                "content": (
+                    "Produce a best-effort plan now — do NOT return more "
+                    "questions. If any parameter is still unknown, pick a "
+                    "reasonable default and note it in `assumptions`."
+                ),
+            }
+        )
+    return entries
 
+
+async def _invoke_planner(
+    state: PlanningState, config: RunnableConfig, *, force_plan: bool
+) -> dict[str, Any]:
+    """Invoke planner agent and classify outcome into state patch fields."""
+    context_entries = _build_context(state, force_plan=force_plan)
     async with attached_trace(extract_carrier_from_config(config)):
         result = await invoke_agent(
             "planner",
@@ -65,66 +105,113 @@ async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str
             run_id=state.get("run_id", ""),
         )
 
-    if not result.success:
-        reasons = "; ".join(
-            (s.get("reason") or "").splitlines()[0][:200]
-            for s in result.signals
-            if s.get("reason")
-        )
+    cleared: dict[str, Any] = {
+        "human_feedback": None,
+        "followup_answers": None,
+    }
+    outcome = classify_planner_result(result)
+    if isinstance(outcome, PlanOutcome):
+        return {
+            "work_brief_pointer": outcome.work_brief_pointer,
+            "routing_skeleton": outcome.routing_skeleton,
+            "planner_error": None,
+            "pending_questions": None,
+            **cleared,
+        }
+    if isinstance(outcome, QuestionsOutcome):
         return {
             "work_brief_pointer": None,
             "routing_skeleton": None,
-            "planner_error": (
-                f"Planner failed: {reasons}" if reasons else "Planner failed"
-            ),
+            "planner_error": None,
+            "pending_questions": outcome.questions,
+            **cleared,
         }
+    assert isinstance(outcome, PlannerFailure)
+    return {
+        "work_brief_pointer": None,
+        "routing_skeleton": None,
+        "planner_error": outcome.reason,
+        "pending_questions": None,
+        **cleared,
+    }
 
-    pointer = find_artifact(result.artifacts, "work_brief")
-    if pointer is None:
-        return {
-            "work_brief_pointer": None,
-            "routing_skeleton": None,
-            "planner_error": (
-                f"Planner did not produce a work_brief artifact. "
-                f"{len(result.artifacts)} artifact(s) returned."
-            ),
-        }
 
-    inline = result.output if isinstance(result.output, dict) else {}
+def _make_planner_node(
+    max_followup_attempts: int,
+) -> Callable[[PlanningState, RunnableConfig], Awaitable[dict[str, Any]]]:
+    """Return a planner node closure bound to a follow-up budget."""
 
-    # Cross-check artifact id reported inline against the keyed artifact.
-    reported_id = inline.get("work_brief_artifact_id")
-    if reported_id and reported_id != pointer["artifact_id"]:
-        return {
-            "work_brief_pointer": None,
-            "routing_skeleton": None,
-            "planner_error": (
-                f"Planner reported artifact_id '{reported_id}' "
-                f"but keyed artifact has '{pointer['artifact_id']}'."
-            ),
-        }
+    async def planner_node(
+        state: PlanningState, config: RunnableConfig
+    ) -> dict[str, Any]:
+        attempts = state.get("followup_attempts") or 0
+        force_plan = attempts >= max_followup_attempts
+        return await _invoke_planner(state, config, force_plan=force_plan)
 
-    # Validate the routing skeleton from inline output.
-    skeleton_raw = inline.get("routing_skeleton")
-    if not skeleton_raw:
-        return {
-            "work_brief_pointer": None,
-            "routing_skeleton": None,
-            "planner_error": "Planner did not return routing_skeleton in output.",
-        }
-    try:
-        RoutingSkeleton.model_validate(skeleton_raw)
-    except ValidationError as exc:
-        return {
-            "work_brief_pointer": None,
-            "routing_skeleton": None,
-            "planner_error": f"Routing skeleton invalid: {exc}",
-        }
+    return planner_node
+
+
+# Legacy module-level binding: equivalent to ``max_followup_attempts=0``.
+# Preserved so existing imports (``default_graph``, tests) keep working.
+async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str, Any]:
+    """Call planner/plan, store pointer + skeleton. Never read artifact content."""
+    return await _invoke_planner(state, config, force_plan=False)
+
+
+async def questionnaire_node(state: PlanningState) -> dict[str, Any]:
+    """Render pending planner questions as a form, interrupt, collect answers.
+
+    Follow-up attempts are bumped so the planner can detect the
+    force-plan condition on the next visit.
+    """
+    questions = list(state.get("pending_questions") or [])
+    attempts = state.get("followup_attempts") or 0
+    if not questions:
+        return {"pending_questions": None, "followup_attempts": attempts}
+
+    decision = interrupt(_followup_form(questions))
+
+    answers: list[dict[str, Any]] = []
+    if isinstance(decision, dict):
+        for idx, question in enumerate(questions):
+            raw = decision.get(f"q{idx}")
+            if raw is None:
+                continue
+            text = str(raw).strip()
+            if not text or text.lower() in {"skip", "__skip__", "n/a", "-"}:
+                continue
+            answers.append(
+                {
+                    "type": "user_clarification",
+                    "summary": question,
+                    "content": f"Q: {question}\nA: {text}",
+                }
+            )
 
     return {
-        "work_brief_pointer": pointer,
-        "routing_skeleton": skeleton_raw,
-        "planner_error": None,
+        "pending_questions": None,
+        "followup_attempts": attempts + 1,
+        "followup_answers": answers,
+    }
+
+
+def _followup_form(questions: list[str]) -> dict[str, Any]:
+    """Form-schema payload for the planner's follow-up questionnaire."""
+    fields: list[dict[str, Any]] = [
+        {
+            "name": f"q{idx}",
+            "type": "text",
+            "label": question,
+            "default": "",
+        }
+        for idx, question in enumerate(questions)
+    ]
+    return {
+        "prompt": (
+            "The planner needs more information before it can build a plan. "
+            "Answer each question on its own line (or type 'skip' to skip)."
+        ),
+        "fields": fields,
     }
 
 
@@ -144,46 +231,25 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
     pointer = state.get("work_brief_pointer")
     if not pointer:
         return {"plan_approved": False}
-    decision = interrupt(
-        {
-            "prompt": "Approve this plan?",
-            "fields": [
-                {
-                    "name": "action",
-                    "type": "radio",
-                    "label": "Decision",
-                    "options": [
-                        {"value": "approve", "label": "Approve"},
-                        {"value": "revise", "label": "Request changes"},
-                        {"value": "reject", "label": "Reject"},
-                    ],
-                },
-                {
-                    "name": "feedback",
-                    "type": "textarea",
-                    "label": "Feedback (for revise)",
-                    "required": False,
-                },
-            ],
-            "context": {
-                "work_brief_pointer": pointer,
-                "routing_skeleton": state.get("routing_skeleton"),
-            },
-        }
+    decision = parse_approval_decision(
+        interrupt(
+            build_plan_approval_form(
+                work_brief_pointer=pointer,
+                routing_skeleton=state.get("routing_skeleton"),
+            )
+        )
     )
 
-    if not isinstance(decision, dict):
-        return {"plan_approved": False}
-
-    action = decision.get("action", "reject")
-    feedback = decision.get("feedback")
-
-    if action == "approve":
+    if decision.action == "approve":
         return {"plan_approved": True}
-    if action == "revise" and feedback and check_budget(state, MAX_REVISIONS):
+    if (
+        decision.action == "revise"
+        and decision.feedback
+        and check_budget(state, MAX_REVISIONS)
+    ):
         return {
             "plan_approved": False,
-            "human_feedback": feedback,
+            "human_feedback": decision.feedback,
             **increment_budget(state),
         }
     return {"plan_approved": False}
@@ -203,8 +269,23 @@ async def planning_failed_node(state: PlanningState) -> dict[str, Any]:
     return {"plan_approved": False}
 
 
+def _make_route_from_planner(
+    max_followup_attempts: int,
+) -> Callable[[PlanningState], str]:
+    """Router that exits to questionnaire / approval / planning_failed."""
+
+    def route_from_planner(state: PlanningState) -> str:
+        if state.get("pending_questions") and max_followup_attempts > 0:
+            return "questionnaire"
+        if state.get("work_brief_pointer") is not None:
+            return "human_approval"
+        return "planning_failed"
+
+    return route_from_planner
+
+
 def route_from_planner(state: PlanningState) -> str:
-    """Exhaustive routing from planner: either approval or failure."""
+    """Default router (``max_followup_attempts=0``) — approval or failure."""
     if state.get("work_brief_pointer") is None:
         return "planning_failed"
     return "human_approval"
@@ -220,6 +301,8 @@ def route_from_approval(state: PlanningState) -> str:
 
 def build_planning_subgraph(
     hooks: GraphHookRegistry | None = None,
+    *,
+    max_followup_attempts: int = 0,
 ) -> StateGraph[PlanningState]:
     """Build the planning subgraph with HITL approval. Returns uncompiled StateGraph.
 
@@ -227,34 +310,40 @@ def build_planning_subgraph(
         hooks: Optional graph hook registry. Fires ``before_planning``
             with the planning state before the planner runs, and
             ``after_planning`` with the planner update after planning.
+        max_followup_attempts: Number of questionnaire rounds allowed
+            before the planner is force-planned. Default 0 means
+            clarification questions are treated as planning failure
+            (pipeline behaviour). Chat callers pass 1.
     """
-    _planner_inner = planner_node
+    planner_inner = _make_planner_node(max_followup_attempts)
+    route_planner = _make_route_from_planner(max_followup_attempts)
 
     async def _planner_with_hooks(
         state: PlanningState, config: RunnableConfig
     ) -> dict[str, Any]:
         if hooks:
             state = await hooks.run("before_planning", state)
-        update = await _planner_inner(state, config)
+        update = await planner_inner(state, config)
         if hooks and update.get("routing_skeleton"):
-            update = await hooks.run("after_planning", update)
+            update = cast("dict[str, Any]", await hooks.run("after_planning", update))
         return update
 
-    node = _planner_with_hooks if hooks else planner_node
+    planner: Any = _planner_with_hooks if hooks else planner_inner
 
     graph = StateGraph(PlanningState)
-    graph.add_node("planner", node)
+    graph.add_node("planner", planner)
     graph.add_node("human_approval", human_approval_node)
     graph.add_node("planning_failed", planning_failed_node)
+    branches: dict[Hashable, str] = {
+        "human_approval": "human_approval",
+        "planning_failed": "planning_failed",
+    }
+    if max_followup_attempts > 0:
+        graph.add_node("questionnaire", questionnaire_node)
+        graph.add_edge("questionnaire", "planner")
+        branches["questionnaire"] = "questionnaire"
     graph.set_entry_point("planner")
-    graph.add_conditional_edges(
-        "planner",
-        route_from_planner,
-        {
-            "human_approval": "human_approval",
-            "planning_failed": "planning_failed",
-        },
-    )
+    graph.add_conditional_edges("planner", route_planner, branches)
     graph.add_conditional_edges(
         "human_approval", route_from_approval, {"planner": "planner", END: END}
     )

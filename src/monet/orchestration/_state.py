@@ -17,16 +17,11 @@ from monet.types import ArtifactPointer, Signal, SignalType  # noqa: F401, TC001
 
 
 def _append_reducer(
-    existing: list[dict[str, Any]],
+    existing: list[dict[str, Any]] | None,
     new: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Reducer that appends new entries to existing list."""
-    return existing + new
-
-
-def _int_append_reducer(existing: list[int], new: list[int]) -> list[int]:
-    """Reducer that appends int entries to existing list."""
-    return existing + new
+    return (existing or []) + new
 
 
 # --- Routing graph (flat DAG) ---
@@ -215,10 +210,16 @@ class RunState(TypedDict, total=False):
 
 
 class PlanningState(TypedDict, total=False):
-    """State for the planning graph with HITL approval loop."""
+    """State for the planning graph with HITL approval loop.
+
+    Follow-up fields (``pending_questions``, ``followup_answers``,
+    ``followup_attempts``) are active only when the subgraph is built
+    with ``max_followup_attempts > 0``. Pipeline uses the default (0,
+    questions-are-failures); chat uses 1 to allow a single clarification
+    round.
+    """
 
     task: str
-    work_brief: dict[str, Any] | None  # legacy — replaced by pointer + skeleton
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None  # RoutingSkeleton.model_dump()
     planner_error: str | None
@@ -226,6 +227,9 @@ class PlanningState(TypedDict, total=False):
     human_feedback: str | None
     plan_approved: bool | None
     revision_count: int
+    pending_questions: list[str] | None
+    followup_answers: list[dict[str, Any]] | None
+    followup_attempts: int
     trace_id: str
     run_id: str
 
@@ -289,19 +293,21 @@ class WaveItem(TypedDict, total=False):
 
 
 class WaveResult(TypedDict):
-    """Result from a single agent invocation within a wave.
+    """Result from a single agent invocation within the flat DAG.
 
     ``output`` and ``artifacts`` are distinct fields. ``output`` is the
     inline result (string or structured dict). ``artifacts`` lists the
     artifact pointers written by the agent. The orchestrator reads
     them as separate concerns — no fallback between them.
+
+    Shape matches what ``execution_graph.agent_node`` writes to
+    ``ExecutionState.wave_results``.
     """
 
-    phase_index: int
-    wave_index: int
-    item_index: int
+    node_id: str
     agent_id: str
     command: str
     output: str | dict[str, Any] | None
     artifacts: list[dict[str, Any]]
     signals: list[dict[str, Any]]
+    success: bool

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,18 @@ def _resolve_graph_paths(config: dict[str, Any], config_dir: Path) -> dict[str, 
     graphs = config.get("graphs")
     if not graphs:
         return config
+
+    # Ensure cwd is on sys.path before we start importing modules. Aegra
+    # will later add everything in aegra.json ``dependencies`` (which
+    # includes ``.``), but resolution here runs before Aegra boots.
+    # Without this, a user's chat graph module referenced from
+    # ``monet.toml [chat]`` fails to import when ``default_graphs``
+    # runs its module-level ``validate_for_boot``. Mirrors Aegra's
+    # runtime sys.path layout so dev and serve see the same import
+    # environment.
+    cwd_str = str(Path.cwd())
+    if cwd_str not in sys.path:
+        sys.path.insert(0, cwd_str)
 
     resolved = dict(config)
     resolved_graphs: dict[str, str] = {}

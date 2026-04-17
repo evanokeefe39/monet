@@ -18,7 +18,6 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-import monet.agents  # noqa: F401 — registers reference agents
 from monet.artifacts import artifacts_from_env, configure_artifacts
 from monet.config import MONET_QUEUE_BACKEND, ConfigError, QueueConfig, ServerConfig
 from monet.core.tracing import configure_tracing
@@ -118,6 +117,8 @@ def build_chat_graph() -> StateGraph:  # type: ignore[type-arg]
 
 def build_default_graph() -> StateGraph:  # type: ignore[type-arg]
     """0-arg wrapper for Aegra compatibility."""
+    import monet.agents  # noqa: F401 — registers reference agents on first compile only
+
     return _build_default_graph()
 
 
