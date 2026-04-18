@@ -7,8 +7,6 @@ import contextlib
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from monet.server._bootstrap import AgentCapability, bootstrap, configure_lazy_worker
-
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
@@ -17,7 +15,7 @@ if TYPE_CHECKING:
 
     from monet.queue import TaskQueue
 
-__all__ = ["AgentCapability", "bootstrap", "configure_lazy_worker", "create_app"]
+__all__ = ["create_app"]
 
 
 def create_app(
@@ -37,7 +35,8 @@ def create_app(
     from fastapi import FastAPI as _FastAPI
 
     from monet.config import default_config_path
-    from monet.core.manifest import default_manifest
+    from monet.orchestration._invoke import configure_capability_index
+    from monet.server._capabilities import CapabilityIndex
     from monet.server._config import load_config
     from monet.server._deployment import DeploymentStore
     from monet.server._routes import router
@@ -53,7 +52,8 @@ def create_app(
         queue = InMemoryTaskQueue()
 
     deployments = DeploymentStore(db_path=":memory:")
-    manifest = default_manifest
+    capability_index = CapabilityIndex()
+    configure_capability_index(capability_index)
 
     @asynccontextmanager
     async def lifespan(app: _FastAPI) -> AsyncIterator[None]:
@@ -72,12 +72,12 @@ def create_app(
                     await deployments.deactivate_stale_returning_worker_ids()
                 )
                 for wid in stale_worker_ids:
-                    removed = manifest.remove_by_worker(wid)
-                    if removed:
+                    pruned = capability_index.drop_worker(wid)
+                    if pruned:
                         logger.info(
-                            "Removed %d capabilities for stale worker %s",
-                            len(removed),
+                            "Stale worker %s pruned %d capability entries",
                             wid,
+                            len(pruned),
                         )
 
         sweeper_task = asyncio.create_task(_sweep_loop())
@@ -119,7 +119,7 @@ def create_app(
     app = _FastAPI(lifespan=lifespan)
     app.state.queue = queue
     app.state.deployments = deployments
-    app.state.manifest = manifest
+    app.state.capability_index = capability_index
     app.state.config = config
     app.include_router(router)
 

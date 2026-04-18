@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from monet import agent
-from monet.core.manifest import default_manifest
 from monet.core.registry import (
     default_registry,  # internal: needed for registry_scope test fixture
 )
@@ -33,7 +32,7 @@ def _ctx(**overrides: object) -> AgentRunContext:
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> None:  # type: ignore[misc]
-    with default_registry.registry_scope(), default_manifest.manifest_scope():
+    with default_registry.registry_scope():
         yield
 
 
@@ -57,17 +56,15 @@ async def test_invoke_agent_local() -> None:
     assert "Test invoke" in result.output
 
 
-async def test_invoke_agent_missing_raises_when_manifest_configured() -> None:
-    """With a configured manifest, unknown agents fail fast with ValueError.
+async def test_invoke_agent_missing_returns_failure() -> None:
+    """Unknown agents route to pool='local' and surface as a failed result.
 
-    The previous CapabilityUnavailable signal guard was removed in Step 9
-    — pool routing now requires the agent to be known to the manifest.
-    Distributed workers handle discovery via requeue-with-backoff
-    (tracked as a follow-on task).
+    Manifest is no longer the source of truth for existence — workers
+    advertise capabilities via heartbeat; a missing handler in the worker
+    registry produces an AgentResult with ``success=False`` rather than
+    a synchronous ValueError from the orchestrator.
     """
-    import pytest
-
     from monet.orchestration import invoke_agent
 
-    with pytest.raises(ValueError, match="not found in manifest"):
-        await invoke_agent("ghost", task="x")
+    result = await invoke_agent("ghost", task="x")
+    assert result.success is False

@@ -29,9 +29,9 @@ from monet import (
     agent,
     emit_progress,
     emit_signal,
-    get_agent_manifest,
     get_artifacts,
 )
+from monet.core.registry import default_registry
 from monet.exceptions import SemanticError
 
 from ..schemas import AgentRoster, AgentScore
@@ -155,13 +155,12 @@ async def data_analyst_score_agents(
     threshold = float(spec.get("score_threshold") or 0.5)
     since = (datetime.now(tz=UTC) - timedelta(days=window_days)).isoformat()
 
-    manifest = get_agent_manifest()
-    capabilities = manifest.list_agents() if manifest.is_configured() else []
+    roster = default_registry.registered_agents(with_docstrings=True)
 
     scores: list[AgentScore] = []
-    for capability in capabilities:
-        agent_id = capability["agent_id"]
-        command = capability["command"]
+    for capability in roster:
+        agent_id = capability.agent_id
+        command = capability.command
 
         try:
             invocations: list[dict[str, Any]] = await otel_agent_invocations.ainvoke(

@@ -1,19 +1,16 @@
 """Textual TUI for ``monet chat``.
 
-Replaces the :func:`click.prompt`-based REPL with a richer terminal UI:
+The :class:`ChatApp` is the composition root. Sub-systems live in
+sibling modules:
 
-- :class:`RichLog` transcript with markdown support for assistant replies.
-- :class:`Input` prompt wired to :class:`RegistrySuggester` for ghost-text
-  slash-command completion.
-- A :class:`SlashCommandProvider` registered with the built-in command
-  palette (``ctrl+p``) so users can browse the live registry.
-- HITL interrupts render as transcript text and the next user message is
-  parsed as the resume payload (no modal — modals proved unresponsive
-  in real terminals; the prompt Input is the one widget we trust).
-
-The app is driven by a :class:`~monet.client.MonetClient`; the Click
-entry point in :mod:`monet.cli._chat` resolves the thread, builds the
-client, and calls :meth:`ChatApp.run_async`.
+- :mod:`~monet.cli.chat._pulse` — breathing border animation
+- :mod:`~monet.cli.chat._welcome` — empty-state logo overlay
+- :mod:`~monet.cli.chat._turn` — turn streaming + interrupt coordination
+- :mod:`~monet.cli.chat._slash` — ghost-text suggester + command palette
+- :mod:`~monet.cli.chat._pickers` — full-screen list picker
+- :mod:`~monet.cli.chat._hitl` — interrupt form parsing
+- :mod:`~monet.cli.chat._view` — transcript styling
+- :mod:`~monet.cli.chat._constants` — magic values + welcome content
 """
 
 from __future__ import annotations
@@ -21,13 +18,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.color import Color
-from textual.containers import Horizontal
+from textual.containers import Container, Horizontal
 from textual.widgets import (
     Button,
     Header,
@@ -39,29 +35,34 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from monet.cli._chat_hitl import (
-    format_form_prompt as _format_form_prompt,
+from monet.cli._namegen import random_chat_name
+from monet.cli.chat._constants import (
+    BUSY_PULSE_DURATION,
+    BUSY_PULSE_PEAK,
+    CUSTOM_BORDER_COLOR,
+    DEFAULT_TOOLBAR_HINTS,
+    EXIT_CONFIRM_TIMEOUT,
+    IDLE_PULSE_DURATION,
+    IDLE_PULSE_PEAK,
+    INDICATOR_REFRESH_SECONDS,
+    PULSE_ENABLED,
+    TUI_COMMANDS,
 )
-from monet.cli._chat_hitl import (
-    parse_text_reply as _parse_text_reply,
-)
-from monet.cli._chat_pickers import PickerScreen as _PickerScreen
-from monet.cli._chat_slash import RegistrySuggester, SlashCommandProvider
-from monet.cli._chat_view import (
+from monet.cli.chat._pickers import PickerScreen as _PickerScreen
+from monet.cli.chat._pulse import BorderPulseController
+from monet.cli.chat._slash import RegistrySuggester, SlashCommandProvider
+from monet.cli.chat._themes import MONET_DARK, MONET_THEMES
+from monet.cli.chat._turn import InterruptCoordinator, drain_stream, run_turn
+from monet.cli.chat._view import (
     DEFAULT_TAG_STYLES as _DEFAULT_TAG_STYLES,
 )
-from monet.cli._chat_view import (
+from monet.cli.chat._view import (
     ROLE_TAGS as _ROLE_TAGS,
 )
-from monet.cli._chat_view import (
-    format_progress_line as _format_progress_line,
-)
-from monet.cli._chat_view import (
+from monet.cli.chat._view import (
     styled_line as _styled_line,
 )
-from monet.cli._namegen import random_chat_name
-from monet.client._events import AgentProgress
-from monet.config import MONET_CHAT_BORDER_COLOR, MONET_CHAT_PULSE
+from monet.cli.chat._welcome import WelcomeOverlay
 from monet.config._user_chat import UserChatStyle as _UserChatStyle
 
 _log = logging.getLogger("monet.cli.chat")
@@ -69,70 +70,6 @@ _log = logging.getLogger("monet.cli.chat")
 
 if TYPE_CHECKING:
     from monet.client import MonetClient
-
-
-#: Slash commands handled by the TUI itself (not forwarded to the server).
-TUI_COMMANDS: tuple[str, ...] = (
-    "/new",
-    "/clear",
-    "/threads",
-    "/switch",
-    "/agents",
-    "/runs",
-    "/colors",
-    "/help",
-    "/quit",
-    "/exit",
-)
-
-#: Fallback text for the toolbar indicator before first refresh / when
-#: the registry is unreachable. Real content is ``● N agents · 📎 M
-#: artifacts``, refreshed on mount + after every turn completes.
-_DEFAULT_TOOLBAR_HINTS = "● … · 📎 …"
-
-#: Slash-command hints shown once, inline, at the start of each chat
-#: session. Intentionally **not persisted** to the thread backend — the
-#: hint is UX only and should never leak into LLM context on a resume.
-_WELCOME_HINT = (
-    "Slash commands: /new · /threads · /switch · /agents · /help · /quit "
-    "(or ctrl+c twice)"
-)
-
-#: How often the toolbar indicator repolls the registry + artifact store.
-_INDICATOR_REFRESH_SECONDS = 5.0
-
-#: Seconds the toolbar holds the confirm-exit hint before disarming ctrl+c.
-_EXIT_CONFIRM_TIMEOUT = 5.0
-
-#: Border pulse is enabled unless the operator opts out via env var.
-_PULSE_ENABLED = os.environ.get(MONET_CHAT_PULSE, "1").lower() not in {
-    "0",
-    "off",
-    "false",
-    "no",
-}
-
-#: Operator-supplied border colour for tmux / multi-pane differentiation.
-#: Accepts any Textual-parseable color string (hex, named, rgb(...)). When
-#: set, it becomes the pulse PEAK colour for both busy and idle pulses, so
-#: every pane carries a distinct "signature" hue. Unset → theme ``$accent``.
-_CUSTOM_BORDER_COLOR = os.environ.get(MONET_CHAT_BORDER_COLOR, "").strip()
-
-#: Seconds per half-cycle for the border breath. Same rhythm across both
-#: widgets so the transition from idle-prompt to busy-transcript feels
-#: like a single pulse passing between the two rather than two different
-#: speeds.
-_BUSY_PULSE_DURATION = 1.0
-_IDLE_PULSE_DURATION = 1.0
-
-#: Theme-variable names used as the pulse peak when no
-#: ``MONET_CHAT_BORDER_COLOR`` override is set.
-_BUSY_PULSE_PEAK = "accent"
-_IDLE_PULSE_PEAK = "accent"
-
-#: Theme-variable name for the resting / inactive border colour. Deliberately
-#: dim so the pulse reads as a clear contrast swing against this base.
-_IDLE_BORDER_VAR = "panel-lighten-2"
 
 
 # --- Main app -------------------------------------------------------------
@@ -144,6 +81,24 @@ class ChatApp(App[None]):
     CSS = """
     Screen {
         background: black;
+        overflow: hidden;
+    }
+
+    * {
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
+        scrollbar-background: black;
+        scrollbar-background-hover: black;
+        scrollbar-background-active: black;
+        scrollbar-color: $accent 60%;
+        scrollbar-color-hover: $accent;
+        scrollbar-color-active: $accent;
+        scrollbar-corner-color: black;
+    }
+
+    #transcript-area {
+        height: 1fr;
+        layers: base overlay;
     }
 
     #toolbar {
@@ -190,6 +145,8 @@ class ChatApp(App[None]):
         border: round $primary;
         padding: 0 1;
         background: black;
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 0;
     }
 
     #prompt {
@@ -226,6 +183,40 @@ class ChatApp(App[None]):
     #spinner.visible {
         display: block;
     }
+
+    /* ctrl+p command palette — match the dark transcript theme. */
+    CommandPalette {
+        background: black 70%;
+    }
+
+    CommandPalette > Vertical {
+        width: 60%;
+        max-width: 80;
+        height: auto;
+        max-height: 80%;
+        background: black;
+        border: round $panel-lighten-2;
+    }
+
+    CommandPalette Input {
+        background: black;
+        border: none;
+        color: $text;
+        padding: 0 1;
+    }
+
+    CommandPalette OptionList,
+    CommandPalette SearchIcon,
+    CommandPalette LoadingIndicator {
+        background: black;
+        border: none;
+        color: $text;
+    }
+
+    CommandPalette .command-palette--highlight {
+        color: $accent;
+        text-style: bold;
+    }
     """
 
     COMMANDS: ClassVar = App.COMMANDS | {SlashCommandProvider}
@@ -235,6 +226,7 @@ class ChatApp(App[None]):
         Binding("down", "focus_suggest", "Suggestions", show=False),
         Binding("escape", "hide_suggest", "Close", show=False),
         Binding("tab", "accept_suggestion", "Complete", show=False, priority=True),
+        Binding("f1", "toggle_help_panel", "Keys", show=False),
     ]
 
     def __init__(
@@ -251,29 +243,26 @@ class ChatApp(App[None]):
         self._chat_thread_id: str = thread_id
         self._server_slash_commands: list[str] = list(slash_commands or [])
         self.slash_commands: list[str] = self._combined_slash_commands()
+        # Per-command short descriptions shown in the completion dropdown.
+        # Seeded from TUI defaults; ``refresh_slash_commands`` merges in
+        # agent-command descriptions from the server capability manifest.
+        self.slash_descriptions: dict[str, str] = dict(TUI_COMMANDS)
         self._suggester = RegistrySuggester(self.slash_commands)
         self._initial_history = list(history or [])
         self._busy = False
         self._transcript_lines: list[str] = []
-        # Set when the next user submission should be treated as a
-        # HITL resume payload instead of a chat message. Resolved by
-        # ``on_input_submitted``; awaited by ``_collect_resume``.
-        self._pending_resume: asyncio.Future[str] | None = None
+        # HITL coordinator — holds the future resolved by the next
+        # prompt submission when ``InterruptCoordinator.collect`` is
+        # awaiting.
+        self._interrupts = InterruptCoordinator()
         # ctrl+c two-press confirm-exit state.
         self._exit_arm_handle: asyncio.TimerHandle | None = None
-        # Per-widget pulse timer. ``_start_pulse`` schedules a
-        # set_interval that updates the widget's border colors on each
-        # tick; ``_stop_pulse`` cancels the interval handle and restores
-        # the base color. Border color is not in Textual's animatable
-        # property list (see RenderStyles.ANIMATABLE) so we interpolate
-        # manually via Color.blend.
-        self._pulse_timers: dict[str, Any] = {}
         # Toolbar indicator state. ``_indicator_text`` holds the most
         # recent "● N agents · 📎 M artifacts" string; transient hints
         # (confirm-exit, error flash) set ``_indicator_override`` so the
         # periodic refresher knows not to clobber them. Restoring the
         # indicator just clears the override.
-        self._indicator_text: str = _DEFAULT_TOOLBAR_HINTS
+        self._indicator_text: str = DEFAULT_TOOLBAR_HINTS
         self._indicator_override: bool = False
         # Profile baseline — merged from built-in defaults + user profile.
         # ``/colors reset`` returns here; individual ``/colors`` changes
@@ -283,11 +272,13 @@ class ChatApp(App[None]):
             _DEFAULT_TAG_STYLES
         )
         self._profile_border_color: str = _profile.border_color or ""
-        # Live palette — starts from the profile baseline. MONET_CHAT_BORDER_COLOR
-        # env var wins over the profile for border (tmux pane differentiation).
+        # Live palette — starts from the profile baseline.
         self._tag_styles: dict[str, str] = dict(self._profile_tag_styles)
-        self._border_color_override: str = (
-            _CUSTOM_BORDER_COLOR or self._profile_border_color
+        # Border pulse controller. MONET_CHAT_BORDER_COLOR env var wins
+        # over the profile for border (tmux pane differentiation).
+        self._pulse = BorderPulseController(
+            self,
+            override_color=CUSTOM_BORDER_COLOR or self._profile_border_color,
         )
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -305,7 +296,7 @@ class ChatApp(App[None]):
 
     def _combined_slash_commands(self) -> list[str]:
         """TUI-level commands first, then server-declared slash commands."""
-        out: list[str] = list(TUI_COMMANDS)
+        out: list[str] = [cmd for cmd, _desc in TUI_COMMANDS]
         seen = set(out)
         for cmd in self._server_slash_commands:
             if cmd not in seen:
@@ -322,9 +313,11 @@ class ChatApp(App[None]):
                 placeholder=self._thread_name_placeholder(),
                 id="thread-name",
             )
-            yield Static(_DEFAULT_TOOLBAR_HINTS, id="toolbar-hints")
+            yield Static(DEFAULT_TOOLBAR_HINTS, id="toolbar-hints")
             yield Button("⧉ copy", id="copy-transcript", variant="default")
-        yield RichLog(id="transcript", wrap=True, markup=False, highlight=False)
+        with Container(id="transcript-area"):
+            yield RichLog(id="transcript", wrap=True, markup=False, highlight=False)
+            yield WelcomeOverlay()
         yield OptionList(id="slash-suggest")
         yield LoadingIndicator(id="spinner")
         yield Input(
@@ -334,63 +327,95 @@ class ChatApp(App[None]):
         )
 
     def _thread_name_placeholder(self) -> str:
-        short = self._chat_thread_id[:8] if self._chat_thread_id else "(none)"
+        short = self._chat_thread_id[:8] if self._chat_thread_id else "(new)"
         return f"untitled · {short}"
+
+    async def _ensure_thread_id(self) -> str:
+        """Create the backing thread lazily on first real use.
+
+        Default ``monet chat`` launch passes an empty id so idle
+        sessions don't spam empty threads. The first user submission
+        (or rename) allocates a thread and updates the title / toolbar.
+        """
+        if self._chat_thread_id:
+            return self._chat_thread_id
+        generated_name = random_chat_name()
+        new_id = await self._client.chat.create_chat(name=generated_name)
+        self._chat_thread_id = new_id
+        self.title = f"monet chat · {generated_name}"
+        with contextlib.suppress(Exception):
+            thread_input = self.query_one("#thread-name", Input)
+            thread_input.value = generated_name
+            thread_input.placeholder = self._thread_name_placeholder()
+        return new_id
 
     def _set_toolbar_hints(self, text: str) -> None:
         with contextlib.suppress(Exception):
             self.query_one("#toolbar-hints", Static).update(text)
 
     def on_mount(self) -> None:
-        self.title = f"monet chat · {self._chat_thread_id}"
+        # Register monet's own themes before first paint so CSS vars
+        # like $primary / $accent resolve to the monet palette instead
+        # of Textual's built-in defaults.
+        for theme in MONET_THEMES:
+            with contextlib.suppress(Exception):
+                self.register_theme(theme)
+        self.theme = MONET_DARK.name
+        self.title = (
+            f"monet chat · {self._chat_thread_id}"
+            if self._chat_thread_id
+            else "monet chat · (new)"
+        )
         for msg in self._initial_history:
             role = str(msg.get("role") or "user")
             content = str(msg.get("content") or "")
             self._append_line(f"[{role}] {content}")
-        # Ephemeral welcome banner — rendered into the transcript, not
-        # written to the thread backend. A returning user who scrolls up
-        # or resumes a thread sees the banner only on the current session.
-        self._append_line(f"[hint] {_WELCOME_HINT}")
+        # Empty-state welcome: centered logo + key-command cheatsheet.
+        # Not written to the thread backend; a returning user with prior
+        # history sees their messages instead (no welcome).
+        if not self._initial_history:
+            self.call_after_refresh(self._show_welcome)
         self.query_one("#prompt", Input).focus()
         self.run_worker(self._load_thread_name(), exclusive=False)
         # Kick off the toolbar indicator (agent count + artifact count).
         self._refresh_indicator()
-        self.set_interval(_INDICATOR_REFRESH_SECONDS, self._refresh_indicator)
+        self.set_interval(INDICATOR_REFRESH_SECONDS, self._refresh_indicator)
         # Paint both borders dim so the idle pulse reads as a clear swing
         # against a quiet baseline, then kick off the idle pulse itself.
-        if _PULSE_ENABLED:
-            self._apply_idle_borders()
+        if PULSE_ENABLED:
+            self._pulse.apply_idle_borders(("#transcript", "#prompt"))
         self._set_busy(False)
 
     def _refresh_indicator(self) -> None:
         """Recompute the toolbar indicator (agent count · artifact count).
 
-        Agents come from the in-process registry (always available).
-        Artifacts come from ``get_artifacts().query_recent(thread_id=...)``
-        — best-effort, swallowed on any error so a missing backend never
-        surfaces in the toolbar.
+        Agents come from the server (``client.list_capabilities``) —
+        the chat TUI runs in its own process, so the in-process
+        ``default_registry`` is always empty here. Artifacts come from
+        ``get_artifacts().query_recent(thread_id=...)`` — best-effort,
+        swallowed on any error so a missing backend never surfaces in
+        the toolbar.
         """
         self.run_worker(self._refresh_indicator_async(), exclusive=False)
 
     async def _refresh_indicator_async(self) -> None:
-        from monet.core.registry import default_registry
-
         try:
-            agents = default_registry.registered_agents()
-            agent_count = len({agent_id for agent_id, _ in agents})
+            caps = await self._client.list_capabilities()
+            agent_count = len({str(c.get("agent_id") or "") for c in caps} - {""})
         except Exception:
             agent_count = 0
 
         artifact_count = 0
-        try:
-            from monet.core.artifacts import get_artifacts
+        if self._chat_thread_id:
+            try:
+                from monet.core.artifacts import get_artifacts
 
-            rows = await get_artifacts().query_recent(
-                thread_id=self._chat_thread_id, limit=10_000
-            )
-            artifact_count = len(rows)
-        except Exception:
-            artifact_count = 0
+                rows = await get_artifacts().query_recent(
+                    thread_id=self._chat_thread_id, limit=10_000
+                )
+                artifact_count = len(rows)
+            except Exception:
+                artifact_count = 0
 
         text = f"● {agent_count} agents · 📎 {artifact_count} artifacts"
         self._indicator_text = text
@@ -401,14 +426,12 @@ class ChatApp(App[None]):
     def on_unmount(self) -> None:
         """Stop any running pulse before teardown so no tick fires against
         a widget that is being removed."""
-        for selector in list(self._pulse_timers):
-            timer = self._pulse_timers.pop(selector, None)
-            if timer is not None:
-                with contextlib.suppress(Exception):
-                    timer.stop()
+        self._pulse.shutdown()
 
     async def _load_thread_name(self) -> None:
         """Populate the toolbar thread-name input from server metadata."""
+        if not self._chat_thread_id:
+            return
         try:
             name = await self._client.chat.get_chat_name(self._chat_thread_id)
         except Exception as exc:
@@ -440,139 +463,34 @@ class ChatApp(App[None]):
         """
         self._busy = busy
         self._set_spinner(busy)
-        if not _PULSE_ENABLED:
+        if not PULSE_ENABLED:
             return
         if busy:
-            self._stop_pulse("#prompt")
-            self._start_pulse(
+            self._pulse.stop("#prompt")
+            self._pulse.start(
                 "#transcript",
-                peak_var=_BUSY_PULSE_PEAK,
-                duration=_BUSY_PULSE_DURATION,
+                peak_var=BUSY_PULSE_PEAK,
+                duration=BUSY_PULSE_DURATION,
             )
         else:
-            self._stop_pulse("#transcript")
-            self._start_pulse(
+            self._pulse.stop("#transcript")
+            self._pulse.start(
                 "#prompt",
-                peak_var=_IDLE_PULSE_PEAK,
-                duration=_IDLE_PULSE_DURATION,
+                peak_var=IDLE_PULSE_PEAK,
+                duration=IDLE_PULSE_DURATION,
             )
 
-    def _resolve_css_color(self, var_name: str, fallback: str) -> Color:
-        """Resolve a theme variable (e.g. ``accent``) to a concrete Color.
+    # ── Welcome overlay ──────────────────────────────────────────
 
-        ``var_name`` is the bare variable name without the leading ``$``.
-        Falls back to ``fallback`` (a hex string) if the variable is
-        not present — keeps the pulse from crashing under unusual
-        themes.
-        """
-        variables = self.get_css_variables()
-        raw = variables.get(var_name) or fallback
-        try:
-            return Color.parse(raw)
-        except Exception:
-            return Color.parse(fallback)
-
-    def _start_pulse(self, selector: str, *, peak_var: str, duration: float) -> None:
-        """Begin a breathing border pulse on *selector*.
-
-        Textual does not animate border colors via ``styles.animate``
-        (border_*_color is not in ``RenderStyles.ANIMATABLE``), so the
-        pulse is a manual timer: every tick interpolates between a dim
-        base and a bright peak using a sine wave and writes the result
-        to all four border edges.
-
-        ``MONET_CHAT_BORDER_COLOR`` overrides the peak so tmux / multi-pane
-        operators can give each chat instance a signature hue.
-        """
-        if selector in self._pulse_timers:
-            return  # already pulsing
-        widget = None
+    def _show_welcome(self) -> None:
         with contextlib.suppress(Exception):
-            widget = self.query_one(selector)
-        if widget is None:
-            return
-        base = self._idle_border_color()
-        peak = self._pulse_peak_color(peak_var)
-        # Track wall-clock start so phase stays continuous across ticks.
-        start = asyncio.get_event_loop().time()
-        tick_interval = 0.05  # 20fps — smooth enough, cheap enough
+            self.query_one(WelcomeOverlay).show()
 
-        def tick() -> None:
-            with contextlib.suppress(Exception):
-                self._pulse_tick(widget, base, peak, duration, start)
-
-        self._pulse_timers[selector] = self.set_interval(tick_interval, tick)
-
-    def _idle_border_color(self) -> Color:
-        """Dim colour used for inactive borders and as the pulse trough."""
-        return self._resolve_css_color(_IDLE_BORDER_VAR, "#1a1a2e")
-
-    def _pulse_peak_color(self, peak_var: str) -> Color:
-        """Bright colour at the crest of the pulse.
-
-        ``MONET_CHAT_BORDER_COLOR`` wins when set — the override is the
-        point of the env var (tmux pane differentiation).
-        """
-        if self._border_color_override:
-            with contextlib.suppress(Exception):
-                return Color.parse(self._border_color_override)
-        return self._resolve_css_color(peak_var, "#9b59b6")
-
-    def _apply_idle_borders(self) -> None:
-        """Paint both widget borders with the dim idle colour.
-
-        Called on mount so the chat starts with visibly quiet borders —
-        the pulse peak then reads as an obvious contrast swing. Also
-        called by ``_stop_pulse`` to snap back cleanly.
-        """
-        base = self._idle_border_color()
-        for selector in ("#transcript", "#prompt"):
-            widget = None
-            with contextlib.suppress(Exception):
-                widget = self.query_one(selector)
-            if widget is None:
-                continue
-            current_top = widget.styles.border_top
-            border_type = current_top[0] if current_top else "round"
-            for edge in ("top", "right", "bottom", "left"):
-                setattr(widget.styles, f"border_{edge}", (border_type, base))
-
-    def _pulse_tick(
-        self,
-        widget: Any,
-        base: Color,
-        peak: Color,
-        duration: float,
-        start: float,
-    ) -> None:
-        """One frame of the pulse loop — interpolate and repaint the border."""
-        import math
-
-        elapsed = asyncio.get_event_loop().time() - start
-        # Sine wave from 0→1→0 with period = 2 * duration.
-        phase = 0.5 - 0.5 * math.cos(math.pi * elapsed / duration)
-        color = base.blend(peak, phase)
-        current_top = widget.styles.border_top
-        border_type = current_top[0] if current_top else "round"
-        for edge in ("top", "right", "bottom", "left"):
-            setattr(widget.styles, f"border_{edge}", (border_type, color))
-
-    def _stop_pulse(self, selector: str) -> None:
-        """Halt a running pulse and snap the border back to the dim idle color."""
-        timer = self._pulse_timers.pop(selector, None)
-        if timer is not None:
-            with contextlib.suppress(Exception):
-                timer.stop()
-        widget = None
+    def _hide_welcome(self) -> None:
         with contextlib.suppress(Exception):
-            widget = self.query_one(selector)
-        if widget is None:
-            return
-        base = self._idle_border_color()
-        current_top = widget.styles.border_top
-        border_type = current_top[0] if current_top else "round"
-        for edge in ("top", "right", "bottom", "left"):
-            setattr(widget.styles, f"border_{edge}", (border_type, base))
+            self.query_one(WelcomeOverlay).hide()
+
+    # ── Transcript ───────────────────────────────────────────────
 
     def _append_line(self, line: str) -> None:
         """Write *line* to the transcript and buffer it for copy-to-clipboard.
@@ -581,6 +499,7 @@ class ChatApp(App[None]):
         rendered version uses :func:`_styled_line` so the leading
         ``[role]`` tag renders in the configured colour.
         """
+        self._hide_welcome()
         self._transcript_lines.append(line)
         with contextlib.suppress(Exception):
             self.query_one("#transcript", RichLog).write(
@@ -614,7 +533,12 @@ class ChatApp(App[None]):
         prompt.cursor_position = len(text)
 
     async def refresh_slash_commands(self) -> None:
-        """Reload the server slash-command list and refresh the suggester."""
+        """Reload the server slash-command list and refresh the suggester.
+
+        Also pulls the capability manifest so agent-command entries
+        (``/<agent>:<command>``) carry the agent's own description in
+        the completion dropdown.
+        """
         try:
             commands = await self._client.slash_commands()
         except Exception:
@@ -623,6 +547,22 @@ class ChatApp(App[None]):
         self._server_slash_commands = commands
         self.slash_commands = self._combined_slash_commands()
         self._suggester.update(self.slash_commands)
+        # Reset to TUI defaults before layering server-side descriptions
+        # so a capability unregistered between refreshes drops out of
+        # the dropdown hint.
+        descriptions: dict[str, str] = dict(TUI_COMMANDS)
+        try:
+            caps = await self._client.list_capabilities()
+        except Exception:
+            _log.debug("list_capabilities failed during slash refresh", exc_info=True)
+            caps = []
+        for cap in caps:
+            agent_id = str(cap.get("agent_id") or "")
+            command = str(cap.get("command") or "")
+            desc = str(cap.get("description") or "").strip()
+            if agent_id and command and desc:
+                descriptions[f"/{agent_id}:{command}"] = desc
+        self.slash_descriptions = descriptions
 
     # ── Slash-command dropdown ────────────────────────────────────
 
@@ -633,6 +573,8 @@ class ChatApp(App[None]):
         self._refresh_slash_suggest(event.value)
 
     def _refresh_slash_suggest(self, value: str) -> None:
+        from rich.text import Text
+
         suggest = self.query_one("#slash-suggest", OptionList)
         stripped = value.strip()
         if not stripped.startswith("/") or " " in stripped:
@@ -643,8 +585,15 @@ class ChatApp(App[None]):
         if not matches:
             suggest.remove_class("visible")
             return
+        # Column-align command names so descriptions line up evenly.
+        width = max(len(cmd) for cmd in matches[:20])
         for cmd in matches[:20]:
-            suggest.add_option(Option(cmd, id=cmd))
+            label = Text(no_wrap=True, overflow="ellipsis")
+            label.append(f"{cmd:<{width}}", style="bold")
+            desc = self.slash_descriptions.get(cmd, "")
+            if desc:
+                label.append(f"   {desc}", style="dim")
+            suggest.add_option(Option(label, id=cmd))
         suggest.add_class("visible")
         suggest.highlighted = 0
 
@@ -698,7 +647,7 @@ class ChatApp(App[None]):
 
         The actual chat turn / interrupt-resume work runs in a worker
         so the Input widget's message pump stays free — otherwise a
-        long-running ``await`` (especially the ``_pending_resume`` future
+        long-running ``await`` (especially the interrupt-resume future
         used by HITL) would block the pump and the user could not type
         the next message.
         """
@@ -722,11 +671,9 @@ class ChatApp(App[None]):
         # If a turn is mid-flight waiting on a HITL resume, hand this
         # submission to the awaiting worker instead of starting a new
         # chat turn. The resumer prints [user] when it consumes it.
-        pending = self._pending_resume
-        if pending is not None and not pending.done():
-            self._pending_resume = None
+        if self._interrupts.is_pending():
             self._append_line(f"[user] {text}")
-            pending.set_result(text)
+            self._interrupts.consume_if_pending(text)
             return
         if self._busy:
             return
@@ -736,7 +683,8 @@ class ChatApp(App[None]):
     async def _rename_thread(self, name: str) -> None:
         """Persist a thread rename and surface success / failure as a notify."""
         try:
-            await self._client.chat.rename_chat(self._chat_thread_id, name)
+            thread_id = await self._ensure_thread_id()
+            await self._client.chat.rename_chat(thread_id, name)
         except Exception as exc:
             _log.warning("rename_chat failed: %s", exc)
             self.notify(f"rename failed: {exc}", severity="error")
@@ -754,11 +702,11 @@ class ChatApp(App[None]):
             return
         self._indicator_override = True
         self._set_toolbar_hints(
-            f"press ctrl+c again within {int(_EXIT_CONFIRM_TIMEOUT)}s to exit"
+            f"press ctrl+c again within {int(EXIT_CONFIRM_TIMEOUT)}s to exit"
         )
         loop = asyncio.get_running_loop()
         self._exit_arm_handle = loop.call_later(
-            _EXIT_CONFIRM_TIMEOUT, self._reset_exit_arm
+            EXIT_CONFIRM_TIMEOUT, self._reset_exit_arm
         )
 
     def _reset_exit_arm(self) -> None:
@@ -787,8 +735,19 @@ class ChatApp(App[None]):
         self.sub_title = "thinking…"
         self._append_line("[info] thinking…")
         try:
-            stream = self._client.chat.send_message(self._chat_thread_id, text)
-            await self._run_turn(log, first_stream=stream)
+            thread_id = await self._ensure_thread_id()
+            stream = self._client.chat.send_message(thread_id, text)
+            await run_turn(
+                client=self._client,
+                thread_id=thread_id,
+                first_stream=stream,
+                coordinator=self._interrupts,
+                writer=self._append_line,
+                busy_setter=self._set_busy,
+                focus_prompt=self._focus_prompt,
+                get_interrupt=self._client.chat.get_chat_interrupt,
+                resume=self._client.chat.resume_chat,
+            )
         except Exception as exc:
             self._append_line(f"[error] {exc}")
             _log.exception("chat turn failed")
@@ -797,34 +756,24 @@ class ChatApp(App[None]):
         # Turn finished — any new artifacts now want counting.
         self._refresh_indicator()
 
-    async def _run_turn(
-        self,
-        log: RichLog,
-        first_stream: Any,
-    ) -> None:
-        """Drive one user turn: stream, handle interrupts, loop until idle."""
-        had_output = await self._drain_stream(log, first_stream, source="initial")
-        while True:
-            pending = await self._client.chat.get_chat_interrupt(self._chat_thread_id)
-            if not pending:
-                if not had_output:
-                    self._append_line("[info] (no assistant response)")
-                    _log.warning("turn ended with no output and no interrupt")
-                return
-            had_output = True  # interrupt form counts as output
-            _log.info("interrupt pending tag=%s", pending.get("tag"))
-            form = pending.get("values") or {}
-            if not isinstance(form, dict) or not form.get("fields"):
-                self._append_line("[info] graph paused but no form schema — aborting")
-                _log.warning("interrupt payload missing form schema: %r", form)
-                return
-            decision = await self._collect_resume(form)
-            if decision is None:
-                self._append_line("[info] interrupt skipped — sending reject")
-                decision = {"action": "reject", "feedback": ""}
-            _log.info("resume payload=%r", decision)
-            stream = self._client.chat.resume_chat(self._chat_thread_id, decision)
-            had_output = await self._drain_stream(log, stream, source="resume")
+    def _focus_prompt(self) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#prompt", Input).focus()
+
+    def action_toggle_help_panel(self) -> None:
+        """Toggle Textual's key/help side panel (bound to ``f1``).
+
+        Textual exposes ``show_help_panel`` / ``hide_help_panel`` actions
+        via the command palette but binds neither by default, which
+        leaves users stranded once they've opened the panel from the
+        palette.
+        """
+        from textual.widgets import HelpPanel
+
+        if self.screen.query(HelpPanel):
+            self.action_hide_help_panel()
+        else:
+            self.action_show_help_panel()
 
     async def _collect_resume(
         self,
@@ -832,37 +781,15 @@ class ChatApp(App[None]):
     ) -> dict[str, Any] | None:
         """Render *form* in the transcript and parse the next user reply.
 
-        Loops on parse failure so a typo (``aprove``) becomes a re-prompt
-        rather than a silent reject.
+        Thin wrapper over :meth:`InterruptCoordinator.collect` kept as a
+        method so tests can drive it directly via ``app._collect_resume``.
         """
-        for line in _format_form_prompt(form):
-            self._append_line(line)
-        first = True
-        while True:
-            if not first:
-                self._append_line(
-                    "[error] didn't recognise that — reply: "
-                    "approve | revise <feedback> | reject"
-                )
-            first = False
-            # Pause "busy" so the user can submit; spinner stays off
-            # until the resume kicks the next stream. HITL waits read
-            # as idle so the prompt border pulses to cue "reply here".
-            self._set_busy(False)
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[str] = loop.create_future()
-            self._pending_resume = future
-            with contextlib.suppress(Exception):
-                self.query_one("#prompt", Input).focus()
-            try:
-                text = await future
-            finally:
-                self._pending_resume = None
-            payload = _parse_text_reply(form, text)
-            if payload is not None:
-                # Re-arm busy state for the resume stream.
-                self._set_busy(True)
-                return payload
+        return await self._interrupts.collect(
+            form,
+            writer=self._append_line,
+            busy_setter=self._set_busy,
+            focus_prompt=self._focus_prompt,
+        )
 
     async def _drain_stream(
         self,
@@ -871,41 +798,15 @@ class ChatApp(App[None]):
         *,
         source: str,
     ) -> bool:
-        """Drain *stream*, render events. Returns True when something was shown."""
-        streamed = False
-        async for chunk in stream:
-            if isinstance(chunk, AgentProgress):
-                # Progress events are intermediate signal — render them
-                # but don't suppress the assistant-fallback below if no
-                # actual reply lands.
-                line = _format_progress_line(chunk)
-                self._append_line(line)
-                _log.info(
-                    "%s progress agent=%s status=%s",
-                    source,
-                    chunk.agent_id,
-                    chunk.status,
-                )
-                continue
-            self._append_line(f"[assistant] {chunk}")
-            _log.info("%s chunk len=%d", source, len(str(chunk)))
-            streamed = True
-        if streamed:
-            return True
-        _log.info("%s stream yielded nothing; state read fallback", source)
-        try:
-            history = await self._client.chat.get_chat_history(self._chat_thread_id)
-        except Exception as exc:
-            self._append_line(f"[error] state read failed: {exc}")
-            _log.exception("get_chat_history failed")
-            return True
-        for msg in reversed(history):
-            if isinstance(msg, dict) and msg.get("role") == "assistant":
-                content = str(msg.get("content") or "").strip()
-                if content:
-                    self._append_line(f"[assistant] {content}")
-                return True
-        return False
+        """Thin wrapper over :func:`drain_stream` preserving the test surface."""
+        del log  # transcript writer is bound below
+        return await drain_stream(
+            stream,
+            self._append_line,
+            source=source,
+            client=self._client,
+            thread_id=self._chat_thread_id,
+        )
 
     # ── TUI-level slash commands ──────────────────────────────────
 
@@ -944,14 +845,13 @@ class ChatApp(App[None]):
             self._append_line(f"[error] /new failed: {exc}")
             return
         self._chat_thread_id = new_id
-        self.title = f"monet chat · {new_id}"
+        self.title = f"monet chat · {generated_name}"
         with contextlib.suppress(Exception):
             thread_input = self.query_one("#thread-name", Input)
             thread_input.value = generated_name
             thread_input.placeholder = self._thread_name_placeholder()
         self._reset_transcript(f"[info] new thread · {generated_name} · {new_id[:8]}")
-        # Re-render welcome banner + refresh artifact count for the new thread.
-        self._append_line(f"[hint] {_WELCOME_HINT}")
+        self.call_after_refresh(self._show_welcome)
         self._refresh_indicator()
 
     async def _cmd_list_threads(self, log: RichLog) -> None:
@@ -1002,13 +902,12 @@ class ChatApp(App[None]):
             role = str(msg.get("role") or "user")
             content = str(msg.get("content") or "")
             self._append_line(f"[{role}] {content}")
-        self._append_line(f"[hint] {_WELCOME_HINT}")
+        if not history:
+            self.call_after_refresh(self._show_welcome)
         self._refresh_indicator()
 
     def _reset_transcript(self, first_line: str | None = None) -> None:
         """Clear the transcript RichLog and its copy buffer in lockstep."""
-        import contextlib
-
         self._transcript_lines = []
         with contextlib.suppress(Exception):
             self.query_one("#transcript", RichLog).clear()
@@ -1090,8 +989,8 @@ class ChatApp(App[None]):
             return
         if len(parts) == 1 and parts[0] == "reset":
             self._tag_styles = dict(self._profile_tag_styles)
-            self._border_color_override = (
-                _CUSTOM_BORDER_COLOR or self._profile_border_color
+            self._pulse.override_color = (
+                CUSTOM_BORDER_COLOR or self._profile_border_color
             )
             self._refresh_active_pulse()
             self._append_line("[info] colors reset to profile")
@@ -1111,7 +1010,7 @@ class ChatApp(App[None]):
             )
             return
         if target == "border":
-            self._border_color_override = value
+            self._pulse.override_color = value
             self._refresh_active_pulse()
             self._append_line(f"[info] border colour set to {value}")
             return
@@ -1130,7 +1029,7 @@ class ChatApp(App[None]):
     def _print_color_palette(self) -> None:
         """Render the current palette as transcript lines."""
         self._append_line("[info] current colors (session):")
-        border = self._border_color_override or "(theme $accent)"
+        border = self._pulse.override_color or "(theme $accent)"
         self._append_line(f"  border      {border}")
         for target, tag in _ROLE_TAGS.items():
             style = self._tag_styles.get(tag, "")
@@ -1139,10 +1038,10 @@ class ChatApp(App[None]):
 
     def _refresh_active_pulse(self) -> None:
         """Restart whichever pulse is active so a new border colour applies."""
-        if not _PULSE_ENABLED:
+        if not PULSE_ENABLED:
             return
-        for selector in list(self._pulse_timers):
-            self._stop_pulse(selector)
+        for selector in self._pulse.active_selectors():
+            self._pulse.stop(selector)
         self._set_busy(self._busy)
 
     def _cmd_help(self, log: RichLog) -> None:

@@ -42,9 +42,21 @@ async def app_client(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     from monet.queue import InMemoryTaskQueue
     from monet.server import create_app
+    from monet.server._capabilities import Capability
 
     queue = InMemoryTaskQueue()
     app = create_app(queue=queue)
+    # Pre-register workers for the pools touched by the claim-endpoint
+    # tests so the pool-scoped claim auth check passes. Uses a distinct
+    # worker_id per pool because a worker only heartbeats one pool.
+    app.state.capability_index.upsert_worker(
+        "w1",
+        "claim-test",
+        [Capability(agent_id="t", command="go", pool="claim-test")],
+    )
+    app.state.capability_index.upsert_worker(
+        "w2", "empty", [Capability(agent_id="t", command="go", pool="empty")]
+    )
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -145,7 +157,7 @@ async def test_claim_endpoint_returns_204_on_empty(app_client: Any) -> None:
     _, client = app_client
     resp = await client.post(
         "/api/v1/pools/empty/claim",
-        json={"consumer_id": "w1", "block_ms": 100},
+        json={"consumer_id": "w2", "block_ms": 100},
         headers={"Authorization": f"Bearer {API_KEY}"},
     )
     assert resp.status_code == 204

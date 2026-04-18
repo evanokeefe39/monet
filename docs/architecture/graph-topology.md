@@ -66,6 +66,8 @@ START
 
 The planner signals which agents it needs via structured output. The graph routes to those agents and feeds their output back as typed context entries. The planner remains a blackbox.
 
+The orchestrator also injects an `agent_roster` context entry with the current fleet-wide capability set (sourced from `CapabilityIndex`, populated by worker heartbeats) so the planner can compose across pools in split-fleet deployments without needing to speak HTTP itself. Full rationale + contract in [ADR-004](adr-004-orchestrator-fed-planner-roster.md).
+
 The human approval interrupt is the nemawashi gate. The human sees the full plan: phases, dependency waves, agent assignments, quality criteria, and the planner's stated assumptions. If convergence cannot be reached within a configured maximum revision count, the process terminates with an escalation.
 
 ### Plan structure

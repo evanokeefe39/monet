@@ -8,7 +8,6 @@ import pytest
 
 from monet import agent, get_artifacts
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry  # internal: registry_scope fixture
 
 if TYPE_CHECKING:
@@ -31,7 +30,7 @@ def _ctx(**overrides: object) -> AgentRunContext:
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> None:  # type: ignore[misc]
-    with default_registry.registry_scope(), default_manifest.manifest_scope():
+    with default_registry.registry_scope():
         yield
 
 

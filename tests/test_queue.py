@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from monet.core.registry import AgentRegistry
+from monet.core.registry import LocalRegistry
 from monet.orchestration._invoke import wait_completion
 from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus, run_worker
 from monet.types import AgentResult, AgentRunContext, SignalType
@@ -182,7 +182,7 @@ async def test_concurrent_producers_consumers() -> None:
 
 async def test_worker_executes_agent_through_queue() -> None:
     q = InMemoryTaskQueue()
-    registry = AgentRegistry()
+    registry = LocalRegistry()
 
     async def handler(ctx: AgentRunContext) -> AgentResult:
         return AgentResult(
@@ -209,7 +209,7 @@ async def test_worker_executes_agent_through_queue() -> None:
 
 async def test_worker_fails_task_when_handler_missing() -> None:
     q = InMemoryTaskQueue()
-    registry = AgentRegistry()
+    registry = LocalRegistry()
 
     task_id = await q.enqueue(_make_task(agent_id="ghost"))
 
@@ -226,7 +226,7 @@ async def test_worker_fails_task_when_handler_missing() -> None:
 
 async def test_worker_handles_handler_exception() -> None:
     q = InMemoryTaskQueue()
-    registry = AgentRegistry()
+    registry = LocalRegistry()
 
     async def bad_handler(ctx: AgentRunContext) -> AgentResult:
         msg = "agent crashed"
@@ -250,7 +250,7 @@ async def test_worker_handles_handler_exception() -> None:
 async def test_worker_concurrent_execution() -> None:
     """Worker executes multiple tasks concurrently, not sequentially."""
     q = InMemoryTaskQueue()
-    registry = AgentRegistry()
+    registry = LocalRegistry()
     execution_order: list[str] = []
     barrier = asyncio.Event()
 
@@ -298,7 +298,7 @@ async def test_backpressure_rejects_enqueue() -> None:
 async def test_worker_pool_isolation() -> None:
     """Worker only claims tasks from its assigned pool."""
     q = InMemoryTaskQueue()
-    registry = AgentRegistry()
+    registry = LocalRegistry()
 
     async def handler(ctx: AgentRunContext) -> AgentResult:
         return AgentResult(

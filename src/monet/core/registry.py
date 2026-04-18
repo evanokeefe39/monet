@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 class RegisteredAgent(NamedTuple):
     """A registered (agent_id, command) pair with its docstring summary.
 
-    Returned by ``AgentRegistry.registered_agents(with_docstrings=True)``.
+    Returned by ``LocalRegistry.registered_agents(with_docstrings=True)``.
     The ``description`` is the first line of the handler's docstring, stripped
     of whitespace, or an empty string if the handler has no docstring.
     """
@@ -27,7 +27,7 @@ class RegisteredAgent(NamedTuple):
     description: str
 
 
-class AgentRegistry:
+class LocalRegistry:
     """Registry mapping (agent_id, command) to decorated handler functions."""
 
     def __init__(self) -> None:
@@ -102,4 +102,4 @@ class AgentRegistry:
         return rows
 
 
-default_registry = AgentRegistry()
+default_registry = LocalRegistry()

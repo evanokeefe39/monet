@@ -233,22 +233,23 @@ async def _run_remote(
     """Run worker in remote mode with HTTP-based queue."""
     import contextlib
 
-    from monet.core.manifest import AgentCapability, default_manifest
+    from monet.core.registry import default_registry
     from monet.core.worker_client import RemoteQueue, WorkerClient
     from monet.queue import run_worker
+    from monet.server._capabilities import Capability
 
     pool = cfg.pool
 
-    def _current_capabilities() -> list[AgentCapability]:
-        """Read capabilities from the manifest with descriptions."""
+    def _current_capabilities() -> list[Capability]:
+        """Read capabilities from the local registry with docstring descriptions."""
         return [
-            AgentCapability(
-                agent_id=cap["agent_id"],
-                command=cap["command"],
-                description=cap.get("description", ""),
-                pool=cap.get("pool", pool),
+            Capability(
+                agent_id=row.agent_id,
+                command=row.command,
+                description=row.description,
+                pool=pool,
             )
-            for cap in default_manifest.capabilities()
+            for row in default_registry.registered_agents(with_docstrings=True)
         ]
 
     assert cfg.server_url is not None  # validated in validate_for_boot
@@ -287,6 +288,7 @@ async def _run_remote(
             max_concurrency=cfg.concurrency,
             poll_interval=cfg.poll_interval,
             shutdown_timeout=cfg.shutdown_timeout,
+            consumer_id=worker_id,
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Worker shutting down")

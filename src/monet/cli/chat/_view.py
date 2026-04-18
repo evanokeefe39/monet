@@ -49,12 +49,12 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
     for tag, style in tag_styles.items():
         if line.startswith(tag):
             rest = line[len(tag) :]
-            text = Text()
+            text = Text(overflow="fold", no_wrap=False)
             text.append(tag, style=style)
             text.append(rest)
             _linkify(text, rest, offset=len(tag))
             return text
-    text = Text(line)
+    text = Text(line, overflow="fold", no_wrap=False)
     _linkify(text, line)
     return text
 

@@ -22,12 +22,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient, Response
 
 if TYPE_CHECKING:
-    import respx
+    import respx  # type: ignore[import-not-found]
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
 from monet.core._serialization import serialize_task_record
 from monet.core.push_handler import close_client, create_push_app
-from monet.core.registry import AgentRegistry
+from monet.core.registry import LocalRegistry
 from monet.queue import TaskRecord, TaskStatus
 from monet.types import AgentResult, AgentRunContext
 
@@ -66,7 +66,7 @@ def _record(agent_id: str = "a", command: str = "go") -> TaskRecord:
 @pytest.fixture
 async def push_app(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("MONET_DISPATCH_SECRET", SECRET)
-    registry = AgentRegistry()
+    registry = LocalRegistry()
     app = create_push_app(registry=registry)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import aiosqlite  # type: ignore[import-not-found]
 
-if TYPE_CHECKING:
-    from monet.core.manifest import AgentCapability
-
 __all__ = ["DeploymentRecord", "DeploymentStore"]
+
+
+#: JSON-compatible shape stored per capability inside a deployment row.
+#: Mirrors :class:`monet.server._capabilities.Capability` but as plain
+#: dicts so the deployment store stays decoupled from the pydantic wire
+#: model.
+CapabilityDict = dict[str, str]
 
 
 class DeploymentRecord(TypedDict):
@@ -20,7 +24,7 @@ class DeploymentRecord(TypedDict):
 
     deployment_id: str
     pool: str
-    capabilities: list[AgentCapability]
+    capabilities: list[CapabilityDict]
     worker_id: str | None
     created_at: str
     last_heartbeat: str | None
@@ -66,7 +70,7 @@ class DeploymentStore:
             )
         return self._db
 
-    async def create(self, pool: str, capabilities: list[AgentCapability]) -> str:
+    async def create(self, pool: str, capabilities: list[CapabilityDict]) -> str:
         """Create a deployment record.
 
         Returns:
@@ -94,6 +98,17 @@ class DeploymentStore:
             (worker_id, now, deployment_id),
         )
         await db.commit()
+
+    async def worker_exists(self, worker_id: str) -> bool:
+        """True when an active deployment is associated with *worker_id*."""
+        db = self._require_db()
+        cursor = await db.execute(
+            "SELECT 1 FROM deployments "
+            "WHERE worker_id = ? AND status = 'active' LIMIT 1",
+            (worker_id,),
+        )
+        row = await cursor.fetchone()
+        return row is not None
 
     async def heartbeat(self, worker_id: str) -> None:
         """Update last_heartbeat for all deployments matching worker_id."""

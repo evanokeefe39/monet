@@ -57,6 +57,41 @@ MAX_REVISIONS = 3
 _tracer = trace.get_tracer("monet.orchestration.planning")
 
 
+def _roster_context_entry() -> dict[str, Any] | None:
+    """Snapshot the full-fleet roster from the server-side capability index.
+
+    Orchestration runs in the server process, which holds the authoritative
+    ``CapabilityIndex`` populated by worker heartbeats. The planner agent
+    runs inside a worker — its local registry only sees its own pool. We
+    therefore pass the fleet-wide roster through the planner's task
+    context so it can plan across pools.
+
+    Returns ``None`` when no capability index is configured (e.g. unit
+    tests); the planner agent then falls back to its local registry.
+    """
+    from monet.orchestration._invoke import get_capability_index
+
+    index = get_capability_index()
+    if index is None:
+        return None
+    caps = index.capabilities()
+    if not caps:
+        return None
+    agents = [
+        {
+            "agent_id": cap["agent_id"],
+            "command": cap["command"],
+            "description": cap.get("description", ""),
+        }
+        for cap in caps
+    ]
+    return {
+        "type": "agent_roster",
+        "summary": f"{len(agents)} agent(s) available across the fleet",
+        "agents": agents,
+    }
+
+
 def _build_context(state: PlanningState, *, force_plan: bool) -> list[dict[str, Any]]:
     """Assemble planner context from planning_context + feedback + force flag."""
     entries: list[dict[str, Any]] = []
@@ -95,6 +130,9 @@ async def _invoke_planner(
 ) -> dict[str, Any]:
     """Invoke planner agent and classify outcome into state patch fields."""
     context_entries = _build_context(state, force_plan=force_plan)
+    roster_entry = _roster_context_entry()
+    if roster_entry is not None:
+        context_entries = [*context_entries, roster_entry]
     async with attached_trace(extract_carrier_from_config(config)):
         result = await invoke_agent(
             "planner",

@@ -14,7 +14,6 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 from monet.orchestration import build_planning_subgraph
 from monet.orchestration.planning_graph import route_from_planner
@@ -24,7 +23,7 @@ from monet.types import ArtifactPointer
 @pytest.fixture
 def _reset() -> Any:
     configure_artifacts(InMemoryArtifactClient())
-    with default_registry.registry_scope(), default_manifest.manifest_scope():
+    with default_registry.registry_scope():
         import importlib
 
         import monet.agents.planner

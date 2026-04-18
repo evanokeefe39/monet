@@ -37,7 +37,7 @@ from monet.core.stubs import _progress_publisher
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from monet.core.registry import AgentRegistry
+    from monet.core.registry import LocalRegistry
 
 __all__ = ["DispatchBody", "create_push_app", "handle_dispatch"]
 
@@ -81,7 +81,7 @@ async def handle_dispatch(
     payload: str,
     token: str,
     callback_url: str,
-    registry: AgentRegistry | None = None,
+    registry: LocalRegistry | None = None,
 ) -> None:
     """Decode a TaskRecord, run the agent handler, and post callbacks.
 
@@ -208,7 +208,7 @@ class DispatchBody(BaseModel):
 
 def create_push_app(
     *,
-    registry: AgentRegistry | None = None,
+    registry: LocalRegistry | None = None,
     dispatch_secret_env: str = "MONET_DISPATCH_SECRET",
 ) -> FastAPI:
     """FastAPI app with a single ``POST /dispatch`` route.

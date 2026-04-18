@@ -421,13 +421,13 @@ class MonetClient:
     async def slash_commands(self) -> list[str]:
         """Return the client-visible slash-command vocabulary.
 
-        Mirrors :meth:`monet.core.manifest.AgentManifest.slash_commands`
+        Mirrors :meth:`monet.server._capabilities.CapabilityIndex.slash_commands`
         from the server side: the framework-reserved prefixes (``/plan``)
         followed by ``/<agent_id>:<command>`` for each declared
         capability. Feeds the Textual chat REPL's completion suggester
         and command palette.
         """
-        from monet.core.manifest import RESERVED_SLASH
+        from monet.server._capabilities import RESERVED_SLASH
 
         out: list[str] = list(RESERVED_SLASH)
         seen: set[str] = set(out)

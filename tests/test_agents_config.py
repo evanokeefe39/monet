@@ -10,16 +10,15 @@ if TYPE_CHECKING:
 import pytest
 
 from monet.core._agents_config import load_agents
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Any:
-    """Reset registry and manifest after each test."""
+    """Isolate each test with a scratch registry restored on teardown."""
     with default_registry.registry_scope():
+        default_registry.clear()
         yield
-    # Manifest doesn't have a scope helper; remove by hand.
 
 
 def _write_agents_toml(tmp_path: Path, content: str) -> Path:
@@ -134,8 +133,9 @@ url = "http://x:8080"
 """,
         )
         load_agents(path)
-        cap = default_manifest.get_pool("x", "fast")
-        assert cap == "local"
+        handler = default_registry.lookup("x", "fast")
+        assert handler is not None
+        assert handler._pool == "local"  # type: ignore[attr-defined]
 
     def test_empty_file_registers_nothing(self, tmp_path: Path) -> None:
         path = _write_agents_toml(tmp_path, "")
