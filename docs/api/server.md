@@ -106,9 +106,17 @@ Returns server health status. **No authentication required.**
 
 ---
 
-### `POST /api/v1/worker/register`
+### `POST /api/v1/workers/{worker_id}/heartbeat`
 
-Register a worker and its capabilities.
+Unified registration + liveness ping. First call from a new `worker_id`
+registers; subsequent calls reconcile the capability set. Replaces the
+legacy `/worker/register` + `/worker/heartbeat` pair.
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `worker_id` | `string` | Caller-chosen unique worker identifier |
 
 **Request body:**
 ```json
@@ -118,62 +126,46 @@ Register a worker and its capabilities.
         {
             "agent_id": "researcher",
             "command": "deep",
-            "description": "Deep research",
-            "pool": "default"
+            "pool": "default",
+            "description": "Deep research"
         }
-    ],
-    "worker_id": "worker-abc-123"
+    ]
 }
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `pool` | `string` | yes | Worker's pool |
-| `capabilities` | `list` | yes | Agent capabilities |
-| `worker_id` | `string` | yes | Unique worker identifier |
+| `capabilities` | `list[Capability]` | yes | Current capability set. Pydantic-validated: each field non-empty, `agent_id`/`command`/`pool` match `[a-z0-9_-]+` up to 64 chars; `description` up to 512 chars. |
 
 **Response:**
-```json
-{
-    "deployment_id": "uuid-here"
-}
-```
-
----
-
-### `POST /api/v1/worker/heartbeat`
-
-Update worker heartbeat. Optionally reconcile capabilities.
-
-**Request body:**
 ```json
 {
     "worker_id": "worker-abc-123",
-    "pool": "default",
-    "capabilities": [...]
+    "known_capabilities": 3,
+    "registered": true
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `worker_id` | `string` | yes | Worker identifier |
-| `pool` | `string` | yes | Worker's pool |
-| `capabilities` | `list` | no | If provided, reconciles manifest |
+`registered` is `true` only on the first call for that `worker_id`.
 
-When `capabilities` is provided, the server:
+---
 
-1. Declares all listed capabilities for this worker
-2. Removes any previously tracked capabilities no longer advertised by this worker
-3. Updates the deployment record
+### `POST /api/v1/pools/{pool}/claim`
 
-Other workers' capabilities are untouched.
+Claim the next pending task from a pool. Authenticated worker must be
+currently heartbeating for `pool`; otherwise the server returns 403.
 
-**Response:**
+**Request body:**
 ```json
-{
-    "status": "ok"
-}
+{"consumer_id": "worker-abc-123", "block_ms": 5000}
 ```
+
+**Response (task available):** `TaskRecord` as JSON.
+
+**Response (no tasks):** HTTP 204 No Content.
+
+**Response (cross-pool claim):** HTTP 403.
 
 ---
 
@@ -269,28 +261,3 @@ List active deployments.
 
 ---
 
-### `POST /api/v1/deployments`
-
-Create a deployment record. Used by `monet register` for CI/CD registration.
-
-**Request body:**
-```json
-{
-    "pool": "default",
-    "capabilities": [
-        {
-            "agent_id": "researcher",
-            "command": "deep",
-            "description": "Deep research",
-            "pool": "default"
-        }
-    ]
-}
-```
-
-**Response** (HTTP 201):
-```json
-{
-    "deployment_id": "uuid"
-}
-```

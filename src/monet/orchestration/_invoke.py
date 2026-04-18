@@ -26,6 +26,7 @@ from monet.server._auth import task_hmac
 
 if TYPE_CHECKING:
     from monet.queue import TaskQueue, TaskRecord
+    from monet.server._capabilities import CapabilityIndex
     from monet.server._config import PoolConfig
     from monet.types import AgentResult, AgentRunContext
 
@@ -33,8 +34,13 @@ _log = logging.getLogger("monet.orchestration")
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
 
-# Module-level queue — set via configure_queue() or bootstrap().
+# Module-level queue — set via configure_queue() at server boot.
 _task_queue: TaskQueue | None = None
+
+# Module-level capability index — set via configure_capability_index() at
+# server boot. Used by ``invoke_agent`` for split-fleet pool routing
+# when the local registry does not own the capability.
+_capability_index: CapabilityIndex | None = None
 
 # Module-level httpx client for push-dispatch POSTs. Lazy-init on first
 # use; closed by close_dispatch_client() on server shutdown.
@@ -72,6 +78,21 @@ def configure_queue(queue: TaskQueue | None) -> None:
 def get_queue() -> TaskQueue | None:
     """Return the currently configured queue, or None."""
     return _task_queue
+
+
+def configure_capability_index(index: CapabilityIndex | None) -> None:
+    """Set or clear the capability index used for cross-pool routing.
+
+    Called once at server boot. Workers do not call this — they route
+    in-process via the local registry's ``_pool`` metadata.
+    """
+    global _capability_index
+    _capability_index = index
+
+
+def get_capability_index() -> CapabilityIndex | None:
+    """Return the currently configured capability index, or None."""
+    return _capability_index
 
 
 def _generate_trace_id() -> str:
@@ -148,18 +169,19 @@ async def invoke_agent(
     if thread_id:
         ctx["thread_id"] = thread_id
 
-    # Pool routing via the agent manifest handle.
-    from monet.core.agent_manifest import get_agent_manifest
+    # Pool routing: prefer the local registry (in-process ``@agent``
+    # handlers carry pool on the wrapper), fall back to the server
+    # ``CapabilityIndex`` (populated by worker heartbeats), fall back to
+    # "local" when neither knows the capability.
+    from monet.core.registry import default_registry
 
-    manifest = get_agent_manifest()
-    pool = manifest.get_pool(agent_id, command)
+    pool: str | None = None
+    local_handler = default_registry.lookup(agent_id, command)
+    if local_handler is not None:
+        pool = getattr(local_handler, "_pool", None)
+    if pool is None and _capability_index is not None:
+        pool = _capability_index.get_pool(agent_id, command)
     if pool is None:
-        if manifest.is_configured():
-            msg = (
-                f"Agent '{agent_id}/{command}' not found in manifest. "
-                "Cannot determine pool."
-            )
-            raise ValueError(msg)
         pool = "local"
 
     task_id = str(uuid.uuid4())

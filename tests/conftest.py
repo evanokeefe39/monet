@@ -10,7 +10,6 @@ import pytest
 
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.config import MONET_ENV_VARS
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 from monet.orchestration._invoke import configure_queue
 from monet.queue import InMemoryTaskQueue, run_worker
@@ -50,8 +49,8 @@ def _clean_monet_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def clean_registry() -> Any:
-    """Isolate each test from registry and manifest side effects."""
-    with default_registry.registry_scope(), default_manifest.manifest_scope():
+    """Isolate each test from registry side effects."""
+    with default_registry.registry_scope():
         yield
 
 

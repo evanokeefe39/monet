@@ -182,12 +182,12 @@ async def test_forward_progress_suppresses_not_implemented() -> None:
 
 async def test_worker_publishes_emit_progress_events() -> None:
     """Worker wires _progress_publisher so emit_progress() forwards to queue."""
-    from monet.core.registry import AgentRegistry
+    from monet.core.registry import LocalRegistry
     from monet.core.stubs import emit_progress
     from monet.queue import run_worker
 
     queue = InMemoryTaskQueue()
-    registry = AgentRegistry()
+    registry = LocalRegistry()
 
     async def my_agent(ctx: AgentRunContext) -> AgentResult:
         emit_progress({"phase": "work", "run_id": ctx["run_id"]})

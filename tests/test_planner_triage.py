@@ -11,13 +11,12 @@ import pytest
 
 pytest.importorskip("langchain_core")
 
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 
 
 @pytest.fixture(autouse=True)
 def _reset() -> Any:
-    with default_registry.registry_scope(), default_manifest.manifest_scope():
+    with default_registry.registry_scope():
         import importlib
 
         import monet.agents.planner

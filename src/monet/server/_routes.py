@@ -11,10 +11,10 @@ from pydantic import BaseModel
 
 from monet import get_artifacts
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
-from monet.core.manifest import AgentCapability, AgentManifest
 from monet.queue import TaskQueue
 from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 from monet.server._auth import require_api_key, require_task_auth
+from monet.server._capabilities import Capability, CapabilityIndex
 from monet.server._deployment import DeploymentStore
 from monet.types import AgentResult, Signal, build_artifact_pointer
 
@@ -43,40 +43,18 @@ def get_deployments(request: Request) -> DeploymentStore:
     return request.app.state.deployments  # type: ignore[no-any-return]
 
 
-def get_manifest(request: Request) -> AgentManifest:
-    """Retrieve the agent manifest from application state."""
-    return request.app.state.manifest  # type: ignore[no-any-return]
+def get_capability_index(request: Request) -> CapabilityIndex:
+    """Retrieve the capability index from application state."""
+    return request.app.state.capability_index  # type: ignore[no-any-return]
 
 
 # Type aliases for annotated dependencies
 Queue = Annotated[TaskQueue, Depends(get_queue)]
 Deployments = Annotated[DeploymentStore, Depends(get_deployments)]
-Manifest = Annotated[AgentManifest, Depends(get_manifest)]
+CapIndex = Annotated[CapabilityIndex, Depends(get_capability_index)]
 
 
 # -- Request / Response schemas --------------------------------------------
-
-
-class WorkerRegisterRequest(BaseModel):
-    """Body for ``POST /api/v1/worker/register``."""
-
-    pool: str
-    capabilities: list[dict[str, str]]
-    worker_id: str
-
-
-class WorkerRegisterResponse(BaseModel):
-    """Response for ``POST /api/v1/worker/register``."""
-
-    deployment_id: str
-
-
-class HeartbeatRequest(BaseModel):
-    """Body for ``POST /api/v1/worker/heartbeat``."""
-
-    worker_id: str
-    pool: str
-    capabilities: list[dict[str, str]] | None = None
 
 
 class TaskCompleteRequest(BaseModel):
@@ -94,13 +72,6 @@ class TaskFailRequest(BaseModel):
     """Body for ``POST /api/v1/tasks/{task_id}/fail``."""
 
     error: str
-
-
-class CreateDeploymentRequest(BaseModel):
-    """Body for ``POST /api/v1/deployments``."""
-
-    pool: str
-    capabilities: list[dict[str, str]]
 
 
 class PoolClaimRequest(BaseModel):
@@ -125,99 +96,61 @@ class HealthResponse(BaseModel):
 router = APIRouter(prefix="/api/v1")
 
 
+class WorkerHeartbeatBody(BaseModel):
+    """Body for unified ``POST /api/v1/workers/{worker_id}/heartbeat``."""
+
+    pool: str
+    capabilities: list[Capability]
+
+
 @router.post(
-    "/worker/register",
-    response_model=WorkerRegisterResponse,
+    "/workers/{worker_id}/heartbeat",
     dependencies=[Depends(require_api_key)],
 )
-async def register_worker(
-    body: WorkerRegisterRequest,
+async def worker_heartbeat(
+    worker_id: str,
+    body: WorkerHeartbeatBody,
     deployments: Deployments,
-    manifest: Manifest,
-) -> WorkerRegisterResponse:
-    """Register a worker and its capabilities."""
-    caps = cast("list[AgentCapability]", body.capabilities)
-    deployment_id = await deployments.create(body.pool, caps)
-    await deployments.register_worker(deployment_id, body.worker_id)
-    for cap in body.capabilities:
-        manifest.declare(
-            cap.get("agent_id", ""),
-            cap.get("command", ""),
-            description=cap.get("description", ""),
-            pool=cap.get("pool", body.pool),
-            worker_id=body.worker_id,
-        )
+    cap_index: CapIndex,
+) -> dict[str, object]:
+    """Unified registration + liveness ping for a worker.
+
+    First call from an unknown ``worker_id`` registers; subsequent calls
+    reconcile the capability set. The :class:`CapabilityIndex` is the
+    authoritative view; the deployment store tracks liveness for the
+    stale sweeper.
+    """
+    cap_index.upsert_worker(worker_id, body.pool, body.capabilities)
+    cap_dicts = [
+        {
+            "agent_id": c.agent_id,
+            "command": c.command,
+            "description": c.description,
+            "pool": c.pool,
+        }
+        for c in body.capabilities
+    ]
+
+    is_new = not await deployments.worker_exists(worker_id)
+    if is_new:
+        deployment_id = await deployments.create(body.pool, cap_dicts)
+        await deployments.register_worker(deployment_id, worker_id)
+    else:
+        await deployments.heartbeat(worker_id)
+        await deployments.update_capabilities(worker_id, cap_dicts)
+
     _log.info(
-        "worker.register worker=%s pool=%s capabilities=%d deployment=%s",
-        body.worker_id,
+        "worker.heartbeat worker=%s pool=%s caps=%d new=%s",
+        worker_id,
         body.pool,
         len(body.capabilities),
-        deployment_id,
+        is_new,
     )
-    return WorkerRegisterResponse(deployment_id=deployment_id)
-
-
-@router.post(
-    "/worker/heartbeat",
-    dependencies=[Depends(require_api_key)],
-)
-async def heartbeat(
-    body: HeartbeatRequest,
-    deployments: Deployments,
-    manifest: Manifest,
-) -> dict[str, str]:
-    """Update heartbeat for a worker.
-
-    If capabilities are included, reconciles the manifest: declares
-    new/updated capabilities for this worker and removes any the worker
-    no longer advertises.
-    """
-    await deployments.heartbeat(body.worker_id)
-
-    if body.capabilities is not None:
-        caps = [
-            AgentCapability(
-                agent_id=c.get("agent_id", ""),
-                command=c.get("command", ""),
-                description=c.get("description", ""),
-                pool=c.get("pool", body.pool),
-            )
-            for c in body.capabilities
-        ]
-        manifest.reconcile_worker(body.worker_id, caps)
-
-        # Also update the deployment record's capabilities.
-        await deployments.update_capabilities(body.worker_id, body.capabilities)
-
-    _log.info(
-        "worker.heartbeat worker=%s pool=%s capabilities=%s",
-        body.worker_id,
-        body.pool,
-        len(body.capabilities) if body.capabilities is not None else "unchanged",
-    )
-    return {"status": "ok"}
-
-
-@router.get(
-    "/tasks/claim/{pool}",
-    dependencies=[Depends(require_api_key)],
-)
-async def claim_task(
-    pool: str,
-    response: Response,
-    queue: Queue,
-) -> dict[str, Any] | None:
-    """Claim the next pending task in a pool (legacy non-blocking).
-
-    Kept for RemoteQueue backwards compatibility. New workers should
-    use ``POST /api/v1/pools/{pool}/claim`` which honours ``block_ms``
-    and ``consumer_id``.
-    """
-    record = await queue.claim(pool, consumer_id="server", block_ms=0)
-    if record is None:
-        response.status_code = 204
-        return None
-    return dict(record)
+    return {
+        "worker_id": worker_id,
+        "known_capabilities": len(body.capabilities),
+        "registered": is_new,
+    }
 
 
 @router.post(
@@ -229,6 +162,7 @@ async def claim_from_pool(
     body: PoolClaimRequest,
     response: Response,
     queue: Queue,
+    cap_index: CapIndex,
 ) -> dict[str, Any] | None:
     """Claim one task from the pool, server-blocking up to ``block_ms``.
 
@@ -236,7 +170,16 @@ async def claim_from_pool(
     equivalent) so the worker's HTTP request waits until a task lands
     or the timeout elapses. Returns the task record on success or 204
     No Content on timeout.
+
+    ``body.consumer_id`` must be a ``worker_id`` that is currently
+    heartbeating for *pool*; otherwise the claim is rejected with 403
+    (fixes cross-pool task poaching in S3 / S5 fleets).
     """
+    if not cap_index.worker_for_pool(body.consumer_id, pool):
+        raise HTTPException(
+            403,
+            f"worker {body.consumer_id!r} is not heartbeating for pool {pool!r}",
+        )
     record = await queue.claim(
         pool, consumer_id=body.consumer_id, block_ms=body.block_ms
     )
@@ -335,32 +278,16 @@ async def list_deployments(
     return [dict(r) for r in records]
 
 
-@router.post(
-    "/deployments",
-    status_code=201,
-    dependencies=[Depends(require_api_key)],
-)
-async def create_deployment(
-    body: CreateDeploymentRequest,
-    deployments: Deployments,
-) -> dict[str, str]:
-    """Create a deployment record."""
-    caps = cast("list[AgentCapability]", body.capabilities)
-    deployment_id = await deployments.create(body.pool, caps)
-    return {"deployment_id": deployment_id}
+@router.get("/agents", dependencies=[Depends(require_api_key)])
+async def list_agents(cap_index: CapIndex) -> list[dict[str, Any]]:
+    """List every capability advertised by a heartbeating worker.
 
-
-@router.get("/agents")
-async def list_agents(manifest: Manifest) -> list[dict[str, Any]]:
-    """List every capability declared in the agent manifest.
-
-    Returns one entry per ``(agent_id, command)`` pair with its pool
-    assignment and optional description. Used by ``MonetClient.list_capabilities``
-    so clients can discover user-defined agents at runtime (chat REPL
-    dynamic ``/<agent_id>:<command>`` dispatch, direct invocation via
-    ``monet run <agent>:<command>``).
+    Returns one entry per ``(agent_id, command)`` pair with its pool,
+    description, and the set of worker ids currently serving it. Used by
+    ``MonetClient.list_capabilities`` so clients can discover
+    user-defined agents at runtime.
     """
-    return [dict(cap) for cap in manifest.capabilities()]
+    return cap_index.capabilities()
 
 
 class InvokeAgentRequest(BaseModel):

@@ -16,9 +16,9 @@ from httpx import Response
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import respx
+    import respx  # type: ignore[import-not-found]
 
-from monet.core.registry import AgentRegistry
+from monet.core.registry import LocalRegistry
 from monet.orchestration._invoke import (
     close_dispatch_client,
     configure_queue,
@@ -52,21 +52,25 @@ dispatch_secret = "{DISPATCH_SECRET}"
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     monkeypatch.setenv("MONET_SERVER_URL", "http://orchestrator.example")
 
-    # Wire up an in-memory queue + register the push agent in the manifest
-    # so invoke_agent routes to the cloud pool.
-    from monet.agent_manifest import configure_agent_manifest
-    from monet.core.manifest import default_manifest
+    # Wire up an in-memory queue + register the push agent in the
+    # CapabilityIndex so invoke_agent routes to the cloud pool.
+    from monet.orchestration._invoke import configure_capability_index
+    from monet.server._capabilities import Capability, CapabilityIndex
 
     queue = InMemoryTaskQueue()
     configure_queue(queue)
-    configure_agent_manifest(default_manifest)
-    default_manifest.declare(
-        "cloud-agent", "fast", description="", pool="cloud", worker_id="w"
+    cap_index = CapabilityIndex()
+    cap_index.upsert_worker(
+        "w",
+        "cloud",
+        [Capability(agent_id="cloud-agent", command="fast", pool="cloud")],
     )
-    registry = AgentRegistry()
+    configure_capability_index(cap_index)
+    registry = LocalRegistry()
     yield queue, registry
     await close_dispatch_client()
     configure_queue(None)
+    configure_capability_index(None)
 
 
 @pytest.mark.respx

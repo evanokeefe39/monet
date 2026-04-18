@@ -2,7 +2,7 @@
 
 Thin Click entry point that resolves the target thread, pulls the live
 slash-command list, loads history, then hands off to
-:class:`~monet.cli._chat_app.ChatApp` for the interactive session. The
+:class:`~monet.cli.chat._app.ChatApp` for the interactive session. The
 ``--list`` path stays non-interactive (prints a table) so scripted uses
 don't need a TTY.
 """
@@ -143,8 +143,8 @@ async def _chat_main(
     session_name: str | None,
     graph_override: str | None,
 ) -> None:
-    from monet.cli._chat_app import ChatApp
     from monet.cli._run import _preflight_server
+    from monet.cli.chat._app import ChatApp
     from monet.client import MonetClient
     from monet.config import load_entrypoints, load_graph_roles
 
@@ -217,10 +217,11 @@ async def _chat_main(
         click.secho(f"(agent discovery failed: {exc})", dim=True, err=True)
 
     history: list[dict[str, object]] = []
-    try:
-        history = list(await client.chat.get_chat_history(thread_id))
-    except Exception as exc:
-        click.secho(f"(history load failed: {exc})", dim=True, err=True)
+    if thread_id:
+        try:
+            history = list(await client.chat.get_chat_history(thread_id))
+        except Exception as exc:
+            click.secho(f"(history load failed: {exc})", dim=True, err=True)
 
     from monet.config._user_chat import load_user_chat_style
 
@@ -258,10 +259,10 @@ async def _resolve_thread(
 ) -> str:
     """Pick the thread the TUI will attach to.
 
-    Resolution order mirrors the previous REPL's behaviour: explicit
-    ``--resume`` wins, then named ``--session`` (created on miss),
-    then ``--new`` for a fresh thread, then most-recent, with a final
-    fresh-thread fallback.
+    Explicit ``--resume`` wins, then named ``--session`` (created on
+    miss), then ``--new`` creates eagerly. Default path returns an
+    empty string — ChatApp creates the thread lazily on first user
+    message so empty sessions don't spam the thread list.
     """
     if resume_id:
         return resume_id
@@ -275,8 +276,4 @@ async def _resolve_thread(
         return thread_id
     if force_new:
         return await client.chat.create_chat(name=random_chat_name())
-    recent = await client.chat.get_most_recent_chat()
-    if recent is not None:
-        return recent
-    click.secho("Started new conversation.", dim=True, err=True)
-    return await client.chat.create_chat(name=random_chat_name())
+    return ""

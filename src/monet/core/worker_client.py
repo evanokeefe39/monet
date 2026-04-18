@@ -19,8 +19,8 @@ import httpx
 from monet.core._retry import retry_with_backoff
 
 if TYPE_CHECKING:
-    from monet.core.manifest import AgentCapability
     from monet.queue import TaskRecord
+    from monet.server._capabilities import Capability
     from monet.types import AgentResult
 
 __all__ = ["RemoteQueue", "WorkerClient"]
@@ -46,26 +46,27 @@ class WorkerClient:
     async def register(
         self,
         pool: str,
-        capabilities: list[AgentCapability],
+        capabilities: list[Capability],
         worker_id: str,
     ) -> str:
-        """Register capabilities with the server. Returns deployment_id.
+        """Register by sending the first heartbeat. Returns ``worker_id``.
 
-        Retries with exponential backoff on transient connection failures
-        and 5xx responses. Tuned to cover a ~2-minute server-startup race.
+        Registration and liveness ping share the unified endpoint
+        ``POST /workers/{worker_id}/heartbeat``. Retries with exponential
+        backoff on transient connection failures and 5xx responses to
+        cover a server-startup race.
         """
 
         async def _do() -> str:
             resp = await self._client.post(
-                "/worker/register",
+                f"/workers/{worker_id}/heartbeat",
                 json={
                     "pool": pool,
-                    "capabilities": capabilities,
-                    "worker_id": worker_id,
+                    "capabilities": [c.model_dump() for c in capabilities],
                 },
             )
             resp.raise_for_status()
-            return str(resp.json()["deployment_id"])
+            return worker_id
 
         return await retry_with_backoff(
             _do,
@@ -79,28 +80,30 @@ class WorkerClient:
         self,
         worker_id: str,
         pool: str,
-        capabilities: list[AgentCapability] | None = None,
+        capabilities: list[Capability] | None = None,
     ) -> None:
         """Send a heartbeat to the server.
 
-        Args:
-            worker_id: This worker's identifier.
-            pool: Pool this worker claims from.
-            capabilities: Current capability list. When provided, the
-                server reconciles its manifest — declaring new/updated
-                capabilities and removing stale ones for this worker.
+        The unified heartbeat endpoint requires a full capability list on
+        every call. When *capabilities* is ``None`` this method is a no-op
+        — callers that want a pure liveness ping should omit it.
         """
-        payload: dict[str, object] = {"worker_id": worker_id, "pool": pool}
-        if capabilities is not None:
-            payload["capabilities"] = capabilities
-        resp = await self._client.post("/worker/heartbeat", json=payload)
+        if capabilities is None:
+            return
+        resp = await self._client.post(
+            f"/workers/{worker_id}/heartbeat",
+            json={
+                "pool": pool,
+                "capabilities": [c.model_dump() for c in capabilities],
+            },
+        )
         resp.raise_for_status()
 
     async def heartbeat_with_tracking(
         self,
         worker_id: str,
         pool: str,
-        capabilities: list[AgentCapability] | None = None,
+        capabilities: list[Capability] | None = None,
     ) -> None:
         """Send a heartbeat with consecutive-failure awareness.
 
@@ -153,9 +156,22 @@ class WorkerClient:
         else:
             _log.warning("Heartbeat failed: %s", exc)
 
-    async def claim(self, pool: str) -> TaskRecord | None:
-        """Claim the next pending task. Returns None if nothing available."""
-        resp = await self._client.get(f"/tasks/claim/{pool}")
+    async def claim(
+        self,
+        pool: str,
+        consumer_id: str,
+        block_ms: int = 5000,
+    ) -> TaskRecord | None:
+        """Claim the next pending task. Returns None if nothing available.
+
+        Uses ``POST /api/v1/pools/{pool}/claim`` so the server can
+        validate *consumer_id* is heartbeating for *pool* (pool-scoped
+        claim auth — fixes cross-pool poaching).
+        """
+        resp = await self._client.post(
+            f"/pools/{pool}/claim",
+            json={"consumer_id": consumer_id, "block_ms": block_ms},
+        )
         if resp.status_code == 204:
             return None
         resp.raise_for_status()
@@ -236,10 +252,7 @@ class RemoteQueue:
     async def claim(
         self, pool: str, consumer_id: str, block_ms: int
     ) -> TaskRecord | None:
-        # consumer_id + block_ms wire up to the server in Phase 3; for
-        # now the server route ignores both and returns immediately.
-        del consumer_id, block_ms
-        return await self._client.claim(pool)
+        return await self._client.claim(pool, consumer_id, block_ms)
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
         await self._client.complete(task_id, result)

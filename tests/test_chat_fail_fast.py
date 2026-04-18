@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
-from monet.cli._chat import _chat_main
+from monet.cli.chat._cli import _chat_main
 
 
 class _RaisingClient:

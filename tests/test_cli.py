@@ -17,7 +17,6 @@ def test_cli_help(runner: CliRunner) -> None:
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "worker" in result.output
-    assert "register" in result.output
     assert "server" in result.output
 
 
@@ -28,21 +27,10 @@ def test_worker_help(runner: CliRunner) -> None:
     assert "--concurrency" in result.output
 
 
-def test_register_help(runner: CliRunner) -> None:
-    result = runner.invoke(cli, ["register", "--help"])
-    assert result.exit_code == 0
-    assert "--server-url" in result.output
-
-
 def test_server_help(runner: CliRunner) -> None:
     result = runner.invoke(cli, ["server", "--help"])
     assert result.exit_code == 0
     assert "--port" in result.output
-
-
-def test_register_requires_server_url(runner: CliRunner) -> None:
-    result = runner.invoke(cli, ["register", "--path", "."])
-    assert result.exit_code != 0
 
 
 def test_dev_help(runner: CliRunner) -> None:

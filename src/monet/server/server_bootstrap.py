@@ -37,7 +37,6 @@ from monet.orchestration import (
     configure_queue,
 )
 from monet.queue import InMemoryTaskQueue, TaskQueue
-from monet.server import configure_lazy_worker
 
 if TYPE_CHECKING:
     from langgraph.graph import StateGraph
@@ -87,22 +86,10 @@ logging.getLogger("monet").setLevel(getattr(logging, _monet_log_level, logging.I
 
 configure_tracing(_config.observability)
 
-if not _config.artifacts.distributed:
-    configure_artifacts(artifacts_from_env(default_root=_config.artifacts.root))
+configure_artifacts(artifacts_from_env(default_root=_config.artifacts.root))
 
 queue: TaskQueue = _create_queue(_config.queue)
 configure_queue(queue)
-configure_lazy_worker(queue)
-
-# Wire the agent manifest handle so `invoke_agent` in a graph can read
-# pool assignments populated by remote worker registration. Without
-# this, `get_agent_manifest()` returns a handle whose `is_configured()`
-# is False and `invoke_agent` falls back to pool="local", which breaks
-# pool-based routing for split-fleet deployments.
-from monet.agent_manifest import configure_agent_manifest  # noqa: E402
-from monet.core.manifest import default_manifest  # noqa: E402
-
-configure_agent_manifest(default_manifest)
 
 _log.info("monet server booted: %s", _config.redacted_summary())
 
@@ -123,8 +110,6 @@ def build_chat_graph() -> StateGraph:  # type: ignore[type-arg]
 
 def build_default_graph() -> StateGraph:  # type: ignore[type-arg]
     """0-arg wrapper for Aegra compatibility."""
-    import monet.agents  # noqa: F401 — registers reference agents on first compile only
-
     return _build_default_graph()
 
 
@@ -145,8 +130,6 @@ def build_execution_graph() -> StateGraph:  # type: ignore[type-arg]
     Interactive runs use the compound ``default`` graph so planning + HITL
     still apply.
     """
-    import monet.agents  # noqa: F401 — registers reference agents on first compile only
-
     return _build_execution_subgraph()
 
 

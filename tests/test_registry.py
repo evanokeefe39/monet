@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from monet.core.registry import AgentRegistry, default_registry
+from monet.core.registry import LocalRegistry, default_registry
 
 
 def _dummy_handler() -> str:
@@ -10,18 +10,18 @@ def _dummy_handler() -> str:
 
 
 def test_register_and_lookup() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     reg.register("agent-a", "fast", _dummy_handler)
     assert reg.lookup("agent-a", "fast") is _dummy_handler
 
 
 def test_lookup_missing() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     assert reg.lookup("nonexistent", "fast") is None
 
 
 def test_clear() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     reg.register("agent-a", "fast", _dummy_handler)
     reg.clear()
     assert reg.lookup("agent-a", "fast") is None
@@ -29,7 +29,7 @@ def test_clear() -> None:
 
 
 def test_registry_scope_restores() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     reg.register("agent-a", "fast", _dummy_handler)
 
     with reg.registry_scope():
@@ -42,7 +42,7 @@ def test_registry_scope_restores() -> None:
 
 
 def test_registry_scope_on_exception() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     reg.register("agent-a", "fast", _dummy_handler)
 
     try:
@@ -58,7 +58,7 @@ def test_registry_scope_on_exception() -> None:
 
 
 def test_same_agent_different_commands() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     fast_handler = lambda: "fast"  # noqa: E731
     deep_handler = lambda: "deep"  # noqa: E731
     reg.register("writer", "fast", fast_handler)
@@ -68,7 +68,7 @@ def test_same_agent_different_commands() -> None:
 
 
 def test_registered_agents() -> None:
-    reg = AgentRegistry()
+    reg = LocalRegistry()
     reg.register("a", "fast", _dummy_handler)
     reg.register("b", "deep", _dummy_handler)
     agents = reg.registered_agents()
@@ -77,4 +77,4 @@ def test_registered_agents() -> None:
 
 
 def test_default_registry_exists() -> None:
-    assert isinstance(default_registry, AgentRegistry)
+    assert isinstance(default_registry, LocalRegistry)

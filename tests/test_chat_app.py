@@ -14,21 +14,21 @@ from textual.widgets import Input
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-from monet.cli._chat_app import ChatApp
-from monet.cli._chat_hitl import (
+from monet.cli.chat import ChatApp
+from monet.cli.chat._hitl import (
     format_form_prompt as _format_form_prompt,
 )
-from monet.cli._chat_hitl import (
+from monet.cli.chat._hitl import (
     is_approval_form as _is_approval_form,
 )
-from monet.cli._chat_hitl import (
+from monet.cli.chat._hitl import (
     parse_approval_reply as _parse_approval_reply,
 )
-from monet.cli._chat_hitl import (
+from monet.cli.chat._hitl import (
     parse_text_reply as _parse_text_reply,
 )
-from monet.cli._chat_slash import RegistrySuggester
-from monet.cli._chat_view import format_progress_line as _format_progress_line
+from monet.cli.chat._slash import RegistrySuggester
+from monet.cli.chat._view import format_progress_line as _format_progress_line
 from monet.client._events import AgentProgress
 
 # --- RegistrySuggester ----------------------------------------------------

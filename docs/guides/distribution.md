@@ -96,22 +96,6 @@ monet worker --server-url http://orchestrator:8000 --api-key $MONET_API_KEY
 
 **Remote mode** (with `--server-url`): Registers with the server, starts a heartbeat loop (30-second intervals), and claims tasks via HTTP. Capabilities are re-read each heartbeat cycle, enabling hot-reload when new agents are added to the scanned directory.
 
-### monet register
-
-Register agent capabilities with the server from CI/CD pipelines.
-
-```bash
-monet register --path ./agents --server-url http://orchestrator:8000 --api-key $MONET_API_KEY
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `--path` | `.` | Directory to scan for agents |
-| `--server-url` | — | Orchestration server URL (env: `MONET_SERVER_URL`, required) |
-| `--api-key` | — | API key for server auth (env: `MONET_API_KEY`, required) |
-
-Discovers agents via AST scanning and posts deployment records to the server, grouped by pool.
-
 ### monet dev
 
 Start an Aegra dev server with monet's default graphs and worker/task routes.
@@ -197,11 +181,11 @@ Workers and CLI commands pass this via the `--api-key` flag or `MONET_API_KEY` e
 
 ## Worker lifecycle
 
-1. **Registration** — Worker starts, discovers agents, sends capabilities to server via `POST /api/v1/worker/register`
-2. **Heartbeat** — Every 30 seconds, worker sends capabilities to `POST /api/v1/worker/heartbeat`. Capabilities are re-read each cycle (hot-reload).
-3. **Task claiming** — Worker polls `GET /api/v1/tasks/claim/{pool}` for pending tasks
-4. **Execution** — Worker executes agent handler, posts result via `POST /api/v1/tasks/{task_id}/complete` or `POST /api/v1/tasks/{task_id}/fail`
-5. **Stale cleanup** — Server runs a sweeper every 60 seconds. Workers with no heartbeat for 90 seconds are marked inactive and their capabilities removed from the manifest.
+1. **First heartbeat = registration** — Worker starts, discovers agents, POSTs `{pool, capabilities}` to `POST /api/v1/workers/{worker_id}/heartbeat`. The server upserts the worker's capability set in the `CapabilityIndex`; a new `worker_id` registers, a known one reconciles.
+2. **Heartbeat loop** — Every 30 seconds, the worker POSTs the same endpoint with the current capability list. Capabilities are re-read each cycle (hot-reload).
+3. **Task claiming** — Worker POSTs `POST /api/v1/pools/{pool}/claim` with `{consumer_id: worker_id, block_ms}`. The server rejects with 403 unless the worker is currently heartbeating for that pool (pool-scoped claim auth).
+4. **Execution** — Worker executes agent handler, posts result via `POST /api/v1/tasks/{task_id}/complete` or `POST /api/v1/tasks/{task_id}/fail`.
+5. **Stale cleanup** — Server runs a sweeper every 60 seconds. Workers with no heartbeat for 90 seconds are dropped from the `CapabilityIndex`; orphan capabilities (no remaining worker serving them) are pruned.
 
 ## Queue providers
 

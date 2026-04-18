@@ -9,7 +9,6 @@ import pytest
 
 from monet import EscalationRequired, NeedsHumanReview, SemanticError, agent
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
-from monet.core.manifest import default_manifest
 from monet.core.registry import (
     default_registry,  # internal: needed for registry_scope test fixture
 )
@@ -36,7 +35,7 @@ def _ctx(**overrides: object) -> AgentRunContext:
 @pytest.fixture(autouse=True)
 def _clean_registry() -> None:  # type: ignore[misc]
     """Isolate each test from registry side effects."""
-    with default_registry.registry_scope(), default_manifest.manifest_scope():
+    with default_registry.registry_scope():
         yield
 
 

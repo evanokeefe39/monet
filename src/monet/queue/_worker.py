@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import trace
 
 if TYPE_CHECKING:
-    from monet.core.registry import AgentRegistry
+    from monet.core.registry import LocalRegistry
     from monet.queue import TaskQueue, TaskRecord
 
 logger = logging.getLogger("monet.worker")
@@ -32,11 +32,12 @@ _tracer = trace.get_tracer("monet.worker")
 
 async def run_worker(
     queue: TaskQueue,
-    registry: AgentRegistry | None = None,
+    registry: LocalRegistry | None = None,
     pool: str = "local",
     max_concurrency: int = 10,
     poll_interval: float = 0.1,
     shutdown_timeout: float = 30.0,
+    consumer_id: str | None = None,
 ) -> None:
     """Poll queue by pool, execute concurrently via registry.
 
@@ -58,17 +59,6 @@ async def run_worker(
         from monet.core.registry import default_registry
 
         registry = default_registry
-
-    # Configure agent manifest handle for worker-side SDK consumers
-    # (hooks, agents calling get_agent_manifest()). Idempotent — re-calling
-    # with the same default_manifest is a no-op. Monolith path is already
-    # configured by bootstrap; this covers distributed-worker startup.
-    from monet.agent_manifest import configure_agent_manifest
-    from monet.core.agent_manifest import get_agent_manifest
-    from monet.core.manifest import default_manifest
-
-    if not get_agent_manifest().is_configured():
-        configure_agent_manifest(default_manifest)
 
     # Import built-in worker hooks. @on_hook registrations fire at import
     # time into default_hook_registry. Idempotent — re-import is a no-op.
@@ -217,7 +207,8 @@ async def run_worker(
                 if not drain_task.done():
                     await _flush_drain()
 
-    consumer_id = f"worker-{uuid.uuid4().hex[:8]}"
+    if consumer_id is None:
+        consumer_id = f"worker-{uuid.uuid4().hex[:8]}"
     claim_block_ms = max(int(poll_interval * 1000), 1)
 
     try:

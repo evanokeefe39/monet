@@ -8,7 +8,6 @@ def test_monet_root_exports() -> None:
 
     expected = {
         "agent",
-        "AgentManifestHandle",
         "AgentMeta",
         "AgentResult",
         "AgentRunContext",
@@ -29,7 +28,6 @@ def test_monet_root_exports() -> None:
         "on_hook",
         "webhook_handler",
         "write_artifact",
-        "get_agent_manifest",
         "get_run_context",
         "get_run_logger",
         "get_artifacts",
@@ -122,11 +120,7 @@ def test_queue_concrete_exports() -> None:
 
 
 def test_server_public_api() -> None:
-    from monet.server import (  # noqa: F401
-        AgentCapability,
-        bootstrap,
-        configure_lazy_worker,
-    )
+    from monet.server import create_app  # noqa: F401
 
 
 def test_client_public_api() -> None:

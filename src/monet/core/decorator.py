@@ -30,7 +30,6 @@ from monet.types import (
 from .artifacts import _artifact_collector, _artifact_hashes, get_artifacts
 from .context import _agent_context
 from .hooks import run_after_agent_hooks, run_before_agent_hooks
-from .manifest import default_manifest
 from .registry import default_registry
 from .stubs import _signal_collector
 from .tracing import get_tracer
@@ -352,14 +351,7 @@ def agent(
                 _signal_collector.reset(sig_token)
                 _agent_context.reset(ctx_token)
 
-        # Register in handler registry (worker-side) and manifest (orchestration-side)
         default_registry.register(agent_id, command, wrapper)
-        default_manifest.declare(
-            agent_id,
-            command,
-            description=(fn.__doc__ or "").strip().split("\n", 1)[0],
-            pool=pool,
-        )
 
         # Attach metadata for introspection
         wrapper._agent_id = agent_id  # type: ignore[attr-defined]

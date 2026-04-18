@@ -74,39 +74,35 @@ async def test_health_no_auth(client: AsyncClient) -> None:
 async def test_register_worker(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """POST /api/v1/worker/register with valid auth returns deployment_id."""
+    """First heartbeat from a new worker_id registers and returns 200."""
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     resp = await client.post(
-        "/api/v1/worker/register",
+        "/api/v1/workers/worker-1/heartbeat",
         json={
             "pool": "default",
             "capabilities": [
                 {
                     "agent_id": "test-agent",
                     "command": "run",
+                    "pool": "default",
                     "description": "A test agent",
                 }
             ],
-            "worker_id": "worker-1",
         },
         headers=_auth_headers(),
     )
     assert resp.status_code == 200
-    assert "deployment_id" in resp.json()
+    body = resp.json()
+    assert body["worker_id"] == "worker-1"
+    assert body["registered"] is True
 
 
 async def test_register_worker_no_auth(client: AsyncClient) -> None:
-    """POST /api/v1/worker/register without auth is rejected."""
+    """Unified heartbeat endpoint requires auth."""
     resp = await client.post(
-        "/api/v1/worker/register",
-        json={
-            "pool": "default",
-            "capabilities": [],
-            "worker_id": "worker-1",
-        },
+        "/api/v1/workers/worker-1/heartbeat",
+        json={"pool": "default", "capabilities": []},
     )
-    # HTTPBearer returns 403 (missing) or 401 (invalid) depending
-    # on FastAPI version; either is acceptable for "not authorized".
     assert resp.status_code in (401, 403)
 
 
@@ -114,86 +110,69 @@ async def test_register_worker_no_auth(client: AsyncClient) -> None:
 
 
 async def test_heartbeat(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register then heartbeat returns 200."""
+    """Second heartbeat from a known worker returns registered=False."""
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     headers = _auth_headers()
-
-    # Register first
-    await client.post(
-        "/api/v1/worker/register",
-        json={
-            "pool": "default",
-            "capabilities": [],
-            "worker_id": "worker-1",
-        },
-        headers=headers,
-    )
-
+    body = {
+        "pool": "default",
+        "capabilities": [{"agent_id": "a", "command": "run", "pool": "default"}],
+    }
+    await client.post("/api/v1/workers/worker-1/heartbeat", json=body, headers=headers)
     resp = await client.post(
-        "/api/v1/worker/heartbeat",
-        json={"worker_id": "worker-1", "pool": "default"},
-        headers=headers,
+        "/api/v1/workers/worker-1/heartbeat", json=body, headers=headers
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    assert resp.json()["registered"] is False
 
 
 # -- Task claiming ---------------------------------------------------------
 
 
 async def test_claim_empty_pool(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    app: Any, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """GET /api/v1/tasks/claim/default on empty pool returns 204."""
+    """POST /api/v1/pools/default/claim on empty pool returns 204."""
+    from monet.server._capabilities import Capability
+
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
-    resp = await client.get("/api/v1/tasks/claim/default", headers=_auth_headers())
+    app.state.capability_index.upsert_worker(
+        "w1",
+        "default",
+        [Capability(agent_id="a", command="run", pool="default")],
+    )
+    resp = await client.post(
+        "/api/v1/pools/default/claim",
+        json={"consumer_id": "w1", "block_ms": 100},
+        headers=_auth_headers(),
+    )
     assert resp.status_code == 204
 
 
 # -- Deployments -----------------------------------------------------------
 
 
-async def test_create_deployment(
+async def test_list_deployments_after_heartbeat(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """POST /api/v1/deployments creates a deployment."""
-    monkeypatch.setenv("MONET_API_KEY", API_KEY)
-    resp = await client.post(
-        "/api/v1/deployments",
-        json={
-            "pool": "gpu",
-            "capabilities": [
-                {
-                    "agent_id": "image-gen",
-                    "command": "generate",
-                    "description": "Image generator",
-                }
-            ],
-        },
-        headers=_auth_headers(),
-    )
-    assert resp.status_code == 201
-    assert "deployment_id" in resp.json()
-
-
-async def test_list_deployments(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """POST a deployment then GET /api/v1/deployments includes it."""
+    """A worker's first heartbeat seeds a deployment record listable via GET."""
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     headers = _auth_headers()
 
-    create_resp = await client.post(
-        "/api/v1/deployments",
-        json={"pool": "cpu", "capabilities": []},
+    await client.post(
+        "/api/v1/workers/worker-gpu/heartbeat",
+        json={
+            "pool": "gpu",
+            "capabilities": [
+                {"agent_id": "image-gen", "command": "generate", "pool": "gpu"}
+            ],
+        },
         headers=headers,
     )
-    deployment_id = create_resp.json()["deployment_id"]
 
     list_resp = await client.get("/api/v1/deployments", headers=headers)
     assert list_resp.status_code == 200
-    ids = [d["deployment_id"] for d in list_resp.json()]
-    assert deployment_id in ids
+    pools = [d["pool"] for d in list_resp.json()]
+    assert "gpu" in pools
 
 
 # -- Task complete / fail --------------------------------------------------
@@ -204,17 +183,25 @@ async def test_complete_task(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Enqueue a task, claim it, then POST complete returns 200."""
+    """Enqueue a task, claim it via POST, then POST complete returns 200."""
+    from monet.server._capabilities import Capability
+
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     headers = _auth_headers()
     queue = app.state.queue
+    app.state.capability_index.upsert_worker(
+        "w1", "test", [Capability(agent_id="a1", command="run", pool="test")]
+    )
 
     task_id = await queue.enqueue(_make_task("a1", "run", "test"))
 
-    claim_resp = await client.get("/api/v1/tasks/claim/test", headers=headers)
+    claim_resp = await client.post(
+        "/api/v1/pools/test/claim",
+        json={"consumer_id": "w1", "block_ms": 200},
+        headers=headers,
+    )
     assert claim_resp.status_code == 200
-    claimed = claim_resp.json()
-    assert claimed["task_id"] == task_id
+    assert claim_resp.json()["task_id"] == task_id
 
     complete_resp = await client.post(
         f"/api/v1/tasks/{task_id}/complete",
@@ -235,14 +222,25 @@ async def test_fail_task(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Enqueue a task, claim it, then POST fail returns 200."""
+    """Enqueue a task, claim it via POST, then POST fail returns 200."""
+    from monet.server._capabilities import Capability
+
     monkeypatch.setenv("MONET_API_KEY", API_KEY)
     headers = _auth_headers()
     queue = app.state.queue
+    app.state.capability_index.upsert_worker(
+        "w1",
+        "fail-pool",
+        [Capability(agent_id="a2", command="run", pool="fail-pool")],
+    )
 
     task_id = await queue.enqueue(_make_task("a2", "run", "fail-pool"))
 
-    await client.get("/api/v1/tasks/claim/fail-pool", headers=headers)
+    await client.post(
+        "/api/v1/pools/fail-pool/claim",
+        json={"consumer_id": "w1", "block_ms": 200},
+        headers=headers,
+    )
 
     fail_resp = await client.post(
         f"/api/v1/tasks/{task_id}/fail",

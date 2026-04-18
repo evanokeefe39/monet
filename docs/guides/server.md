@@ -92,35 +92,33 @@ GET /api/v1/health
 {"status": "ok", "workers": 5, "queued": 12}
 ```
 
-### Worker registration
+### Worker heartbeat (registration + liveness)
 
 ```
-POST /api/v1/worker/register
+POST /api/v1/workers/{worker_id}/heartbeat
 ```
 
-Workers call this on startup with their discovered capabilities. Returns a `deployment_id`.
-
-### Worker heartbeat
-
-```
-POST /api/v1/worker/heartbeat
-```
-
-Called every 30 seconds by workers. If capabilities are included, the server reconciles the manifest (adds new capabilities, removes stale ones for that worker).
+Single endpoint for both registration and liveness. First call from a new
+`worker_id` registers; subsequent calls reconcile the capability set.
+Body: `{pool, capabilities: [Capability]}`. Each `Capability` is a
+pydantic-validated record with `agent_id`, `command`, `pool`, optional
+`description`.
 
 ### Task management
 
 ```
-GET  /api/v1/tasks/claim/{pool}     # Claim next pending task (204 if empty)
+POST /api/v1/pools/{pool}/claim        # Claim next pending task; body: {consumer_id, block_ms}
 POST /api/v1/tasks/{task_id}/complete  # Post successful result
 POST /api/v1/tasks/{task_id}/fail      # Post failure
 ```
 
+`consumer_id` must be the worker's `worker_id`, and that worker must be
+heartbeating for the named `pool`; otherwise the server returns 403.
+
 ### Deployments
 
 ```
-GET  /api/v1/deployments              # List active deployments (filter by ?pool=)
-POST /api/v1/deployments              # Create deployment record (used by monet register)
+GET /api/v1/deployments               # List active deployments (filter by ?pool=)
 ```
 
 See [Server API Reference](../api/server.md) for full request/response schemas.

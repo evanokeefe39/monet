@@ -30,7 +30,6 @@ pytest.importorskip("langgraph")
 
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.hooks import default_hook_registry
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
@@ -83,7 +82,6 @@ async def test_recruitment_capability_chain() -> None:
     configure_artifacts(InMemoryArtifactClient())
     with (
         default_registry.registry_scope(),
-        default_manifest.manifest_scope(),
         default_hook_registry.hook_scope(),
     ):
         import importlib
@@ -102,11 +100,6 @@ async def test_recruitment_capability_chain() -> None:
         from monet.agents.qa import qa_eval
 
         harness = _harness()
-        default_manifest.declare(
-            "code_executor", "eval_all", "runs candidates in sandbox"
-        )
-        default_manifest.declare("qa", "eval", "baseline + comparative QA")
-        default_manifest.declare("data_analyst", "score_agents", "scores the roster")
 
         # ── 1. code_executor(eval_all) ──
         exec_spec = json.dumps(
@@ -165,16 +158,12 @@ async def test_recruitment_capability_chain() -> None:
                 }
             )
         )
-        from monet.agent_manifest import configure_agent_manifest
-
-        configure_agent_manifest(default_manifest)
         try:
             roster_json = await data_analyst_score_agents.__wrapped__(  # type: ignore[attr-defined]
                 task=json.dumps({"window_days": 7, "score_threshold": 0.5}),
                 context=[],
             )
         finally:
-            configure_agent_manifest(None)
             configure_otel_backend(None)
         roster = json.loads(roster_json)
         assert roster["window_days"] == 7

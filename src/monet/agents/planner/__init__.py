@@ -15,11 +15,11 @@ from monet import (
     agent,
     emit_progress,
     emit_signal,
-    get_agent_manifest,
     get_run_logger,
     write_artifact,
 )
 from monet.config._env import agent_model
+from monet.core.registry import default_registry
 from monet.orchestration._state import WorkBrief
 
 from .._prompts import extract_text, make_env
@@ -63,15 +63,37 @@ def _strip_json_fence(text: str) -> str:
     return text.strip()
 
 
-def _build_roster() -> list[dict[str, Any]]:
-    """Return all declared agents sorted by (agent_id, command).
+def _build_roster(context: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Return the fleet-wide agent roster for planner prompt rendering.
 
-    Planner self-exclusion is applied at prompt-render time by filtering
-    on ``agent_id``. Keeping the manifest read unfiltered means the
-    manifest stays a dumb service — business logic lives in the planner.
+    Preference order:
+
+    1. ``agent_roster`` entry in *context* — the orchestrator (running in
+       the server process) injects the authoritative fleet view from
+       :class:`~monet.server._capabilities.CapabilityIndex` so the planner
+       can compose across pools (S2/S3 split-fleet).
+    2. Worker's ``default_registry`` — fallback for unit tests and any
+       caller that invokes the planner without orchestration.
+
+    Planner self-exclusion is applied at prompt-render time by the caller.
     """
+    for entry in context or []:
+        if entry.get("type") == "agent_roster":
+            agents = entry.get("agents") or []
+            return sorted(
+                (dict(a) for a in agents),
+                key=lambda c: (c.get("agent_id", ""), c.get("command", "")),
+            )
+    roster = default_registry.registered_agents(with_docstrings=True)
     return sorted(
-        (dict(cap) for cap in get_agent_manifest().list_agents()),
+        (
+            {
+                "agent_id": row.agent_id,
+                "command": row.command,
+                "description": row.description,
+            }
+            for row in roster
+        ),
         key=lambda c: (c["agent_id"], c["command"]),
     )
 
@@ -93,7 +115,9 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
     emit_progress({"status": "triaging", "agent": "planner"})
     log.info("planner/fast triaging: %s", task[:80])
 
-    roster = [cap for cap in _build_roster() if cap["agent_id"] not in _PLANNER_EXCLUDE]
+    roster = [
+        cap for cap in _build_roster(context) if cap["agent_id"] not in _PLANNER_EXCLUDE
+    ]
     prompt = _env.get_template("triage.j2").render(
         task=task,
         context=context or [],
@@ -139,7 +163,9 @@ async def planner_plan(
         elif entry.get("type") == "user_clarification":
             clarification_answers.append(entry)
 
-    roster = [cap for cap in _build_roster() if cap["agent_id"] not in _PLANNER_EXCLUDE]
+    roster = [
+        cap for cap in _build_roster(context) if cap["agent_id"] not in _PLANNER_EXCLUDE
+    ]
     prompt = _env.get_template("plan.j2").render(
         task=task,
         context=context or [],

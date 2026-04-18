@@ -18,7 +18,6 @@ pytest.importorskip("langgraph")
 
 from monet import agent, get_artifacts
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
-from monet.core.manifest import default_manifest
 from monet.core.registry import default_registry
 from monet.orchestration import build_execution_subgraph
 from monet.orchestration._state import WorkBrief, WorkBriefNode
@@ -28,13 +27,11 @@ async def test_execution_runs_frozen_brief_without_planning() -> None:
     """Compile the subgraph, ainvoke with a pointer, confirm nodes ran."""
     configure_artifacts(InMemoryArtifactClient())
     try:
-        with default_registry.registry_scope(), default_manifest.manifest_scope():
+        with default_registry.registry_scope():
 
             @agent(agent_id="stub_runner", command="go", pool="local")
             async def runner() -> dict[str, Any]:
                 return {"ran": True}
-
-            default_manifest.declare("stub_runner", "go", "stub runner")
 
             brief = WorkBrief(
                 goal="frozen brief",
