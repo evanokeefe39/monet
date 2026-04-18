@@ -65,6 +65,28 @@ class GraphNotInvocable(MonetClientError):  # noqa: N818
         self.declared = declared
 
 
+class ServerUnreachable(MonetClientError):  # noqa: N818
+    """Server could not be contacted — connection refused, timeout, or mid-restart."""
+
+    def __init__(self, url: str, reason: str) -> None:
+        super().__init__(f"server unreachable at {url} — {reason}")
+        self.url = url
+        self.reason = reason
+
+
+class ServerError(MonetClientError):
+    """Server returned an HTTP error or a graph-level error event."""
+
+    def __init__(self, status: int | None, detail: str) -> None:
+        if status:
+            msg = f"server error {status}: {detail}"
+        else:
+            msg = f"server error: {detail}"
+        super().__init__(msg)
+        self.status = status
+        self.detail = detail
+
+
 __all__ = [
     "AlreadyResolved",
     "AmbiguousInterrupt",
@@ -72,4 +94,6 @@ __all__ = [
     "InterruptTagMismatch",
     "MonetClientError",
     "RunNotInterrupted",
+    "ServerError",
+    "ServerUnreachable",
 ]

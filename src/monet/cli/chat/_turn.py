@@ -14,7 +14,7 @@ used to hand the next prompt submission to the interrupt parser.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from monet.cli.chat._hitl import format_form_prompt, parse_text_reply
@@ -32,6 +32,12 @@ BusySetter = Callable[[bool], None]
 
 #: Focus the prompt ``Input`` widget so the user knows where to type.
 FocusPrompt = Callable[[], None]
+
+
+async def empty_stream() -> AsyncIterator[str]:
+    """Async generator that yields nothing — used to skip the initial stream."""
+    return
+    yield  # type: ignore[misc]  # makes this an async generator
 
 
 class InterruptCoordinator:

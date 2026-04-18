@@ -33,9 +33,8 @@ from monet.orchestration import (
 from monet.orchestration import (
     build_execution_subgraph as _build_execution_subgraph,
 )
-from monet.orchestration import (
-    configure_queue,
-)
+from monet.orchestration import configure_queue
+from monet.orchestration._invoke import get_queue
 from monet.queue import InMemoryTaskQueue, TaskQueue
 
 if TYPE_CHECKING:
@@ -85,13 +84,30 @@ _monet_log_level = os.environ.get("MONET_LOG_LEVEL", "INFO").upper()
 logging.getLogger("monet").setLevel(getattr(logging, _monet_log_level, logging.INFO))
 
 configure_tracing(_config.observability)
-
 configure_artifacts(artifacts_from_env(default_root=_config.artifacts.root))
 
-queue: TaskQueue = _create_queue(_config.queue)
-configure_queue(queue)
 
-_log.info("monet server booted: %s", _config.redacted_summary())
+def bootstrap_server() -> TaskQueue:
+    """Create and install the process-wide task queue. Idempotent.
+
+    Must be called from the canonical ``_aegra_routes`` lifespan; not
+    from module body.  File-path re-executions of this module under
+    Aegra's synthetic ``aegra_graphs.*`` namespace do not call this
+    function — they only use the 0-arg graph factories below — so the
+    queue singleton is never overwritten from a wrong namespace.
+
+    Subsequent calls return the already-configured queue without
+    creating a new one or re-logging the boot summary, so tests that
+    wire their own queue via ``configure_queue`` then call
+    ``bootstrap_server`` transparently receive the existing instance.
+    """
+    existing = get_queue()
+    if existing is not None:
+        return existing
+    q: TaskQueue = _create_queue(_config.queue)
+    configure_queue(q)
+    _log.info("monet server booted: %s", _config.redacted_summary())
+    return q
 
 
 # Aegra's factory classifier inspects parameter count: a 1-arg function
@@ -134,8 +150,8 @@ def build_execution_graph() -> StateGraph:  # type: ignore[type-arg]
 
 
 __all__ = [
+    "bootstrap_server",
     "build_chat_graph",
     "build_default_graph",
     "build_execution_graph",
-    "queue",
 ]

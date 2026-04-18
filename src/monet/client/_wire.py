@@ -23,6 +23,28 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
+
+def _classify_transport_error(exc: BaseException, url: str) -> None:
+    """Re-raise *exc* as a typed MonetClientError when it is an httpx error."""
+    try:
+        import httpx
+    except ImportError:
+        return
+    from monet.client._errors import ServerError, ServerUnreachable
+
+    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout):
+        raise ServerUnreachable(url, "connection refused or timed out") from exc
+    if isinstance(exc, httpx.ReadTimeout):
+        raise ServerUnreachable(url, "read timed out") from exc
+    if isinstance(exc, httpx.RemoteProtocolError):
+        raise ServerUnreachable(url, "server closed connection (restart?)") from exc
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (401, 403):
+            raise ServerError(status, "check MONET_API_KEY") from exc
+        raise ServerError(status, exc.response.text[:200]) from exc
+
+
 # ── Trace + thread metadata keys ────────────────────────────────────
 
 TRACE_CARRIER_METADATA_KEY = "monet_trace_carrier"
@@ -75,10 +97,15 @@ async def create_thread(
             Adapters tag threads with ``monet_run_id`` and ``monet_graph``
             so :meth:`MonetClient.list_runs` / :meth:`get_run` can find them.
     """
+    url = str(getattr(client, "http_url", "") or "")
     kwargs: dict[str, Any] = {}
     if metadata:
         kwargs["metadata"] = metadata
-    thread = await client.threads.create(**kwargs)
+    try:
+        thread = await client.threads.create(**kwargs)
+    except Exception as exc:
+        _classify_transport_error(exc, url)
+        raise
     return str(thread["thread_id"])
 
 
@@ -114,15 +141,20 @@ async def stream_run(
     if metadata:
         kwargs["metadata"] = metadata
 
-    async for chunk in client.runs.stream(thread_id, graph_id, **kwargs):
-        event = getattr(chunk, "event", None) or ""
-        data = getattr(chunk, "data", None)
-        if event.startswith("updates"):
-            yield ("updates", data)
-        elif event.startswith("custom"):
-            yield ("custom", data)
-        elif event.startswith("error"):
-            yield ("error", data)
+    url = str(getattr(client, "http_url", "") or "")
+    try:
+        async for chunk in client.runs.stream(thread_id, graph_id, **kwargs):
+            event = getattr(chunk, "event", None) or ""
+            data = getattr(chunk, "data", None)
+            if event.startswith("updates"):
+                yield ("updates", data)
+            elif event.startswith("custom"):
+                yield ("custom", data)
+            elif event.startswith("error"):
+                yield ("error", data)
+    except Exception as exc:
+        _classify_transport_error(exc, url)
+        raise
 
 
 # ── State helpers ───────────────────────────────────────────────────
@@ -168,7 +200,9 @@ async def drain_stream(
         metadata=meta,
     ):
         if mode == "error":
-            raise RuntimeError(f"server error: {data}")
+            from monet.client._errors import ServerError
+
+            raise ServerError(None, str(data))
         if on_event is not None:
             on_event(mode, data)
 

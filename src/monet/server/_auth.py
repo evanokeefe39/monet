@@ -3,11 +3,15 @@
 Two dependencies:
 
 - :func:`require_api_key` — shared bearer for client-facing and pull
-  worker endpoints. Validated against ``MONET_API_KEY``.
+  worker endpoints. Validated against ``MONET_API_KEY``. When
+  ``MONET_API_KEY`` is unset the server is in keyless dev mode and the
+  dependency is a no-op (any or no ``Authorization`` header is accepted).
 - :func:`require_task_auth` — accepts EITHER the shared API key OR an
   HMAC bearer derived from ``HMAC_SHA256(MONET_API_KEY, task_id)``.
   Push workers (Cloud Run, Lambda, ACA) carry the per-task HMAC in
   their dispatch envelope; pull workers reuse the shared key.
+  ``MONET_API_KEY`` must be set for this dependency — task auth always
+  requires a real key.
 """
 
 from __future__ import annotations
@@ -23,7 +27,11 @@ from monet.config import AuthConfig
 
 __all__ = ["require_api_key", "require_task_auth", "task_hmac"]
 
-_security = HTTPBearer()
+# Strict bearer — used when the server key is known to be configured.
+_security = HTTPBearer(auto_error=True)
+# Lenient bearer — passes when Authorization is absent; used for
+# endpoints that must be accessible in keyless dev mode.
+_security_optional = HTTPBearer(auto_error=False)
 
 
 def task_hmac(api_key: str, task_id: str) -> str:
@@ -32,19 +40,27 @@ def task_hmac(api_key: str, task_id: str) -> str:
 
 
 async def require_api_key(
-    credentials: Annotated[HTTPAuthorizationCredentials, Security(_security)],
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Security(_security_optional)
+    ],
 ) -> str:
     """Validate the Bearer token against the configured ``MONET_API_KEY``.
 
-    Returns the validated API key on success. 401 on mismatch, 500 when
-    the server was started without a key configured.
+    When ``MONET_API_KEY`` is unset the server is in keyless dev mode and
+    all API-key-gated endpoints are open — any (or no) ``Authorization``
+    header is accepted.  This lets ``monet dev`` work without a key while
+    deployed instances enforce authentication.
+
+    Returns the validated API key (or ``""`` in keyless mode) on success.
+    Raises 401 on mismatch when a key is configured.
     """
     expected = AuthConfig.load().api_key
     if not expected:
-        raise HTTPException(status_code=500, detail="MONET_API_KEY not configured")
-    if not hmac.compare_digest(credentials.credentials, expected):
+        return ""  # keyless dev mode — endpoint is open
+    token = credentials.credentials if credentials is not None else ""
+    if not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return credentials.credentials
+    return token
 
 
 async def require_task_auth(

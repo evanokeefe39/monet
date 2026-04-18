@@ -3,7 +3,9 @@
 When running under Aegra (``aegra dev`` or ``aegra serve``), this module
 provides monet's distribution control-plane routes (worker registration,
 heartbeats, task claiming) as custom HTTP routes.  The task queue is
-shared with the graph execution layer via ``server_bootstrap.queue``.
+created once by :func:`~monet.server.server_bootstrap.bootstrap_server`
+and shared with the graph execution layer via the canonical
+``monet.orchestration._invoke._task_queue`` global.
 
 Configure in ``aegra.json``::
 
@@ -41,7 +43,7 @@ configure_capability_index(_capability_index)
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Server lifespan: sweeper + in-process monolith worker.
+    """Server lifespan: queue boot + sweeper + in-process monolith worker.
 
     The in-process worker serves the S1 monolith scenario (``monet
     dev``): the server hosts the agent handlers and claims its own
@@ -49,7 +51,20 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``monet worker`` process. The worker heartbeats in-process so the
     :class:`CapabilityIndex` reflects the same handlers the server can
     dispatch locally.
+
+    ``bootstrap_server()`` is called here — not at module body — so the
+    canonical lifespan is the single site that creates and wires the
+    process-wide task queue.  Aegra loads graph modules via file-path
+    re-imports (``aegra_graphs.*`` synthetic namespace); those re-runs
+    of ``server_bootstrap.py`` skip queue creation because
+    ``bootstrap_server()`` is idempotent and is never called from the
+    file-path path.
     """
+    from monet.server.server_bootstrap import bootstrap_server
+
+    queue = bootstrap_server()
+    _app.state.queue = queue
+
     await _deployments.initialize()
 
     async def _sweep_loop() -> None:
@@ -111,12 +126,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(lifespan=_lifespan)
 
-# Wire dependencies — queue comes from server_bootstrap module-level init.
-# Aegra imports server_bootstrap first (to load graphs), so the queue is
-# already configured by the time this module loads.
-from monet.server.server_bootstrap import queue  # noqa: E402
-
-app.state.queue = queue
+# Deployments and capability index are available immediately.
+# The queue is wired inside _lifespan via bootstrap_server() so it is
+# never created at module-import time (which would re-run under Aegra's
+# synthetic aegra_graphs.* namespace and split the queue singleton).
 app.state.deployments = _deployments
 app.state.capability_index = _capability_index
 
