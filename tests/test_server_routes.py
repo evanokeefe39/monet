@@ -97,13 +97,17 @@ async def test_register_worker(
     assert body["registered"] is True
 
 
-async def test_register_worker_no_auth(client: AsyncClient) -> None:
-    """Unified heartbeat endpoint requires auth."""
+async def test_register_worker_no_auth(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unified heartbeat endpoint requires auth when a key is configured."""
+    monkeypatch.setenv("MONET_API_KEY", API_KEY)
     resp = await client.post(
         "/api/v1/workers/worker-1/heartbeat",
         json={"pool": "default", "capabilities": []},
+        # no Authorization header
     )
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 401
 
 
 # -- Heartbeat -------------------------------------------------------------

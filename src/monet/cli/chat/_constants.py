@@ -22,6 +22,7 @@ TUI_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/threads", "open the threads sidebar"),
     ("/switch", "resume an existing thread by id"),
     ("/agents", "open the agents sidebar"),
+    ("/artifacts", "open the artifacts sidebar"),
     ("/runs", "list recent pipeline runs"),
     ("/colors", "show or change the palette"),
     ("/help", "list TUI commands"),

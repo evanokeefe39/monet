@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from monet.client._errors import ServerError
 from monet.client._events import AgentProgress, ChatSummary
 from monet.client._wire import (
     MONET_CHAT_NAME_KEY,
@@ -145,7 +146,7 @@ class ChatClient:
             command=command,
         ):
             if mode == "error":
-                raise RuntimeError(f"server error: {data}")
+                raise ServerError(None, str(data))
             if mode == "custom" and isinstance(data, dict):
                 progress = _build_agent_progress("", data)
                 if progress is not None:
@@ -198,7 +199,7 @@ class ChatClient:
             input=input_data,
         ):
             if mode == "error":
-                raise RuntimeError(f"server error: {data}")
+                raise ServerError(None, str(data))
 
     async def get_chat_history(self, thread_id: str) -> list[dict[str, Any]]:
         """Fetch the message history from a chat thread."""

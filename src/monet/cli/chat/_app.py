@@ -48,11 +48,33 @@ from monet.cli.chat._constants import (
     PULSE_ENABLED,
     TUI_COMMANDS,
 )
+from monet.cli.chat._menu import (
+    MENU_ABOUT,
+    MENU_EXIT,
+    MENU_KEYBOARD,
+    MENU_LIBRARY,
+    MENU_OPTIONS,
+    AboutScreen,
+    CommandLibraryScreen,
+    KeyboardShortcutsScreen,
+    MainMenuScreen,
+    OptionsScreen,
+)
 from monet.cli.chat._pickers import PickerScreen as _PickerScreen
 from monet.cli.chat._pulse import BorderPulseController
-from monet.cli.chat._slash import RegistrySuggester, SlashCommandProvider
+from monet.cli.chat._sidebar import (
+    BREAKPOINT_COLS,
+    SidebarKind,
+    SidebarPanel,
+)
+from monet.cli.chat._slash import RegistrySuggester
 from monet.cli.chat._themes import MONET_DARK, MONET_THEMES
-from monet.cli.chat._turn import InterruptCoordinator, drain_stream, run_turn
+from monet.cli.chat._turn import (
+    InterruptCoordinator,
+    drain_stream,
+    empty_stream,
+    run_turn,
+)
 from monet.cli.chat._view import (
     DEFAULT_TAG_STYLES as _DEFAULT_TAG_STYLES,
 )
@@ -184,42 +206,12 @@ class ChatApp(App[None]):
         display: block;
     }
 
-    /* ctrl+p command palette — match the dark transcript theme. */
-    CommandPalette {
-        background: black 70%;
-    }
-
-    CommandPalette > Vertical {
-        width: 60%;
-        max-width: 80;
-        height: auto;
-        max-height: 80%;
-        background: black;
-        border: round $panel-lighten-2;
-    }
-
-    CommandPalette Input {
-        background: black;
-        border: none;
-        color: $text;
-        padding: 0 1;
-    }
-
-    CommandPalette OptionList,
-    CommandPalette SearchIcon,
-    CommandPalette LoadingIndicator {
-        background: black;
-        border: none;
-        color: $text;
-    }
-
-    CommandPalette .command-palette--highlight {
-        color: $accent;
-        text-style: bold;
-    }
     """
 
-    COMMANDS: ClassVar = App.COMMANDS | {SlashCommandProvider}
+    # Strip Textual's default command-palette provider set. ``ctrl+p``
+    # opens the monet-native :class:`MainMenuScreen` instead, so the
+    # built-in palette (and all its system commands) must not register.
+    COMMANDS: ClassVar[set[Any]] = set()
     BINDINGS: ClassVar = [
         Binding("ctrl+q", "quit", "Quit", show=False),
         Binding("ctrl+c", "confirm_quit", "Quit", show=False, priority=True),
@@ -227,6 +219,7 @@ class ChatApp(App[None]):
         Binding("escape", "hide_suggest", "Close", show=False),
         Binding("tab", "accept_suggestion", "Complete", show=False, priority=True),
         Binding("f1", "toggle_help_panel", "Keys", show=False),
+        Binding("ctrl+p", "open_menu", "Menu", show=False, priority=True),
     ]
 
     def __init__(
@@ -282,17 +275,20 @@ class ChatApp(App[None]):
         )
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Disable slash-suggest bindings when a list picker is active.
+        """Disable slash-suggest bindings when a picker surface is active.
 
         Tab is registered as a priority App binding so the suggester can
         accept ghost-text from anywhere. Without this guard, pushed
-        ``_PickerScreen`` instances would never see Tab / Escape / Down
-        because the App consumes them first.
+        :class:`_PickerScreen` instances or a mounted :class:`SidebarPanel`
+        would never see Tab / Escape / Down because the App consumes them
+        first.
         """
         scoped = {"accept_suggestion", "focus_suggest", "hide_suggest"}
         if action not in scoped:
             return True
-        return not isinstance(self.screen, _PickerScreen)
+        if isinstance(self.screen, _PickerScreen):
+            return False
+        return not self.query("#sidebar")
 
     def _combined_slash_commands(self) -> list[str]:
         """TUI-level commands first, then server-declared slash commands."""
@@ -377,6 +373,13 @@ class ChatApp(App[None]):
             self.call_after_refresh(self._show_welcome)
         self.query_one("#prompt", Input).focus()
         self.run_worker(self._load_thread_name(), exclusive=False)
+        # Pull server-side slash-command descriptions so the completion
+        # dropdown shows a hint next to each agent command on first
+        # keystroke, not only after the first turn completes.
+        self.run_worker(self.refresh_slash_commands(), exclusive=False)
+        # Recover any interrupt that survived a server restart.
+        if self._chat_thread_id:
+            self.run_worker(self._recover_pending_interrupt(), exclusive=False)
         # Kick off the toolbar indicator (agent count + artifact count).
         self._refresh_indicator()
         self.set_interval(INDICATOR_REFRESH_SECONDS, self._refresh_indicator)
@@ -721,6 +724,43 @@ class ChatApp(App[None]):
         self._indicator_override = False
         self._set_toolbar_hints(self._indicator_text)
 
+    async def _recover_pending_interrupt(self) -> None:
+        """Resume any interrupt that survived a server restart.
+
+        Called on mount, thread switch, and after a connection error so
+        the TUI re-attaches to a HITL form that was waiting in the
+        checkpointer when the server went down.
+        """
+        thread_id = self._chat_thread_id
+        if not thread_id:
+            return
+        try:
+            pending = await self._client.chat.get_chat_interrupt(thread_id)
+        except Exception:
+            return
+        if not pending:
+            return
+        _log.info("recovering pending interrupt on thread=%s", thread_id)
+        self._append_line("[info] pending approval found — resuming")
+
+        self._set_busy(True)
+        try:
+            await run_turn(
+                client=self._client,
+                thread_id=thread_id,
+                first_stream=empty_stream(),
+                coordinator=self._interrupts,
+                writer=self._append_line,
+                busy_setter=self._set_busy,
+                focus_prompt=self._focus_prompt,
+                get_interrupt=self._client.chat.get_chat_interrupt,
+                resume=self._client.chat.resume_chat,
+            )
+        except Exception as exc:
+            self._append_line(f"[error] {exc}")
+            _log.exception("interrupt recovery failed")
+        self._set_busy(False)
+
     async def _handle_user_text(self, text: str) -> None:
         """Run one user submission to completion in a worker context."""
         log = self.query_one("#transcript", RichLog)
@@ -751,6 +791,9 @@ class ChatApp(App[None]):
         except Exception as exc:
             self._append_line(f"[error] {exc}")
             _log.exception("chat turn failed")
+            # Server may have restarted mid-execution; recover any
+            # interrupt that survived in the checkpointer.
+            await self._recover_pending_interrupt()
         self.sub_title = ""
         self._set_busy(False)
         # Turn finished — any new artifacts now want counting.
@@ -774,6 +817,252 @@ class ChatApp(App[None]):
             self.action_hide_help_panel()
         else:
             self.action_show_help_panel()
+
+    # ── Main menu (ctrl+p) ────────────────────────────────────────
+
+    def action_open_menu(self) -> None:
+        """``ctrl+p`` — open the monet-native menu."""
+        self.push_screen(MainMenuScreen(), self._on_menu_pick)
+
+    def _on_menu_pick(self, section: str | None) -> None:
+        """Route the top-level menu choice to the matching sub-screen."""
+        if not section:
+            return
+        if section == MENU_EXIT:
+            self.exit()
+            return
+        if section == MENU_KEYBOARD:
+            self.push_screen(KeyboardShortcutsScreen(), self._reopen_menu)
+            return
+        if section == MENU_OPTIONS:
+            self.push_screen(
+                OptionsScreen(
+                    current_theme=str(self.theme or MONET_DARK.name),
+                    themes=tuple(t.name for t in MONET_THEMES),
+                    pulse_enabled=PULSE_ENABLED,
+                ),
+                self._on_options_pick,
+            )
+            return
+        if section == MENU_LIBRARY:
+            entries = [
+                (cmd, self.slash_descriptions.get(cmd, ""))
+                for cmd in self.slash_commands
+            ]
+            self.push_screen(CommandLibraryScreen(entries), self._on_library_pick)
+            return
+        if section == MENU_ABOUT:
+            self.push_screen(AboutScreen(), self._reopen_menu)
+            return
+
+    def _reopen_menu(self, _result: str | None) -> None:
+        """Pop a sub-screen then re-present the top-level menu."""
+        self.push_screen(MainMenuScreen(), self._on_menu_pick)
+
+    def _on_options_pick(self, result: str | None) -> None:
+        if not result:
+            return
+        if result.startswith("theme:"):
+            theme_name = result.split(":", 1)[1]
+            with contextlib.suppress(Exception):
+                self.theme = theme_name
+            self._append_line(f"[info] theme set to {theme_name}")
+        # (pulse toggle intentionally not wired yet — requires a runtime
+        # override to ``PULSE_ENABLED`` constant; revisit when the user
+        # asks for it.)
+
+    def _on_library_pick(self, result: str | None) -> None:
+        if not result:
+            return
+        self.prefill_input(result + " ")
+
+    # ── Picker (sidebar vs fullscreen) ────────────────────────────
+
+    def _sidebar_mounted(self) -> bool:
+        return bool(self.query("#sidebar"))
+
+    async def _open_picker(self, kind: SidebarKind) -> None:
+        """Open a picker for *kind*.
+
+        Width-based dispatch: wide terminals mount the right-docked
+        :class:`SidebarPanel`; narrow terminals push a full-screen
+        :class:`_PickerScreen`. Hard floor (:data:`FLOOR_COLS`) always
+        pushes full-screen.
+        """
+        if self._sidebar_mounted():
+            # Already open — re-invocation flips to the newly-requested kind.
+            self._close_sidebar()
+        if self.size.width < BREAKPOINT_COLS:
+            await self._push_fullscreen_picker(kind)
+            return
+        self._mount_sidebar(kind)
+
+    def _mount_sidebar(self, kind: SidebarKind) -> None:
+        panel = SidebarPanel(
+            kind=kind,
+            client=self._client,
+            thread_id_getter=lambda: self._chat_thread_id,
+            on_select=self._on_sidebar_select,
+            on_close=self._close_sidebar,
+            on_fullscreen=self._go_fullscreen,
+        )
+        try:
+            area = self.query_one("#transcript-area")
+            area.mount(panel)
+        except Exception:
+            _log.exception("failed to mount sidebar")
+
+    async def _push_fullscreen_picker(self, kind: SidebarKind) -> None:
+        title, options = await self._picker_options(kind)
+        if not options:
+            # _picker_options already wrote the empty-state toast/line.
+            return
+
+        def _on_pick(result: str | None) -> None:
+            if result is None:
+                self._focus_prompt()
+                return
+            self._on_sidebar_select(kind, result)
+
+        self.push_screen(_PickerScreen(title, options), _on_pick)
+
+    async def _picker_options(
+        self, kind: SidebarKind
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Fetch options for the fullscreen picker. Mirrors sidebar fill."""
+        if kind == "agents":
+            try:
+                caps = await self._client.list_capabilities()
+            except Exception as exc:
+                self._append_line(f"[error] /agents failed: {exc}")
+                return "Select an agent command", []
+            if not caps:
+                self._append_line("[info] no agents registered on this server")
+                return "Select an agent command", []
+            options: list[tuple[str, str]] = []
+            for cap in sorted(
+                caps,
+                key=lambda c: (c.get("agent_id") or "", c.get("command") or ""),
+            ):
+                agent_id = str(cap.get("agent_id") or "")
+                command = str(cap.get("command") or "")
+                if not agent_id or not command:
+                    continue
+                pool = str(cap.get("pool") or "local")
+                desc = str(cap.get("description") or "").strip()
+                value = f"/{agent_id}:{command}"
+                label = f"{value}  ·  pool={pool}"
+                if desc:
+                    label += f"  ·  {desc}"
+                options.append((value, label))
+            return "Select an agent command", options
+        if kind == "threads":
+            try:
+                chats = await self._client.chat.list_chats()
+            except Exception as exc:
+                self._append_line(f"[error] /threads failed: {exc}")
+                return "Select a chat thread", []
+            if not chats:
+                self._append_line("[info] no chat threads yet")
+                return "Select a chat thread", []
+            options = []
+            for c in chats:
+                marker = "* " if c.thread_id == self._chat_thread_id else "  "
+                name = c.name or "(unnamed)"
+                label = f"{marker}{name}  ·  {c.message_count} msgs  ·  {c.thread_id}"
+                options.append((c.thread_id, label))
+            return "Select a chat thread", options
+        # artifacts
+        thread_id = self._chat_thread_id or ""
+        rows: list[Any] = []
+        if thread_id:
+            try:
+                from monet.core.artifacts import get_artifacts
+
+                rows = list(
+                    await get_artifacts().query_recent(thread_id=thread_id, limit=50)
+                )
+            except Exception as exc:
+                self._append_line(f"[error] /artifacts failed: {exc}")
+                return "Select an artifact", []
+        if not rows:
+            self._append_line("[info] no artifacts in this thread")
+            return "Select an artifact", []
+        options = []
+        for row in rows:
+            art_id = str(getattr(row, "artifact_id", "") or getattr(row, "id", ""))
+            kind_str = str(getattr(row, "kind", "") or "")
+            key = str(getattr(row, "key", "") or "")
+            label_text = key or kind_str or art_id[:8]
+            if kind_str and key:
+                label_text = f"{label_text}  ·  {kind_str}"
+            options.append((art_id, label_text))
+        return "Select an artifact", options
+
+    def _close_sidebar(self) -> None:
+        with contextlib.suppress(Exception):
+            panel = self.query_one(SidebarPanel)
+            panel.remove()
+        self._focus_prompt()
+
+    def _go_fullscreen(self, kind: SidebarKind) -> None:
+        """Sidebar requested fullscreen — unmount and push the picker screen."""
+        with contextlib.suppress(Exception):
+            self.query_one(SidebarPanel).remove()
+        self.run_worker(
+            self._push_fullscreen_picker(kind),
+            exclusive=True,
+            group="picker-flip",
+        )
+
+    def _on_sidebar_select(self, kind: SidebarKind, value: str) -> None:
+        """Route a picker selection to the right handler by kind."""
+        if kind == "agents":
+            self.prefill_input(value + " ")
+            self._close_sidebar()
+            return
+        if kind == "threads":
+            self._close_sidebar()
+            self.run_worker(self._switch_thread(value), exclusive=True)
+            return
+        if kind == "artifacts":
+            self._copy_artifact_url(value)
+            return
+
+    def on_resize(self, event: Any) -> None:
+        """Swap sidebar → fullscreen picker if the terminal shrank below breakpoint."""
+        del event
+        if not self._sidebar_mounted():
+            return
+        if self.size.width >= BREAKPOINT_COLS:
+            return
+        with contextlib.suppress(Exception):
+            panel = self.query_one(SidebarPanel)
+            kind: SidebarKind = panel.kind
+            panel.remove()
+            self.run_worker(
+                self._push_fullscreen_picker(kind),
+                exclusive=True,
+                group="picker-flip",
+            )
+
+    def _copy_artifact_url(self, artifact_id: str) -> None:
+        """Copy the server's ``/artifacts/<id>/view`` URL to clipboard.
+
+        Gives the operator a quick way to ctrl+click or paste the link
+        into a browser without leaving chat.
+        """
+        # ``MonetClient`` stores the server URL as ``_url``; fall back
+        # to an empty string if the attribute is missing so the copy
+        # still works (URL will just be relative).
+        base = getattr(self._client, "_url", "") or ""
+        url = f"{base.rstrip('/')}/api/v1/artifacts/{artifact_id}/view"
+        try:
+            self.copy_to_clipboard(url)
+            self.notify(f"copied artifact url · {artifact_id[:8]}")
+        except Exception as exc:
+            _log.warning("copy_to_clipboard failed: %s", exc)
+            self.notify(f"copy failed: {exc}", severity="error")
 
     async def _collect_resume(
         self,
@@ -818,13 +1107,16 @@ class ChatApp(App[None]):
             await self._cmd_new_thread(log)
             return True
         if head == "/threads":
-            await self._cmd_list_threads(log)
+            await self._open_picker("threads")
             return True
         if head == "/switch":
             await self._cmd_switch_thread(log, arg)
             return True
         if head == "/agents":
-            await self._cmd_list_agents(log)
+            await self._open_picker("agents")
+            return True
+        if head == "/artifacts":
+            await self._open_picker("artifacts")
             return True
         if head == "/runs":
             await self._cmd_list_runs(log)
@@ -854,29 +1146,6 @@ class ChatApp(App[None]):
         self.call_after_refresh(self._show_welcome)
         self._refresh_indicator()
 
-    async def _cmd_list_threads(self, log: RichLog) -> None:
-        try:
-            chats = await self._client.chat.list_chats()
-        except Exception as exc:
-            self._append_line(f"[error] /threads failed: {exc}")
-            return
-        if not chats:
-            self._append_line("[info] no chat threads yet")
-            return
-        options: list[tuple[str, str]] = []
-        for c in chats:
-            marker = "* " if c.thread_id == self._chat_thread_id else "  "
-            name = c.name or "(unnamed)"
-            label = f"{marker}{name}  ·  {c.message_count} msgs  ·  {c.thread_id}"
-            options.append((c.thread_id, label))
-
-        def _on_pick(result: str | None) -> None:
-            if not result:
-                return
-            self.run_worker(self._switch_thread(result), exclusive=True)
-
-        self.push_screen(_PickerScreen("Select a chat thread", options), _on_pick)
-
     async def _switch_thread(self, target: str) -> None:
         log = self.query_one("#transcript", RichLog)
         await self._cmd_switch_thread(log, target)
@@ -905,6 +1174,7 @@ class ChatApp(App[None]):
         if not history:
             self.call_after_refresh(self._show_welcome)
         self._refresh_indicator()
+        self.run_worker(self._recover_pending_interrupt(), exclusive=False)
 
     def _reset_transcript(self, first_line: str | None = None) -> None:
         """Clear the transcript RichLog and its copy buffer in lockstep."""
@@ -913,35 +1183,6 @@ class ChatApp(App[None]):
             self.query_one("#transcript", RichLog).clear()
         if first_line:
             self._append_line(first_line)
-
-    async def _cmd_list_agents(self, log: RichLog) -> None:
-        try:
-            caps = await self._client.list_capabilities()
-        except Exception as exc:
-            self._append_line(f"[error] /agents failed: {exc}")
-            return
-        if not caps:
-            self._append_line("[info] no agents registered on this server")
-            return
-        options: list[tuple[str, str]] = []
-        for cap in sorted(
-            caps, key=lambda c: (c.get("agent_id") or "", c.get("command") or "")
-        ):
-            agent_id = str(cap.get("agent_id") or "")
-            command = str(cap.get("command") or "")
-            pool = str(cap.get("pool") or "local")
-            desc = str(cap.get("description") or "").strip()
-            value = f"/{agent_id}:{command}"
-            label = f"{value}  ·  pool={pool}"
-            if desc:
-                label += f"  ·  {desc}"
-            options.append((value, label))
-
-        def _on_pick(result: str | None) -> None:
-            if result:
-                self.prefill_input(result + " ")
-
-        self.push_screen(_PickerScreen("Select an agent command", options), _on_pick)
 
     async def _cmd_list_runs(self, log: RichLog) -> None:
         """Print recent pipeline runs to the transcript.

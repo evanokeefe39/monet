@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -28,10 +33,10 @@ def app() -> FastAPI:
 
 
 @pytest.fixture
-async def client(app: FastAPI) -> AsyncClient:
+async def client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)  # type: ignore[arg-type]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c  # type: ignore[misc]
+        yield c
 
 
 @pytest.mark.asyncio
@@ -61,20 +66,35 @@ async def test_invalid_api_key(
 
 
 @pytest.mark.asyncio
-async def test_missing_api_key_env(
+async def test_keyless_dev_mode(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Unset MONET_API_KEY → server is open; endpoint returns 200 with empty key."""
     monkeypatch.delenv("MONET_API_KEY", raising=False)
     resp = await client.get(
         "/protected",
         headers={"Authorization": "Bearer any-key"},
     )
-    assert resp.status_code == 500
-    assert resp.json()["detail"] == "MONET_API_KEY not configured"
+    assert resp.status_code == 200
+    assert resp.json() == {"key": ""}
 
 
 @pytest.mark.asyncio
-async def test_no_auth_header(client: AsyncClient) -> None:
+async def test_no_auth_header_keyless(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No Authorization header + unset key → keyless mode, endpoint is open."""
+    monkeypatch.delenv("MONET_API_KEY", raising=False)
     resp = await client.get("/protected")
-    # FastAPI's HTTPBearer scheme returns 401 when no credentials provided
-    assert resp.status_code in (401, 403)
+    assert resp.status_code == 200
+    assert resp.json() == {"key": ""}
+
+
+@pytest.mark.asyncio
+async def test_no_auth_header_keyed(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No Authorization header with key configured → 401."""
+    monkeypatch.setenv("MONET_API_KEY", TEST_API_KEY)
+    resp = await client.get("/protected")
+    assert resp.status_code == 401
