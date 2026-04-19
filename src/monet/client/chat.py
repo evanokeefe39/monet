@@ -206,6 +206,10 @@ class ChatClient:
         values, _ = await get_state_values(self._client, thread_id)
         return values.get("messages") or []
 
+    async def delete_chat(self, thread_id: str) -> None:
+        """Delete a chat thread and all its history."""
+        await self._client.threads.delete(thread_id)
+
     async def rename_chat(self, thread_id: str, name: str) -> None:
         """Update a chat thread's display name."""
         await self._client.threads.update(

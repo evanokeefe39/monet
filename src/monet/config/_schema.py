@@ -54,6 +54,8 @@ from ._env import (
     MONET_CHAT_TRIAGE_MODEL,
     MONET_DISTRIBUTED,
     MONET_QUEUE_BACKEND,
+    MONET_QUEUE_LEASE_TTL,
+    MONET_QUEUE_RECLAIM_INTERVAL,
     MONET_SERVER_URL,
     MONET_TRACE_FILE,
     MONET_WORKER_AGENTS,
@@ -268,6 +270,8 @@ class QueueConfig(BaseModel):
     work_stream_maxlen: int | None = None
     redis_pool_size: int = 20
     push_dispatch_timeout: float = 10.0
+    lease_ttl_seconds: int = 300
+    reclaim_interval_seconds: int = 30
 
     @classmethod
     def load(cls) -> QueueConfig:
@@ -278,6 +282,8 @@ class QueueConfig(BaseModel):
         return cls(
             backend=backend,
             redis_uri=read_str(REDIS_URI),
+            lease_ttl_seconds=read_int(MONET_QUEUE_LEASE_TTL, default=300),
+            reclaim_interval_seconds=read_int(MONET_QUEUE_RECLAIM_INTERVAL, default=30),
         )
 
     def validate_for_boot(self) -> None:
@@ -294,6 +300,26 @@ class QueueConfig(BaseModel):
                 "the memory backend to be disabled when REDIS_URI is set "
                 f"(set {MONET_QUEUE_BACKEND}=redis or unset REDIS_URI)",
             )
+        if self.lease_ttl_seconds <= 0:
+            raise ConfigError(
+                MONET_QUEUE_LEASE_TTL,
+                str(self.lease_ttl_seconds),
+                "a positive integer (seconds)",
+            )
+        if self.reclaim_interval_seconds <= 0:
+            raise ConfigError(
+                MONET_QUEUE_RECLAIM_INTERVAL,
+                str(self.reclaim_interval_seconds),
+                "a positive integer (seconds)",
+            )
+        if self.lease_ttl_seconds < 2 * self.reclaim_interval_seconds:
+            raise ConfigError(
+                MONET_QUEUE_LEASE_TTL,
+                str(self.lease_ttl_seconds),
+                f"at least 2x {MONET_QUEUE_RECLAIM_INTERVAL} "
+                f"({2 * self.reclaim_interval_seconds}s) so the sweeper has "
+                "time to run before entries expire",
+            )
 
     def redacted_summary(self) -> dict[str, Any]:
         return {
@@ -302,6 +328,8 @@ class QueueConfig(BaseModel):
             "work_stream_maxlen": self.work_stream_maxlen,
             "redis_pool_size": self.redis_pool_size,
             "push_dispatch_timeout": self.push_dispatch_timeout,
+            "lease_ttl_seconds": self.lease_ttl_seconds,
+            "reclaim_interval_seconds": self.reclaim_interval_seconds,
         }
 
 

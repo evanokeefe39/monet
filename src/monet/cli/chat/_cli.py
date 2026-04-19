@@ -116,6 +116,7 @@ def chat(
                 resume_id,
                 session_name,
                 graph_override,
+                resolved_log,
             )
         )
     except KeyboardInterrupt:
@@ -142,6 +143,7 @@ async def _chat_main(
     resume_id: str | None,
     session_name: str | None,
     graph_override: str | None,
+    log_path: Path,
 ) -> None:
     from monet.cli._run import _preflight_server
     from monet.cli.chat._app import ChatApp
@@ -233,6 +235,15 @@ async def _chat_main(
         style=load_user_chat_style(),
     )
     await app.run_async()
+    if app._crash_error is not None:
+        err = app._crash_error
+        click.secho(
+            f"chat crashed ({type(err).__name__}: {err}).",
+            err=True,
+            fg="red",
+        )
+        click.secho(f"See full traceback in {log_path}.", err=True, dim=True)
+        raise SystemExit(1)
 
 
 async def _render_session_list(client: MonetClient) -> None:
