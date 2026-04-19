@@ -152,6 +152,11 @@ async def stream_run(
                 yield ("custom", data)
             elif event.startswith("error"):
                 yield ("error", data)
+            elif event == "metadata":
+                # Aegra emits run_id exactly once, up front. Clients use
+                # the "metadata" mode to stamp run_id onto subsequent
+                # updates (ADR-006 F2).
+                yield ("metadata", data)
     except Exception as exc:
         _classify_transport_error(exc, url)
         raise

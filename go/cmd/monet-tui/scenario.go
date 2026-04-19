@@ -139,12 +139,16 @@ func execStep(
 		if err != nil {
 			return err
 		}
-		if err := streamRun(ctx, out, idx, func(events chan<- wire.RunEvent) error {
+		sawInterrupt, lastRunID, err := streamRun(ctx, out, idx, func(events chan<- wire.RunEvent) error {
 			return cc.Send(ctx, id, step.Message, "", events)
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
-		return emitTerminal(ctx, cc, out, idx, id)
+		if sawInterrupt {
+			return nil
+		}
+		return emitTerminal(ctx, cc, out, idx, id, lastRunID)
 
 	case "resume":
 		id, err := resolveThread(threads, step.Thread)
@@ -154,12 +158,37 @@ func execStep(
 		if err := waitInterrupted(ctx, mc, id, 30*time.Second); err != nil {
 			return err
 		}
-		if err := streamRun(ctx, out, idx, func(events chan<- wire.RunEvent) error {
+		sawInterrupt, lastRunID, err := streamRun(ctx, out, idx, func(events chan<- wire.RunEvent) error {
 			return cc.Resume(ctx, id, step.Tag, step.Payload, "", events)
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
-		return emitTerminal(ctx, cc, out, idx, id)
+		if sawInterrupt {
+			return nil
+		}
+		return emitTerminal(ctx, cc, out, idx, id, lastRunID)
+
+	case "abort":
+		// Abort targets an in-flight or interrupted run. We don't know
+		// the run_id here — cancel the thread's latest run by querying
+		// state first. Aegra exposes no abort-by-thread endpoint, so
+		// we piggyback on the resume command with a canonical payload.
+		tid, err := resolveThread(threads, step.Thread)
+		if err != nil {
+			return err
+		}
+		if err := waitInterrupted(ctx, mc, tid, 30*time.Second); err != nil {
+			return err
+		}
+		_, _, err = streamRun(ctx, out, idx, func(events chan<- wire.RunEvent) error {
+			return cc.Resume(ctx, tid, "abort", map[string]any{"action": "abort"}, "", events)
+		})
+		if err != nil {
+			return err
+		}
+		emit(out, jsonlEvent{Kind: "aborted", Step: idx})
+		return nil
 
 	case "get_state":
 		id, err := resolveThread(threads, step.Thread)
@@ -197,19 +226,26 @@ func resolveThread(threads map[string]string, key string) (string, error) {
 }
 
 // streamRun runs a stream-producing func and emits every event as JSONL.
-// Terminates when the channel closes, the ctx deadline hits, or a
-// run_complete / run_failed event arrives.
+// Returns (sawInterrupt, err): sawInterrupt is true when the stream
+// emitted an interrupt event, in which case the caller must skip
+// emitTerminal's synthetic interrupt to avoid a duplicate frame.
 func streamRun(
 	ctx context.Context,
 	out *json.Encoder,
 	stepIdx int,
 	invoke func(chan<- wire.RunEvent) error,
-) error {
+) (sawInterrupt bool, lastRunID string, err error) {
 	events := make(chan wire.RunEvent, 64)
 	errCh := make(chan error, 1)
 	go func() { errCh <- invoke(events); close(events) }()
 
 	for ev := range events {
+		if ev.Kind == wire.RunEventInterrupt {
+			sawInterrupt = true
+		}
+		if ev.Kind == wire.RunEventStarted && ev.Started != nil && ev.Started.RunID != "" {
+			lastRunID = ev.Started.RunID
+		}
 		name, payload := encodeEvent(ev)
 		emit(out, jsonlEvent{Kind: name, Step: stepIdx, Payload: payload})
 		if ev.Kind == wire.RunEventComplete || ev.Kind == wire.RunEventFailed {
@@ -226,16 +262,16 @@ func streamRun(
 		}
 	}()
 	select {
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
+	case invokeErr := <-errCh:
+		if invokeErr != nil && !errors.Is(invokeErr, context.Canceled) {
+			return sawInterrupt, lastRunID, invokeErr
 		}
 	case <-ctx.Done():
-		return ctx.Err()
+		return sawInterrupt, lastRunID, ctx.Err()
 	case <-time.After(1 * time.Second):
 		// Stream may still be draining; accept soft exit.
 	}
-	return nil
+	return sawInterrupt, lastRunID, nil
 }
 
 func encodeEvent(ev wire.RunEvent) (string, any) {
@@ -292,6 +328,7 @@ func emitTerminal(
 	out *json.Encoder,
 	stepIdx int,
 	threadID string,
+	lastRunID string,
 ) error {
 	values, next, err := cc.GetState(ctx, threadID)
 	if err != nil {
@@ -301,9 +338,12 @@ func emitTerminal(
 		emit(out, jsonlEvent{Kind: "interrupt", Step: stepIdx, Payload: map[string]any{
 			"tag":    next[0],
 			"values": values["__interrupt__"],
+			"run_id": lastRunID,
 		}})
 		return nil
 	}
-	emit(out, jsonlEvent{Kind: "run_complete", Step: stepIdx})
+	emit(out, jsonlEvent{Kind: "run_complete", Step: stepIdx, Payload: map[string]any{
+		"run_id": lastRunID,
+	}})
 	return nil
 }

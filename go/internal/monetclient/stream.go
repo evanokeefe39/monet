@@ -1,6 +1,7 @@
 package monetclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -65,10 +66,33 @@ func (c *Client) StreamRun(
 		_ = reader.Read(ctx, rawCh)
 	}()
 
+	// Stateful translation: Aegra emits one `metadata` event carrying the
+	// run_id, then every subsequent frame omits it. We remember the id so
+	// downstream consumers see it on every RunEvent. Also deduplicates
+	// consecutive identical __interrupt__ payloads — Aegra broadcasts the
+	// same interrupt on the subgraph channel and the top-level channel,
+	// and consumers (TUIs especially) shouldn't render the same form twice.
+	var (
+		lastRunID    string
+		lastInterrupt []byte
+	)
 	for ev := range rawCh {
 		runEv, ok := parseSSEEvent(ev)
 		if !ok {
 			continue
+		}
+		if runEv.Kind == wire.RunEventStarted && runEv.Started != nil && runEv.Started.RunID != "" {
+			lastRunID = runEv.Started.RunID
+		}
+		stampRunID(&runEv, lastRunID)
+		if runEv.Kind == wire.RunEventInterrupt && runEv.Interrupt != nil {
+			enc, _ := json.Marshal(runEv.Interrupt.Values)
+			if lastInterrupt != nil && bytes.Equal(enc, lastInterrupt) {
+				continue
+			}
+			lastInterrupt = enc
+		} else {
+			lastInterrupt = nil
 		}
 		select {
 		case events <- runEv:
@@ -79,6 +103,40 @@ func (c *Client) StreamRun(
 	return nil
 }
 
+// stampRunID fills in the RunID field on event variants that don't
+// carry it from Aegra. No-op when the nested pointer is nil or already set.
+func stampRunID(ev *wire.RunEvent, id string) {
+	if id == "" {
+		return
+	}
+	switch ev.Kind {
+	case wire.RunEventUpdate:
+		if ev.Update != nil && ev.Update.RunID == "" {
+			ev.Update.RunID = id
+		}
+	case wire.RunEventProgress:
+		if ev.Progress != nil && ev.Progress.RunID == "" {
+			ev.Progress.RunID = id
+		}
+	case wire.RunEventSignal:
+		if ev.Signal != nil && ev.Signal.RunID == "" {
+			ev.Signal.RunID = id
+		}
+	case wire.RunEventInterrupt:
+		if ev.Interrupt != nil && ev.Interrupt.RunID == "" {
+			ev.Interrupt.RunID = id
+		}
+	case wire.RunEventFailed:
+		if ev.Failed != nil && ev.Failed.RunID == "" {
+			ev.Failed.RunID = id
+		}
+	case wire.RunEventComplete:
+		if ev.Complete != nil && ev.Complete.RunID == "" {
+			ev.Complete.RunID = id
+		}
+	}
+}
+
 // parseSSEEvent converts a raw SSE event into a typed RunEvent.
 func parseSSEEvent(ev sseclient.Event) (wire.RunEvent, bool) {
 	var raw map[string]any
@@ -87,6 +145,16 @@ func parseSSEEvent(ev sseclient.Event) (wire.RunEvent, bool) {
 	}
 
 	eventType := ev.Type
+	if eventType == "metadata" {
+		runID, _ := raw["run_id"].(string)
+		if runID == "" {
+			return wire.RunEvent{}, false
+		}
+		return wire.RunEvent{
+			Kind:    wire.RunEventStarted,
+			Started: &wire.RunStarted{RunID: runID},
+		}, true
+	}
 	if strings.HasPrefix(eventType, "updates") {
 		return parseUpdateEvent(raw), true
 	}

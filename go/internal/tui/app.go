@@ -18,12 +18,13 @@ import (
 type Mode int
 
 const (
-	ModeChat     Mode = iota // normal chat input
-	ModeHITL                // waiting for HITL response
-	ModePicker              // inline picker active
-	ModeForm                // Huh form active
-	ModeThreads             // thread picker active
-	ModeQuit                // quit confirmation (two-press)
+	ModeWelcome  Mode = iota // startup splash, any key dismisses
+	ModeChat                 // normal chat input
+	ModeHITL                 // waiting for HITL response
+	ModePicker               // inline picker active
+	ModeForm                 // Huh form active
+	ModeThreads              // thread picker active
+	ModeQuit                 // quit confirmation (two-press)
 )
 
 // Model is the root Bubble Tea model.
@@ -38,14 +39,17 @@ type Model struct {
 	height int
 	mode   Mode
 
-	transcript Transcript
-	input      Input
-	inline     InlinePick
-	form       FormModel
-	threads    ThreadPicker
-	quit       QuitModel
-	log        Logger
-	clipboard  ClipboardWriter
+	transcript    Transcript
+	input         Input
+	inline        InlinePick
+	form          FormModel
+	threads       ThreadPicker
+	quit          QuitModel
+	log           Logger
+	clipboard     ClipboardWriter
+	welcome       Welcome
+	sidebar       Sidebar
+	sidebarActive bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -74,9 +78,11 @@ func New(
 		mclient:   mclient,
 		ctx:       childCtx,
 		cancel:    cancel,
-		mode:      ModeChat,
+		mode:      ModeWelcome,
 		log:       logger,
 		clipboard: NewClipboardWriter(clipboardMode),
+		welcome:   NewWelcome(),
+		sidebar:   NewSidebar("threads", nil),
 		transcript: NewTranscript(),
 		input:      NewInput(),
 		quit:       NewQuitModel(),
@@ -87,11 +93,10 @@ func New(
 // ─── Bubble Tea interface ─────────────────────────────────────────────────────
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{
-		m.input.Init(),
-		loadSlashCmds(m.client, m.ctx),
-	}
-	return tea.Batch(cmds...)
+	// Welcome is a static splash; no ticker needed. Slash-command load
+	// waits until the user dismisses welcome — avoids one round trip
+	// before the first frame paints.
+	return m.input.Init()
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -123,6 +128,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case threadListMsg:
+		// threadListMsg has two consumers now: /threads opens a picker,
+		// and Ctrl-B populates the sidebar. Pick by whether the sidebar
+		// just toggled on and we're still in ModeChat.
+		items := make([]SidebarItem, 0, len(msg.threads))
+		for _, t := range msg.threads {
+			label := ""
+			if name, _ := t.Metadata["monet_chat_name"].(string); name != "" {
+				label = name
+			} else {
+				label = t.ThreadID[:min(8, len(t.ThreadID))]
+			}
+			items = append(items, SidebarItem{ID: t.ThreadID, Label: label})
+		}
+		m.sidebar = NewSidebar("threads", items)
+		if m.sidebarActive && m.mode == ModeChat {
+			return m, nil
+		}
 		m.threads = NewThreadPicker(msg.threads)
 		m.mode = ModeThreads
 		return m, m.threads.Init()
@@ -138,6 +160,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() string {
 	switch m.mode {
+	case ModeWelcome:
+		return m.welcome.Render(m.width)
 	case ModeThreads:
 		return m.threads.View()
 	case ModeQuit:
@@ -150,12 +174,17 @@ func (m Model) View() string {
 	}
 
 	status := m.statusBar()
-	return lipgloss.JoinVertical(lipgloss.Left,
+	body := lipgloss.JoinVertical(lipgloss.Left,
 		m.transcript.View(),
 		m.renderHITL(),
 		m.input.View(),
 		status,
 	)
+	if m.sidebarActive && ShouldShow(m.width) {
+		sideView := m.sidebar.View(m.height - statusHeight)
+		return lipgloss.JoinHorizontal(lipgloss.Top, sideView, body)
+	}
+	return body
 }
 
 // ─── Key handling ─────────────────────────────────────────────────────────────
@@ -166,6 +195,20 @@ const (
 )
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Welcome splash: any key dismisses into chat mode + kicks off the
+	// slash-command load. Before this, Ctrl-C still works as quit.
+	if m.mode == ModeWelcome {
+		if msg.Type == tea.KeyCtrlC {
+			m.cancel()
+			return m, tea.Quit
+		}
+		m.welcome, _ = m.welcome.Update(msg)
+		if m.welcome.Done() {
+			m.mode = ModeChat
+			return m, loadSlashCmds(m.client, m.ctx)
+		}
+		return m, nil
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.mode == ModeQuit {
@@ -178,6 +221,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlX:
 		if m.runID != "" {
 			return m, cancelRun(m.client, m.ctx, m.threadID, m.runID)
+		}
+		return m, nil
+
+	case tea.KeyCtrlB:
+		// Toggle sidebar. Silently no-op when the terminal is too narrow
+		// — View() already hides it, and the state flip would surprise
+		// the user the next time they widen the window.
+		if ShouldShow(m.width) {
+			m.sidebarActive = !m.sidebarActive
+			if m.sidebarActive {
+				return m, loadThreads(m.client, m.ctx, 50)
+			}
 		}
 		return m, nil
 

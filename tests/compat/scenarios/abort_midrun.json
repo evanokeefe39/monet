@@ -1,0 +1,12 @@
+{
+  "name": "abort_midrun",
+  "graph": "chat",
+  "steps": [
+    {"op": "create_thread", "name": "t1"},
+    {"op": "send", "thread": "t1", "message": "/plan produce three short bullet points"},
+    {"op": "abort", "thread": "t1"}
+  ],
+  "assert": {
+    "events_contain": ["run_started", "interrupt", "aborted"]
+  }
+}
