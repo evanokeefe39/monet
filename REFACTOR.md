@@ -153,11 +153,27 @@ Compatibility test script runs Python client and Go client against the same dev 
 
 Deliberate upgrade cycle every three to six months: bump Aegra and SDK together, run compatibility tests, fix what breaks. If upgrades start breaking things more than once per cycle, that's the signal to accelerate option three.
 
-## Server-side work required
+## Pre-existing issues to fix regardless of migration
 
-Minimum changes the Go client depends on. Each is a small, contained fix.
+These bugs and design gaps exist in the current Python code. They are worth fixing whether or not the Go migration happens — the migration work should not be the excuse to defer them. Fixing them before the Go client lands also means the Go client inherits correct behavior rather than porting bugs into a second language.
 
-Attach `run_id` to progress events on the wire. Currently `_build_agent_progress` in Python hardcodes empty string because the payload doesn't carry it. The server-side re-injection code in `orchestration/_invoke.py` has `run_id` in scope and should include it. Without this fix the Go client has the same bug.
+**Progress events drop `run_id` on the wire.** `_build_agent_progress` in `src/monet/client/chat.py` hardcodes the run_id parameter to an empty string because the server-side payload does not include it. The server has `run_id` available at every emission site — orchestration code at `execution_graph.py:246` calls `emit_progress` with full context, and the worker knows it from the TaskRecord. The fix is on the server re-injection path: include `run_id` in the payload when re-emitting queue-delivered progress events into the LangGraph stream writer. Low risk, high value — without this, progress lines cannot be correctly attributed when multiple turns are in flight.
+
+**Silent task drop on restart when `MONET_API_KEY` is unset.** `src/monet/server/_aegra_routes.py:64-67` skips recovery of in-flight push dispatches with a log line rather than failing loudly. If `MONET_API_KEY` is unset at restart for any reason (config typo, deployment miss), every recovering task silently disappears. The fix: hard-fail at lifespan startup rather than log-and-skip, consistent with how `_auth.py:65` handles the runtime case.
+
+**`_await_completion` race on repeated awaits.** `src/monet/queue/backends/memory.py` pops the task and completion event from its stores when `_await_completion` returns. If two code paths both await the same `task_id` (possible under retry or bug), the second gets `KeyError`. Not currently triggered in production but a latent issue — the method should be idempotent or the protocol should forbid repeated awaits explicitly.
+
+**Textual TUI fragility touching framework internals.** `ChatApp._handle_exception` reaches into `self._exception` and `self._exception_event` directly. These are Textual internals and have moved between versions. Replace with the public `self.exit(return_code=1)` API plus the existing `_crash_error` stash. Relevant only while the Python TUI remains in use; not a concern post-migration.
+
+**Pulse toggle in options screen is not wired.** `_themes.py` / `_menu.py` / `_app.py` expose a pulse on/off toggle in the options modal, but the actual `PULSE_ENABLED` constant is read once at module import from the env var. Either wire the runtime toggle through to `_set_busy` / the `BorderPulseController`, or remove the toggle option from the menu. The current state is visible UX debt.
+
+**Five-second indicator poller runs unconditionally.** `_refresh_indicator_async` in `_app.py` polls `list_capabilities` and `artifacts.query_recent` every five seconds regardless of window focus or activity. At 24 tmux panes this is 24 simultaneous pollers hitting the same server. Mitigation: back off to 30s when idle, or make it event-driven on turn completion and capability-heartbeat signals. Relevant for the Python TUI while it remains; the Go TUI should be designed with this already in mind.
+
+**OSC 52 clipboard silently fails in tmux.** `copy_to_clipboard` in the Python TUI uses OSC 52, which tmux blocks by default unless `set -g set-clipboard on`. Users get no feedback when it fails. Fix: detect tmux and fall back to writing the transcript to `/tmp/monet-transcript-<pid>.txt` with a notify showing the path. Same fallback should be used in the Go TUI from day one.
+
+## Server-side work required for the Go client
+
+Minimum changes the Go client depends on — in addition to the pre-existing issues above. Each is a small, contained fix.
 
 Expose `/api/v1/health` returning `{version: str, queue_backend: str, uptime_seconds: float}`. Used by the Go client for version compatibility check and startup smoke test.
 
@@ -166,8 +182,6 @@ Expose `/api/v1/capabilities` if not already present. Python client uses `client
 Expose `/api/v1/slash_commands` returning the ordered slash list. Same as above — confirm the endpoint.
 
 Expose `/api/v1/chats/{thread_id}/message_count` so the Go client can populate the thread list without fetching full history per thread. Current Python client reads state values and counts messages, which is expensive across many threads.
-
-Fix `_aegra_routes.py:64-67` where `MONET_API_KEY` unset during restart recovery silently drops tasks. Hard-fail at lifespan startup instead.
 
 ## Testing strategy
 
