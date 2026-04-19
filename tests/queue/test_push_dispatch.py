@@ -130,9 +130,73 @@ async def test_push_dispatch_sends_dispatch_secret(
 
 
 @pytest.mark.respx
-async def test_push_dispatch_raises_on_5xx(
-    _env: Any, respx_mock: respx.MockRouter
+async def test_push_dispatch_fails_gracefully_on_5xx(
+    _env: Any,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """After exhausting retries, invoke_agent returns a DISPATCH_FAILED result."""
+    import monet.orchestration._invoke as _invoke_mod
+
+    monkeypatch.setattr(_invoke_mod, "_PUSH_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
     respx_mock.post(WEBHOOK_URL).mock(return_value=Response(503, text="gateway down"))
-    with pytest.raises(RuntimeError, match="HTTP 503"):
-        await invoke_agent("cloud-agent", "fast", task="hello")
+    result = await invoke_agent("cloud-agent", "fast", task="hello")
+    assert result.success is False
+    assert any(s["type"] == "dispatch_failed" for s in result.signals)
+
+
+@pytest.mark.respx
+async def test_push_dispatch_retries_then_succeeds(
+    _env: Any,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two 503s followed by a 202 should succeed after retries."""
+    import monet.orchestration._invoke as _invoke_mod
+
+    monkeypatch.setattr(_invoke_mod, "_PUSH_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
+    queue, _ = _env
+    call_count = 0
+
+    async def _on_dispatch(request: Any) -> Response:
+        nonlocal call_count
+        import json
+
+        call_count += 1
+        if call_count < 3:
+            return Response(503, text="transient")
+        task_id = json.loads(request.content.decode())["task_id"]
+        await queue.complete(
+            task_id,
+            AgentResult(success=True, output="cloud-run", trace_id="t", run_id="r"),
+        )
+        return Response(202, json={"status": "accepted"})
+
+    respx_mock.post(WEBHOOK_URL).mock(side_effect=_on_dispatch)
+    result = await invoke_agent("cloud-agent", "fast", task="hello")
+    assert result.success is True
+    assert call_count == 3
+
+
+@pytest.mark.respx
+async def test_push_dispatch_terminal_on_400(
+    _env: Any,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Terminal 4xx (not 429) fails immediately without retrying."""
+    import monet.orchestration._invoke as _invoke_mod
+
+    monkeypatch.setattr(_invoke_mod, "_PUSH_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
+    call_count = 0
+
+    async def _on_dispatch(request: Any) -> Response:
+        nonlocal call_count
+        call_count += 1
+        return Response(400, text="bad request")
+
+    respx_mock.post(WEBHOOK_URL).mock(side_effect=_on_dispatch)
+    result = await invoke_agent("cloud-agent", "fast", task="hello")
+    assert result.success is False
+    assert any(s["type"] == "dispatch_failed" for s in result.signals)
+    assert call_count == 1  # no retries for 400
