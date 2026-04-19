@@ -59,3 +59,11 @@ site/
 !.node-version
 !.python-version
 !.tool-versions
+# Go build artifacts
+go/monet-cli
+go/monet-cli.exe
+go/monet-tui
+go/monet-tui.exe
+
+# Compat harness output
+tests/compat/_out/

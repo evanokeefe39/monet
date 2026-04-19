@@ -78,7 +78,7 @@ type AgentProgress struct {
 // SignalEmitted indicates a monet agent emitted a signal.
 type SignalEmitted struct {
 	RunID      string         `json:"run_id"`
-	AgentID    string         `json:"agent_id"`
+	AgentID    string         `json:"agent"`
 	SignalType string         `json:"signal_type"`
 	Payload    map[string]any `json:"payload,omitempty"`
 }

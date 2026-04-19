@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/evanokeefe39/monet-cli/internal/sseclient"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/sseclient"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // postSSEReader wraps an HTTP POST response as an SSE stream source.

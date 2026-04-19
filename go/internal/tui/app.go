@@ -1,4 +1,4 @@
-// Package tui is the Bubble Tea chat TUI for monet-cli.
+// Package tui is the Bubble Tea chat TUI for monet-tui.
 package tui
 
 import (
@@ -9,9 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/evanokeefe39/monet-cli/internal/chatclient"
-	"github.com/evanokeefe39/monet-cli/internal/monetclient"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/chatclient"
+	"github.com/evanokeefe39/monet-tui/internal/monetclient"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // Mode tracks the current input mode.
@@ -349,10 +349,30 @@ func (m Model) handleSlash(cmd string) (tea.Model, tea.Cmd) {
 	case "/help":
 		m.transcript.AddHelp(m.slashCmds)
 		return m, nil
+	case "/about":
+		m.transcript.AddInfo(aboutText())
+		return m, nil
+	case "/runs":
+		return m, loadRuns(m.mclient, m.ctx, 20)
+	case "/themes":
+		m.transcript.AddInfo(FormatThemesHelp())
+		return m, nil
+	case "/colors":
+		path, err := WriteDefaultColors()
+		if err != nil {
+			m.transcript.AddError("write colors: " + err.Error())
+			return m, nil
+		}
+		m.transcript.AddInfo("colors config: " + path)
+		return m, nil
 	default:
 		m.transcript.AddError("unknown command: " + cmd)
 		return m, nil
 	}
+}
+
+func aboutText() string {
+	return "monet-tui — Bubble Tea chat TUI for monet. Keys: Enter send · ^C quit · ^X cancel · /help commands · /threads switch · /runs history · /artifacts list · /cancel abort"
 }
 
 // ─── Status bar ───────────────────────────────────────────────────────────────

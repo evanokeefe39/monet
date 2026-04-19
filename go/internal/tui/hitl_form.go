@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/huh"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // FormModel wraps a Huh form for generic interrupt forms.
@@ -146,6 +146,17 @@ func NewFormModel(f wire.Form) FormModel {
 		}
 	}
 
+	// All-hidden form: no interactive fields. Construct a FormModel that
+	// is immediately Done so the caller can synthesize the resume payload
+	// without pushing a blank widget onto the screen.
+	if len(huhFields) == 0 {
+		return FormModel{
+			form:   nil,
+			values: values,
+			fields: f.Fields,
+			done:   true,
+		}
+	}
 	group := huh.NewGroup(huhFields...)
 	form := huh.NewForm(group)
 	return FormModel{
@@ -156,10 +167,16 @@ func NewFormModel(f wire.Form) FormModel {
 }
 
 func (m FormModel) Init() tea.Cmd {
+	if m.form == nil {
+		return nil
+	}
 	return m.form.Init()
 }
 
 func (m FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
+	if m.form == nil {
+		return m, nil
+	}
 	form, cmd := m.form.Update(msg)
 	if f, ok := form.(*huh.Form); ok {
 		m.form = f
@@ -171,6 +188,9 @@ func (m FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
 }
 
 func (m FormModel) View() string {
+	if m.form == nil {
+		return ""
+	}
 	return m.form.View()
 }
 

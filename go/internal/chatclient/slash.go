@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // ReservedSlash are built-in slash commands synthesized client-side.

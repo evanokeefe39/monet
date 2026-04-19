@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evanokeefe39/monet-cli/internal/config"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/config"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // Client is the graph-agnostic monet HTTP client.
@@ -59,6 +59,16 @@ func (c *Client) CreateThread(ctx context.Context, metadata map[string]any) (str
 		return "", err
 	}
 	return resp.ThreadID, nil
+}
+
+// GetThread fetches the raw thread record (metadata + status).
+func (c *Client) GetThread(ctx context.Context, threadID string) (map[string]any, error) {
+	var out map[string]any
+	path := fmt.Sprintf("/threads/%s", threadID)
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GetState returns (values, nextNodes) for a thread's current state.

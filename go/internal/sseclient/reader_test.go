@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evanokeefe39/monet-cli/internal/sseclient"
+	"github.com/evanokeefe39/monet-tui/internal/sseclient"
 )
 
 func sseServer(events []string, statusCode int) *httptest.Server {

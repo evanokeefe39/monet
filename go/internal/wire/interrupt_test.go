@@ -3,7 +3,7 @@ package wire_test
 import (
 	"testing"
 
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 func TestExtractInterruptPayloadValue(t *testing.T) {

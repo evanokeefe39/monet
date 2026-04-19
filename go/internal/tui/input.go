@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/evanokeefe39/monet-cli/internal/chatclient"
+	"github.com/evanokeefe39/monet-tui/internal/chatclient"
 )
 
 var inputStyle = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).Padding(0, 1)

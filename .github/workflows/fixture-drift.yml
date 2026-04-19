@@ -1,0 +1,49 @@
+name: Fixture Drift Check
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"  # every Monday 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  drift-check:
+    name: check SSE fixture freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check freshness
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          from datetime import datetime, timezone, timedelta
+
+          MAX_AGE = timedelta(days=90)
+          fixture_dir = "go/tests/fixtures/sse"
+          now = datetime.now(timezone.utc)
+          stale = []
+
+          for fname in os.listdir(fixture_dir):
+              if not fname.endswith(".jsonl"):
+                  continue
+              path = os.path.join(fixture_dir, fname)
+              with open(path) as f:
+                  header = json.loads(f.readline())
+              captured = datetime.fromisoformat(header.get("captured_at", "1970-01-01T00:00:00+00:00"))
+              if captured.tzinfo is None:
+                  captured = captured.replace(tzinfo=timezone.utc)
+              age = now - captured
+              if age > MAX_AGE:
+                  stale.append((fname, age.days))
+
+          if stale:
+              for fname, days in stale:
+                  print(f"STALE ({days}d): {fname}", file=sys.stderr)
+              print(
+                  "\nRe-record with: go run ./go/cmd/record-sse --url <SSE_URL> --out go/tests/fixtures/sse/<scenario>.jsonl",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"All fixtures fresh (checked {fixture_dir})")
+          EOF

@@ -1,0 +1,12 @@
+{
+  "name": "approval_interrupt",
+  "graph": "chat",
+  "steps": [
+    {"op": "create_thread", "name": "t1"},
+    {"op": "send", "thread": "t1", "message": "/plan write a tiny haiku about latency"},
+    {"op": "resume", "thread": "t1", "tag": "planning", "payload": {"action": "approve"}}
+  ],
+  "assert": {
+    "events_contain": ["run_started", "interrupt", "run_complete"]
+  }
+}

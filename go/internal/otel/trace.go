@@ -1,4 +1,4 @@
-// Package otel wraps OTel trace carrier injection/extraction for monet-cli.
+// Package otel wraps OTel trace carrier injection/extraction for monet-tui.
 // Matches MONET_TRACE_CARRIER_METADATA_KEY = "monet_trace_carrier" in Python.
 package otel
 

@@ -1,0 +1,121 @@
+name: Wire Compat
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/monet/**"
+      - "go/**"
+      - "tests/compat/**"
+      - ".github/workflows/compat.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/monet/**"
+      - "go/**"
+      - "tests/compat/**"
+      - ".github/workflows/compat.yml"
+
+jobs:
+  wire-compat:
+    name: wire type compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Python wire compat
+        run: |
+          uv sync --group dev
+          uv run pytest tests/compat/test_wire_compat.py -v
+
+      - name: Go wire compat
+        working-directory: go
+        run: go test ./tests/contract/... -v -run TestWireKeysCoverSchema
+
+  openapi-conformance:
+    name: OpenAPI conformance (Go client ↔ FastAPI spec)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aegra
+          POSTGRES_PASSWORD: aegra
+          POSTGRES_DB: aegra
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Install Python deps
+        run: uv sync --group dev
+
+      - name: Re-capture OpenAPI snapshot
+        run: uv run python -m tests.compat.capture_openapi
+
+      - name: Assert snapshot is up to date
+        run: git diff --exit-code tests/compat/openapi.json
+
+      - name: Go OpenAPI conformance
+        working-directory: go
+        run: go test ./tests/contract/... -v -run TestOpenAPIConformance
+
+  live-compat:
+    name: live compat (Python ↔ Go scenario diff)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aegra
+          POSTGRES_PASSWORD: aegra
+          POSTGRES_DB: aegra
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Install Python deps
+        run: uv sync --group dev
+
+      - name: Build monet-tui
+        working-directory: go
+        run: go build -o monet-tui ./cmd/monet-tui
+
+      - name: Run compat harness
+        run: uv run python -m tests.compat.run --binary go/monet-tui

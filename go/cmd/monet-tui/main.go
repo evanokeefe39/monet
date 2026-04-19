@@ -1,6 +1,5 @@
-// Command monet-cli is the Go Bubble Tea replacement for `monet chat`.
-// It is opt-in in phase one (MONET_CHAT_FRONTEND=go) and becomes the
-// default after a 4-week green CI window.
+// Command monet-tui is the Go Bubble Tea chat TUI for monet.
+// Standalone binary — invoke directly, no dispatch from monet CLI.
 package main
 
 import (
@@ -10,15 +9,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/evanokeefe39/monet-cli/internal/chatclient"
-	"github.com/evanokeefe39/monet-cli/internal/config"
-	"github.com/evanokeefe39/monet-cli/internal/monetclient"
-	"github.com/evanokeefe39/monet-cli/internal/tui"
+	"github.com/evanokeefe39/monet-tui/internal/chatclient"
+	"github.com/evanokeefe39/monet-tui/internal/config"
+	"github.com/evanokeefe39/monet-tui/internal/monetclient"
+	"github.com/evanokeefe39/monet-tui/internal/tui"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "monet-cli: %v\n", err)
+		fmt.Fprintf(os.Stderr, "monet-tui: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -29,12 +28,17 @@ func run() error {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version", "-v", "version":
-			fmt.Printf("monet-cli %s (commit %s, built %s)\n",
+			fmt.Printf("monet-tui %s (commit %s, built %s)\n",
 				config.Version, config.CommitSHA, config.BuildDate)
 			return nil
 		case "--help", "-h", "help":
 			printHelp()
 			return nil
+		}
+		for _, a := range os.Args[1:] {
+			if a == "--headless" {
+				return runHeadless(os.Args[1:])
+			}
 		}
 	}
 
@@ -47,7 +51,7 @@ func run() error {
 		return fmt.Errorf("cannot reach server at %s: %w", cfg.ServerURL, err)
 	}
 	if health.Version != "" && !versionCompatible(health.Version) {
-		return fmt.Errorf("server version %s is outside supported range [%s, %s] — update monet-cli or the server",
+		return fmt.Errorf("server version %s is outside supported range [%s, %s] — update monet-tui or the server",
 			health.Version, config.ServerVersionMin, config.ServerVersionMax)
 	}
 
@@ -78,12 +82,13 @@ func versionCompatible(serverVersion string) bool {
 }
 
 func printHelp() {
-	fmt.Print(`monet-cli — monet chat TUI
+	fmt.Print(`monet-tui — monet chat TUI
 
 Usage:
-  monet-cli            start the chat TUI
-  monet-cli --version  print version
-  monet-cli --help     show this help
+  monet-tui                          start the chat TUI
+  monet-tui --headless --scenario F  drive chatclient from scenario JSON (events→JSONL on stdout)
+  monet-tui --version                print version
+  monet-tui --help                   show this help
 
 Key bindings:
   Enter    send message / submit HITL
@@ -97,6 +102,6 @@ Environment:
   MONET_SERVER_URL   server base URL (default: http://localhost:2026)
   MONET_API_KEY      API key for authenticated servers
   MONET_CHAT_GRAPH   graph ID for chat (default: chat)
-  MONET_CLI_LOG_DIR  log directory (default: $XDG_CACHE_HOME/monet-cli)
+  MONET_TUI_LOG_DIR  log directory (default: $XDG_CACHE_HOME/monet-tui)
 `)
 }

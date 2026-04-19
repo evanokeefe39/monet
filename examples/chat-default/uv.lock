@@ -1414,6 +1414,7 @@ provides-extras = ["agents", "examples"]
 dev = [
     { name = "aegra-cli", specifier = ">=0.9" },
     { name = "fakeredis", extras = ["lua"], specifier = ">=2.26" },
+    { name = "graphifyy", specifier = ">=0.1" },
     { name = "hypothesis", specifier = ">=6.0" },
     { name = "mkdocs-material", specifier = ">=9.7.6" },
     { name = "mypy", specifier = ">=1.14" },

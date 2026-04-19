@@ -2,13 +2,14 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/evanokeefe39/monet-cli/internal/chatclient"
-	"github.com/evanokeefe39/monet-cli/internal/monetclient"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/chatclient"
+	"github.com/evanokeefe39/monet-tui/internal/monetclient"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // ─── Tea messages ─────────────────────────────────────────────────────────────
@@ -109,6 +110,28 @@ func loadThreads(client *chatclient.Client, ctx context.Context, limit int) tea.
 			return errorMsg{err: err}
 		}
 		return threadListMsg{threads: threads}
+	}
+}
+
+func loadRuns(mc *monetclient.Client, ctx context.Context, limit int) tea.Cmd {
+	return func() tea.Msg {
+		runs, err := mc.ListRuns(ctx, limit)
+		if err != nil {
+			return errorMsg{err: err}
+		}
+		lines := make([]string, 0, len(runs)+1)
+		lines = append(lines, fmt.Sprintf("last %d runs:", len(runs)))
+		for _, r := range runs {
+			status := r.Status
+			if status == "" {
+				status = "?"
+			}
+			lines = append(lines, "  "+r.RunID+"  "+status+"  "+r.CreatedAt)
+		}
+		return runEventMsg{ev: wire.RunEvent{
+			Kind:  wire.RunEventUpdate,
+			Update: &wire.NodeUpdate{Update: map[string]any{"_runs_display": lines}},
+		}}
 	}
 }
 
