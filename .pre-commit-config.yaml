@@ -9,7 +9,7 @@ repos:
     rev: v1.14.1
     hooks:
       - id: mypy
-        exclude: ^(examples/|tests/e2e/|tests/test_subgraph_composition_spike\.py$)
+        exclude: ^(examples/|tests/)
         additional_dependencies:
           - pydantic>=2.0
           - fastapi>=0.115
