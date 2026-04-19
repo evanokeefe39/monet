@@ -1,0 +1,12 @@
+{
+  "name": "approval_reject",
+  "graph": "chat",
+  "steps": [
+    {"op": "create_thread", "name": "t1"},
+    {"op": "send", "thread": "t1", "message": "/plan do something risky"},
+    {"op": "resume", "thread": "t1", "tag": "planning", "payload": {"action": "reject"}}
+  ],
+  "assert": {
+    "events_contain": ["run_started", "interrupt", "run_complete"]
+  }
+}

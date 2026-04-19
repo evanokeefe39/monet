@@ -1,0 +1,13 @@
+{
+  "name": "approval_revise",
+  "graph": "chat",
+  "steps": [
+    {"op": "create_thread", "name": "t1"},
+    {"op": "send", "thread": "t1", "message": "/plan write a one-line joke about debuggers"},
+    {"op": "resume", "thread": "t1", "tag": "planning", "payload": {"action": "revise", "feedback": "make it shorter"}}
+  ],
+  "assert": {
+    "events_contain": ["run_started", "interrupt", "run_complete"],
+    "note": "Planning subgraph terminates revise branch without a second approval gate. Whether revise should re-interrupt is a graph-design question, tracked for ADR-006."
+  }
+}
