@@ -148,7 +148,10 @@ class ChatClient:
             if mode == "error":
                 raise ServerError(None, str(data))
             if mode == "custom" and isinstance(data, dict):
-                progress = _build_agent_progress("", data)
+                rid = data.get("run_id", "")
+                if not rid:
+                    _log.debug("progress event missing run_id: %s", data)
+                progress = _build_agent_progress(rid, data)
                 if progress is not None:
                     yield progress
                 continue

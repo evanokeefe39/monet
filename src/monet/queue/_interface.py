@@ -23,10 +23,22 @@ if TYPE_CHECKING:
     from monet.types import AgentResult, AgentRunContext
 
 __all__ = [
+    "AwaitAlreadyConsumedError",
     "TaskQueue",
     "TaskRecord",
     "TaskStatus",
 ]
+
+
+class AwaitAlreadyConsumedError(Exception):
+    """Raised when a completed task result is accessed after TTL expiry.
+
+    The in-memory backend retains completed-task results for a configurable
+    TTL (``MONET_QUEUE_COMPLETION_TTL``, default 600 s). A second
+    ``_await_completion`` call within that window returns the cached result.
+    After the TTL, the record is pruned and this exception is raised to
+    distinguish "expired" from "never existed" (``KeyError``).
+    """
 
 
 class TaskStatus(StrEnum):

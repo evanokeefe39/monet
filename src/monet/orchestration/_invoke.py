@@ -237,7 +237,9 @@ async def invoke_agent(
                 span.set_attribute("agent.dispatch_failed", True)
         # Forward worker-side progress into the current LangGraph stream
         # via emit_progress. Runs concurrently with wait_completion.
-        progress_task = asyncio.create_task(_forward_progress(_task_queue, task_id))
+        progress_task = asyncio.create_task(
+            _forward_progress(_task_queue, task_id, resolved_run_id)
+        )
         try:
             timeout = OrchestrationConfig.load().agent_timeout
             result = await wait_completion(_task_queue, task_id, timeout=timeout)
@@ -439,13 +441,17 @@ async def _write_dispatch_failed(task_id: str, queue: TaskQueue, detail: str) ->
         await queue.pop_push_dispatch(task_id)
 
 
-async def _forward_progress(queue: TaskQueue, task_id: str) -> None:
-    """Forward queue progress events to the current LangGraph stream."""
+async def _forward_progress(queue: TaskQueue, task_id: str, run_id: str) -> None:
+    """Forward queue progress events to the current LangGraph stream.
+
+    Injects ``run_id`` so clients can attribute progress lines to the
+    correct run even when multiple turns are in-flight on the same thread.
+    """
     from monet.core.stubs import emit_progress
 
     try:
         async for event in queue.subscribe_progress(task_id):
-            emit_progress(event)
+            emit_progress({**event, "run_id": run_id})
     except NotImplementedError:
         pass
     except asyncio.CancelledError:

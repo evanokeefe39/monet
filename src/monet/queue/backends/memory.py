@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from monet.queue import TaskRecord, TaskStatus
+from monet.queue._interface import AwaitAlreadyConsumedError
 from monet.signals import SignalType
 from monet.types import AgentResult, Signal
 
@@ -30,6 +32,8 @@ _TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
 # Subscriber queue size. Drops on full — progress is best-effort.
 _SUBSCRIBER_QUEUE_MAX = 64
 
+_DEFAULT_COMPLETION_TTL = 600.0
+
 
 class InMemoryTaskQueue:
     """In-memory task queue backed by asyncio primitives.
@@ -38,11 +42,21 @@ class InMemoryTaskQueue:
     Implements the six-method ``TaskQueue`` protocol plus a private
     ``_await_completion`` used by ``wait_completion`` in orchestration
     (isinstance-dispatched; not part of the protocol).
+
+    Completed-task results are retained for ``completion_ttl_seconds``
+    (default 600 s) so a second ``_await_completion`` call within that
+    window returns the cached result. After the TTL, the record is pruned
+    and ``AwaitAlreadyConsumedError`` is raised to distinguish "expired" from
+    "never existed" (``KeyError``).
     """
 
     DEFAULT_MAX_PENDING = 0
 
-    def __init__(self, max_pending: int = 0) -> None:
+    def __init__(
+        self,
+        max_pending: int = 0,
+        completion_ttl_seconds: float = _DEFAULT_COMPLETION_TTL,
+    ) -> None:
         self._tasks: dict[str, TaskRecord] = {}
         self._pool_queues: dict[str, asyncio.Queue[str]] = defaultdict(asyncio.Queue)
         self._completions: dict[str, asyncio.Event] = {}
@@ -50,6 +64,11 @@ class InMemoryTaskQueue:
         self._progress_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = (
             defaultdict(set)
         )
+        self._completion_ttl_seconds = completion_ttl_seconds
+        # Maps task_id → monotonic timestamp when the task reached a terminal state.
+        self._completion_times: dict[str, float] = {}
+        # Task IDs pruned after TTL expiry — distinguishes "expired" from "unknown".
+        self._pruned_ids: set[str] = set()
 
     @property
     def pending_count(self) -> int:
@@ -131,6 +150,7 @@ class InMemoryTaskQueue:
         record["status"] = TaskStatus.COMPLETED
         record["result"] = result
         record["completed_at"] = datetime.now(UTC).isoformat()
+        self._completion_times[task_id] = time.monotonic()
         self._completions[task_id].set()
         _log.info(
             "queue.complete task=%s agent=%s command=%s success=%s",
@@ -161,6 +181,7 @@ class InMemoryTaskQueue:
             run_id=record["context"]["run_id"],
         )
         record["completed_at"] = datetime.now(UTC).isoformat()
+        self._completion_times[task_id] = time.monotonic()
         self._completions[task_id].set()
         _log.warning(
             "queue.fail task=%s agent=%s command=%s error=%s",
@@ -169,6 +190,25 @@ class InMemoryTaskQueue:
             record["command"],
             error,
         )
+
+    def _prune_expired_completions(self) -> None:
+        """Remove completed-task records that have exceeded the TTL.
+
+        Adds pruned IDs to ``_pruned_ids`` so ``_await_completion`` can
+        raise ``AwaitAlreadyConsumedError`` instead of ``KeyError`` for callers
+        that arrive after expiry.
+        """
+        now = time.monotonic()
+        expired = [
+            tid
+            for tid, t in self._completion_times.items()
+            if now - t > self._completion_ttl_seconds
+        ]
+        for tid in expired:
+            self._tasks.pop(tid, None)
+            self._completions.pop(tid, None)
+            del self._completion_times[tid]
+            self._pruned_ids.add(tid)
 
     # --- Progress streaming ---
 
@@ -212,13 +252,24 @@ class InMemoryTaskQueue:
         Not part of the public protocol — backends implement completion
         notification however suits their transport.
 
+        Results are cached for ``completion_ttl_seconds`` so a second call
+        within that window returns the same result. After the TTL, the
+        record is pruned and ``AwaitAlreadyConsumedError`` is raised.
+
         Raises:
             TimeoutError: if ``timeout`` seconds elapse without a result.
-            KeyError: if ``task_id`` is unknown.
+            KeyError: if ``task_id`` was never enqueued.
+            AwaitAlreadyConsumedError: if ``task_id`` result TTL has expired.
         """
+        self._prune_expired_completions()
+
         if task_id not in self._tasks:
+            if task_id in self._pruned_ids:
+                msg = f"Task {task_id!r} expired (TTL={self._completion_ttl_seconds}s)"
+                raise AwaitAlreadyConsumedError(msg)
             msg = f"Unknown task_id: {task_id}"
             raise KeyError(msg)
+
         event = self._completions[task_id]
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -229,9 +280,8 @@ class InMemoryTaskQueue:
         record = self._tasks[task_id]
         result = record["result"]
 
-        self._tasks.pop(task_id, None)
-        self._completions.pop(task_id, None)
-
+        # Do NOT pop — result stays cached until TTL prune so a second
+        # awaiter within the window reads the same result without error.
         if result is not None:
             return result
         return AgentResult(

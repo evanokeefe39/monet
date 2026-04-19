@@ -57,8 +57,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: _FastAPI) -> AsyncIterator[None]:
+        import time as _time
+
         from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 
+        app.state.start_time = _time.monotonic()
         await deployments.initialize()
 
         # Periodic stale-deployment sweeper

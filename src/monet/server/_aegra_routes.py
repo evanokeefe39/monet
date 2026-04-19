@@ -45,6 +45,10 @@ async def _reissue_in_flight_push(queue: object) -> None:
     Tasks that already exhausted all retries are failed immediately; others
     are re-dispatched via a fresh HTTP POST so Cloud Run / Lambda receives
     the dispatch envelope again.
+
+    Hard-fails at boot when in-flight push records exist but MONET_API_KEY
+    or MONET_SERVER_URL is unset — silent continuation would drop every
+    recovering task with no indication of the root cause.
     """
     if not isinstance(queue, RedisStreamsTaskQueue):
         return
@@ -56,11 +60,29 @@ async def _reissue_in_flight_push(queue: object) -> None:
         len(records),
     )
 
+    from monet.config import MONET_SERVER_URL, AuthConfig
+    from monet.config._env import read_str
+
+    api_key = AuthConfig.load().api_key
+    if not api_key:
+        raise RuntimeError(
+            f"Server has {len(records)} in-flight push-dispatch record(s) requiring "
+            "re-dispatch but MONET_API_KEY is unset. "
+            "Set MONET_API_KEY before restarting, or clear push-dispatch records."
+        )
+    api_url = read_str(MONET_SERVER_URL)
+    if not api_url:
+        raise RuntimeError(
+            f"Server has {len(records)} in-flight push-dispatch record(s) requiring "
+            "re-dispatch but MONET_SERVER_URL is unset."
+        )
+
     from monet.orchestration._invoke import (
         _PUSH_MAX_ATTEMPTS,
         _push_with_retry,
         _write_dispatch_failed,
     )
+    from monet.server._auth import task_hmac
 
     for rec in records:
         task_id = rec["task_id"]
@@ -84,28 +106,6 @@ async def _reissue_in_flight_push(queue: object) -> None:
             )
             await _write_dispatch_failed(
                 task_id, queue, f"exhausted {attempt} attempts before server restart"
-            )
-            continue
-
-        from monet.config import AuthConfig
-        from monet.server._auth import task_hmac
-
-        api_key = AuthConfig.load().api_key
-        if not api_key:
-            logger.warning(
-                "push_dispatch restart_recovery: MONET_API_KEY unset, skipping task %s",
-                task_id,
-            )
-            continue
-
-        from monet.config import MONET_SERVER_URL
-        from monet.config._env import read_str
-
-        api_url = read_str(MONET_SERVER_URL)
-        if not api_url:
-            logger.warning(
-                "push_dispatch restart_recovery: MONET_SERVER_URL unset, skip %s",
-                task_id,
             )
             continue
 
@@ -157,9 +157,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``bootstrap_server()`` is idempotent and is never called from the
     file-path path.
     """
+    import time as _time
+
     from monet.config import QueueConfig
     from monet.server.server_bootstrap import bootstrap_server
 
+    _app.state.start_time = _time.monotonic()
     queue = bootstrap_server()
     _app.state.queue = queue
 

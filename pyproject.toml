@@ -86,6 +86,7 @@ dev = [
     "pre-commit>=4.5.1",
     "aegra-cli>=0.9",
     "symdex>=0.1",
+    "graphifyy>=0.1",
     "fakeredis[lua]>=2.26",
     "respx>=0.22",
     "testcontainers>=4.0",

@@ -247,6 +247,7 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
                 "command": item["command"],
                 "reasons": failure_reasons,
                 "signal_types": [s.get("type") for s in signals_data],
+                "run_id": item.get("run_id", ""),
             }
         )
 

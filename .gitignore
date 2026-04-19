@@ -1,3 +1,7 @@
+# graphify knowledge graph (transient, regenerable)
+.graphify/
+graphify-out/
+
 # Python
 __pycache__/
 *.py[cod]
