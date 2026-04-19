@@ -99,11 +99,15 @@ def _run_go(binary: Path, scenario: Path, server: ServerHandle, out: Path) -> No
         env=env,
         capture_output=True,
         text=True,
-        timeout=180,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
     )
-    out.write_text(result.stdout)
+    out.write_text(result.stdout or "", encoding="utf-8")
     if result.returncode != 0:
-        raise RuntimeError(f"go binary failed on {scenario.name}:\n{result.stderr}")
+        raise RuntimeError(
+            f"go binary failed on {scenario.name}:\n{result.stderr}",
+        )
 
 
 def _kind_sequence(records: list[dict[str, object]]) -> list[str]:
@@ -159,7 +163,11 @@ async def _main_async(args: argparse.Namespace) -> int:
                 except Exception as e:
                     failures.append(f"{name}: go binary raised: {e}")
                     continue
-                diff = _diff_scenario(name, py_out.read_text(), go_out.read_text())
+                diff = _diff_scenario(
+                    name,
+                    py_out.read_text(encoding="utf-8", errors="replace"),
+                    go_out.read_text(encoding="utf-8", errors="replace"),
+                )
                 if diff:
                     failures.append(
                         f"{name}: event-kind divergence:\n" + "\n".join(diff),

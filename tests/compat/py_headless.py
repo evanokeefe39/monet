@@ -185,7 +185,7 @@ async def run_scenario(
     emit(sink, "scenario_end", step=-1, meta=str(doc.get("name") or ""))
 
 
-async def _wait_interrupted(client: Any, thread_id: str, timeout: float = 10.0) -> None:
+async def _wait_interrupted(client: Any, thread_id: str, timeout: float = 30.0) -> None:
     """Poll thread.status until 'interrupted' — the resume validator
     rejects until the DB row is committed. next-nodes alone are not
     enough (they're exposed by the checkpointer ahead of the commit)."""

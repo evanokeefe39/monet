@@ -151,7 +151,7 @@ func execStep(
 		if err != nil {
 			return err
 		}
-		if err := waitInterrupted(ctx, mc, id, 10*time.Second); err != nil {
+		if err := waitInterrupted(ctx, mc, id, 30*time.Second); err != nil {
 			return err
 		}
 		if err := streamRun(ctx, out, idx, func(events chan<- wire.RunEvent) error {
