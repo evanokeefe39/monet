@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/evanokeefe39/monet-cli/internal/chatclient"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/chatclient"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 var (
@@ -22,12 +23,21 @@ var (
 
 // Transcript is the scrollable message history.
 type Transcript struct {
-	vp    viewport.Model
-	lines []string
+	vp       viewport.Model
+	lines    []string
+	renderer *glamour.TermRenderer // nil → plain-text fallback
 }
 
 func NewTranscript() Transcript {
-	return Transcript{vp: viewport.New(0, 0)}
+	t := Transcript{vp: viewport.New(0, 0)}
+	// Width 0 until SetSize; glamour accepts WithWordWrap(0) as "no wrap".
+	if r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(0),
+	); err == nil {
+		t.renderer = r
+	}
+	return t
 }
 
 func (t *Transcript) SetSize(w, h int) {
@@ -42,8 +52,24 @@ func (t *Transcript) AddUser(msg string) {
 }
 
 func (t *Transcript) AddAssistant(msg string) {
-	t.lines = append(t.lines, assistantStyle.Render(msg))
+	t.lines = append(t.lines, t.renderAssistant(msg))
 	t.refresh()
+}
+
+// renderAssistant applies glamour on best-effort; falls back to the plain
+// style on any render error so a malformed markdown doc can't break the
+// transcript.
+func (t *Transcript) renderAssistant(msg string) string {
+	if t.renderer == nil {
+		return assistantStyle.Render(msg)
+	}
+	out, err := t.renderer.Render(msg)
+	if err != nil {
+		return assistantStyle.Render(msg)
+	}
+	// Trim trailing newlines glamour appends so adjacent lines don't have
+	// gratuitous blank space in the transcript.
+	return strings.TrimRight(out, "\n")
 }
 
 func (t *Transcript) AddInfo(msg string) {

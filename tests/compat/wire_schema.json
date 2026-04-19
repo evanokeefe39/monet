@@ -1,0 +1,14 @@
+{
+  "_comment": "Canonical required JSON field names per event type. Both Python (test_wire_compat.py) and Go (go/tests/contract/wire_compat_test.go) validate against this file. Update here first when the protocol changes.",
+  "_version": "1",
+  "RunStarted":    ["run_id", "graph_id", "thread_id"],
+  "NodeUpdate":    ["run_id", "node", "update"],
+  "AgentProgress": ["run_id", "agent", "status"],
+  "SignalEmitted": ["run_id", "agent", "signal_type"],
+  "Interrupt":     ["run_id", "tag"],
+  "RunComplete":   ["run_id"],
+  "RunFailed":     ["run_id", "error"],
+  "HealthResponse":["status", "workers", "queued"],
+  "Capability":    ["agent_id", "command"],
+  "ArtifactItem":  ["artifact_id", "key"]
+}

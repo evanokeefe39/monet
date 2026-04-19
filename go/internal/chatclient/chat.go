@@ -5,9 +5,9 @@ package chatclient
 import (
 	"context"
 
-	"github.com/evanokeefe39/monet-cli/internal/monetclient"
-	"github.com/evanokeefe39/monet-cli/internal/otel"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/monetclient"
+	"github.com/evanokeefe39/monet-tui/internal/otel"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // Client is the chat-aware client that wraps monetclient.Client.

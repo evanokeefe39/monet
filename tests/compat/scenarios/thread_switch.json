@@ -1,0 +1,14 @@
+{
+  "name": "thread_switch",
+  "graph": "chat",
+  "steps": [
+    {"op": "create_thread", "name": "t1"},
+    {"op": "send", "thread": "t1", "message": "first thread hi"},
+    {"op": "create_thread", "name": "t2"},
+    {"op": "send", "thread": "t2", "message": "second thread hi"},
+    {"op": "get_state", "thread": "t1"}
+  ],
+  "assert": {
+    "events_contain": ["thread_created", "run_complete", "state"]
+  }
+}

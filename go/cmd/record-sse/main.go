@@ -14,8 +14,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/evanokeefe39/monet-cli/internal/config"
-	"github.com/evanokeefe39/monet-cli/internal/sseclient"
+	"github.com/evanokeefe39/monet-tui/internal/config"
+	"github.com/evanokeefe39/monet-tui/internal/sseclient"
 )
 
 func main() {

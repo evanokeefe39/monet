@@ -66,7 +66,7 @@ func writeFile(logDir, content string) error {
 		if err != nil {
 			cacheDir = os.TempDir()
 		}
-		logDir = filepath.Join(cacheDir, "monet-cli")
+		logDir = filepath.Join(cacheDir, "monet-tui")
 	}
 	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return err

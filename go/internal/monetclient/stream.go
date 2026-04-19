@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/evanokeefe39/monet-cli/internal/sseclient"
-	"github.com/evanokeefe39/monet-cli/internal/wire"
+	"github.com/evanokeefe39/monet-tui/internal/sseclient"
+	"github.com/evanokeefe39/monet-tui/internal/wire"
 )
 
 // StreamRun opens an SSE stream for a run and emits parsed RunEvents.
@@ -23,7 +23,8 @@ func (c *Client) StreamRun(
 	events chan<- wire.RunEvent,
 ) error {
 	payload := map[string]any{
-		"stream_mode":     []string{"updates", "custom"},
+		"assistant_id":     graphID,
+		"stream_mode":      []string{"updates", "custom"},
 		"stream_subgraphs": true,
 	}
 	if command != nil {

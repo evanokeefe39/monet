@@ -1,0 +1,11 @@
+{
+  "name": "simple_turn",
+  "graph": "chat",
+  "steps": [
+    {"op": "create_thread", "name": "t1"},
+    {"op": "send", "thread": "t1", "message": "hello"}
+  ],
+  "assert": {
+    "events_contain": ["run_started", "updates", "run_complete"]
+  }
+}
