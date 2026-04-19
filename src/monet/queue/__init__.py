@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ._interface import TaskQueue, TaskRecord, TaskStatus
+from ._interface import AwaitAlreadyConsumedError, TaskQueue, TaskRecord, TaskStatus
 
 __all__ = [
+    "AwaitAlreadyConsumedError",
     "InMemoryTaskQueue",
     "TaskQueue",
     "TaskRecord",

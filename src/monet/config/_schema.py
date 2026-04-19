@@ -54,6 +54,7 @@ from ._env import (
     MONET_CHAT_TRIAGE_MODEL,
     MONET_DISTRIBUTED,
     MONET_QUEUE_BACKEND,
+    MONET_QUEUE_COMPLETION_TTL,
     MONET_QUEUE_LEASE_TTL,
     MONET_QUEUE_RECLAIM_INTERVAL,
     MONET_SERVER_URL,
@@ -272,6 +273,7 @@ class QueueConfig(BaseModel):
     push_dispatch_timeout: float = 10.0
     lease_ttl_seconds: int = 300
     reclaim_interval_seconds: int = 30
+    completion_ttl_seconds: float = 600.0
 
     @classmethod
     def load(cls) -> QueueConfig:
@@ -284,6 +286,9 @@ class QueueConfig(BaseModel):
             redis_uri=read_str(REDIS_URI),
             lease_ttl_seconds=read_int(MONET_QUEUE_LEASE_TTL, default=300),
             reclaim_interval_seconds=read_int(MONET_QUEUE_RECLAIM_INTERVAL, default=30),
+            completion_ttl_seconds=read_float(
+                MONET_QUEUE_COMPLETION_TTL, default=600.0
+            ),
         )
 
     def validate_for_boot(self) -> None:
@@ -330,6 +335,7 @@ class QueueConfig(BaseModel):
             "push_dispatch_timeout": self.push_dispatch_timeout,
             "lease_ttl_seconds": self.lease_ttl_seconds,
             "reclaim_interval_seconds": self.reclaim_interval_seconds,
+            "completion_ttl_seconds": self.completion_ttl_seconds,
         }
 
 

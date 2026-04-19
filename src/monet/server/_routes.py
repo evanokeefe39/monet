@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -28,6 +29,9 @@ __all__ = ["router"]
 #: scannable — the full task remains in the raw JSON and in the work
 #: brief artifact itself.
 _DAG_TASK_CHAR_BUDGET = 160
+
+#: Hard cap on artifacts returned by ``GET /api/v1/artifacts``.
+ARTIFACT_LIST_MAX = 500
 
 
 # -- Dependency injection helpers ------------------------------------------
@@ -88,6 +92,9 @@ class HealthResponse(BaseModel):
     workers: int
     queued: int
     redis: str | None = None
+    version: str = ""
+    queue_backend: str = ""
+    uptime_seconds: float = 0.0
 
 
 # -- Router ----------------------------------------------------------------
@@ -328,6 +335,83 @@ async def invoke_agent_endpoint(
     # AgentResult is a TypedDict; cast the dict-view to the endpoint's
     # return type for mypy.
     return cast("dict[str, Any]", result)
+
+
+class ArtifactListItem(BaseModel):
+    """Summary of one artifact returned by the list endpoint."""
+
+    artifact_id: str
+    key: str
+    content_type: str
+    content_length: int
+    summary: str
+    created_at: str
+    agent_id: str | None = None
+    run_id: str | None = None
+    thread_id: str | None = None
+
+
+class ArtifactListResponse(BaseModel):
+    """Paginated artifact list response."""
+
+    artifacts: list[ArtifactListItem]
+    next_cursor: str | None = None
+
+
+@router.get("/artifacts", dependencies=[Depends(require_api_key)])
+async def list_artifacts(
+    thread_id: str = Query(..., description="Required: filter to this thread"),
+    limit: int = Query(default=50, ge=1, le=ARTIFACT_LIST_MAX),
+    cursor: str | None = Query(default=None, description="ISO 8601 created_at cursor"),
+) -> ArtifactListResponse:
+    """List recent artifacts for a thread, newest-first.
+
+    ``thread_id`` is required — listing across all threads is not supported
+    in keyless dev mode to avoid cross-tenant data exposure.
+
+    ``cursor`` is an opaque ISO 8601 timestamp from ``next_cursor`` of the
+    previous response. Pass it to fetch the next page.
+    """
+    try:
+        import asyncio as _asyncio
+
+        rows = await _asyncio.wait_for(
+            get_artifacts().query_recent(
+                thread_id=thread_id,
+                since=cursor,
+                limit=limit + 1,
+            ),
+            timeout=10.0,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="artifact store timeout") from exc
+    except Exception as exc:
+        _log.exception("artifact list failed for thread %s", thread_id)
+        raise HTTPException(
+            status_code=500, detail=f"artifact list failed: {exc}"
+        ) from exc
+
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor: str | None = None
+    if has_more and page:
+        next_cursor = page[-1].get("created_at") or None
+
+    items = [
+        ArtifactListItem(
+            artifact_id=r["artifact_id"],
+            key=r["artifact_id"],
+            content_type=r.get("content_type", ""),
+            content_length=r.get("content_length", 0),
+            summary=r.get("summary", ""),
+            created_at=r.get("created_at", ""),
+            agent_id=r.get("agent_id"),
+            run_id=r.get("run_id"),
+            thread_id=r.get("thread_id"),
+        )
+        for r in page
+    ]
+    return ArtifactListResponse(artifacts=items, next_cursor=next_cursor)
 
 
 @router.get("/artifacts/{artifact_id}")
@@ -734,8 +818,18 @@ _ARTIFACT_HTML_TEMPLATE = """<!doctype html>
 """
 
 
+def _monet_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("monet")
+    except Exception:
+        return ""
+
+
 @router.get("/health")
 async def health(
+    request: Request,
     deployments: Deployments,
     queue: Queue,
     response: Response,
@@ -745,10 +839,19 @@ async def health(
     On a Redis-backed queue, PING is required to return 200 — a Redis
     outage must surface as 503 here so load balancers stop routing to
     broken replicas instead of returning a false-healthy 200.
+
+    Additive fields ``version``, ``queue_backend``, and ``uptime_seconds``
+    are present unconditionally so Go clients can perform version-compat
+    checks at startup without a separate request.
     """
     active = await deployments.get_active()
     worker_count = len(active)
     queued = getattr(queue, "pending_count", 0)
+    start_time: float = getattr(request.app.state, "start_time", 0.0)
+    uptime = time.monotonic() - start_time if start_time else 0.0
+    backend = type(queue).__name__
+    version_str = _monet_version()
+
     redis_status: str | None = None
     if isinstance(queue, RedisStreamsTaskQueue):
         if await queue.ping():
@@ -761,7 +864,16 @@ async def health(
                 workers=worker_count,
                 queued=queued,
                 redis=redis_status,
+                version=version_str,
+                queue_backend=backend,
+                uptime_seconds=uptime,
             )
     return HealthResponse(
-        status="ok", workers=worker_count, queued=queued, redis=redis_status
+        status="ok",
+        workers=worker_count,
+        queued=queued,
+        redis=redis_status,
+        version=version_str,
+        queue_backend=backend,
+        uptime_seconds=uptime,
     )

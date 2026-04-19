@@ -130,3 +130,12 @@ Aegra's graph loader supports filesystem paths only (not Python module paths), s
 Aegra's factory classifier treats 1-arg function whose parameter isn't `ServerRuntime` as config-accepting factory. Real graph builders accept optional `hooks: GraphHookRegistry | None` kwarg, so `server_bootstrap.py` wraps them as 0-arg functions. Any new graph builder exported via `server_bootstrap.py` must also be wrapped as 0-arg.
 
 Per-example `.monet/docker-compose.yml` files are pre-baked. Aegra's `is_postgres_running` check treats any container on port 5432 as "ours" — Phase 2 teardown in `src/monet/cli/_dev.py:_teardown_previous` prevents cross-example Postgres collisions. Future compose files should declare `container_name:`.
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
