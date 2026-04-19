@@ -90,13 +90,71 @@
 
 ## Planned
 
-Deferred until there is concrete demand or a deployment requiring it.
-- [ ] **Forwarding worker** — claims push-pool tasks, forwards to Cloud Run/ECS
-- [ ] **Lease TTL + sweeper for push pools** — requeue crashed push tasks
-- [ ] **Optional summarizer agent** — framework-inserted wave context condensation
-- [ ] **Graph extension points (slots)** — named, typed injection points in `entry` / `planning` / `execution` plus an adapter-level `post_run`. Hosts user-supplied subgraphs with typed state contract and optional decision-based routing (e.g. `replan` loops back to planning). Covers the ultraplan pre-planner and review-gate-with-replan cases. Design in `graph-extension-points.md`. Trigger: first concrete user request for a specific published slot. Phase 1 ships the adapter-level `post_run` slot alone.
-- [ ] **Scheduled runs** — cron-style triggers that start runs against configured entrypoints on a schedule. Persisted trigger records, in-server scheduler (single-writer lock for replicas), CLI (`monet schedule add|list|remove|run|enable|disable`), `[schedules.<name>]` config block plus runtime HTTP CRUD. Tenant-scoped once Priority 1 lands. Trigger firings emit OTel spans for missed/late/overlap visibility.
-- [ ] **Queryable telemetry for meta-agents** — primitives that let agents read completed-run telemetry (agent invocations, signals, artifact pointers, wave timings, retry counts, token usage where captured). Unlocks manager-agent patterns (one agent measures others' performance across runs) and self-learning agents (agent reads its own prior runs to refine behavior). Prereq decisions: query surface (SDK helper vs. HTTP route), persistence source (OTel backend vs. monet-owned metrics store vs. both), cross-run artifact read access, tenant-scope boundary. OTel spans already emit — this feature is about making them queryable from inside an agent.
-- [ ] **Reference agent quality pass** — `src/monet/agents/` are functional but minimal. Improve prompting, broaden signal coverage (`RECOVERABLE` / `AUDIT`, not just happy path), add few-shot anchoring, tighten output schemas, document decisions. Incremental, not spec-gated. Guardrail: keep them illustrative, not production-grade. Three concrete migrations specced: **researcher → GPT Researcher + constrained writer** (`architecture/researcher-migration.md`), **planner structured output with validation-retry** (`architecture/planner-structured-output.md`), and **writer → section-level composite-document editing** (`architecture/writer-migration.md`).
-- [ ] **AgentStream transport examples** — examples for `AgentStream.sse()` (browser/dashboard consuming live signals) and `.http()` / `.http_post()` (webhook-driven agent with external consumer). Today only `.cli()` is demonstrated despite all five constructors shipping in `src/monet/streams.py:57-114`.
-- [ ] **Memory service** — first-class long-lived agent memory, peer of the artifact store. All agents can write memories; all agents receive relevant memories via hook injection or tool query. Memories are agent- and system-facing; artifacts are user-facing. Separate service sharing storage backend with artifacts, divergent index / retrieval / TTL. Full design, taxonomy rationale, and open-questions list in `architecture/memory-service.md`. Trigger: concrete user request for cross-run memory (e.g. an agent that remembers prior task feedback across sessions).
+Items here are prioritized. Pick up as standalone plans. Triggers listed where applicable.
+
+### Priority 1 — SaaS enabling primitives
+
+SaaS platform (user management, accounts, billing, UI) lives in a separate downstream repo. This repo exposes only the primitives it needs. Scope: never grows a user model, billing logic, or customer-facing productization.
+
+Queue plane already SaaS-compatible (all backends pull-only). Control-plane primitives to add:
+
+- **Pluggable auth dependency** in `src/monet/server/_auth.py`: swap `MONET_API_KEY` singleton for a FastAPI dependency the downstream repo replaces. Default stays single-key for self-hosted.
+- **Tenant ID as request-context primitive**: `TenantContext` propagated via `Depends`, opaque string.
+- **Tenant-scoped queries**: runs, threads, artifacts, pending decisions filter by `tenant_id` when present — `src/monet/server/_routes.py`, `src/monet/client/_wire.py`, `src/monet/artifacts/_service.py`.
+- **Credential passthrough on clients**: `MonetClient(url, api_key=...)` and `WorkerClient(api_key=...)` carry opaque bearer.
+- **Server-side pool-claim validation** against tenant context — prevents cross-tenant task stealing.
+- **Tenant-scoped stream keys** (`work:{tenant}:{pool}`) — trigger: Priority 1 lands. Current `work:{pool}` maps cleanly, one segment insertion.
+- **Per-tenant rate limits on `/progress` and `/complete`** — trigger: Priority 1 lands.
+
+### Priority 2 — Push pool dispatch (shipped) + follow-ons
+
+**Shipped:** `src/monet/orchestration/_invoke.py` branches on `PoolConfig.type == "push"`, POSTs `{task_id, token, callback_url, payload}` to pool webhook URL via `httpx`. Workers run `monet worker --push` to stand up `POST /dispatch` endpoint. Auth is HMAC-derived per task (`HMAC_SHA256(MONET_API_KEY, task_id)`). Batch providers use `monet.core.push_handler.handle_dispatch(...)` in ~10-line user entry script.
+
+Follow-ons (trigger-gated):
+
+- **Retry / circuit breaker on provider API failures** — webhook POST 5xx raises `RuntimeError` today. Trigger: first observed transient throttling on real Cloud Run / Lambda.
+- **Convenience provider extras** `monet[gcp]` / `monet[aws]` / `monet[azure]` / `monet[all-providers]`. Trigger: first user request for provider glue inside monet.
+- **Long-running job suspend pattern** — `invoke_agent` stays alive waiting full `agent_timeout`. Trigger: measured Aegra worker-thread pressure from jobs > 5min.
+
+### Priority 3 — Scheduled runs
+
+Cron-style triggers against configured entrypoints. Scope:
+
+- **Trigger records**: `{name, entrypoint, input_template, cron_expr, enabled, last_run_at, next_run_at}` — stored in server SQLite / Postgres.
+- **Scheduler process**: evaluates due triggers, dispatches via `MonetClient.run(entrypoint, input)`. In-server background task, single-writer lock for replicas.
+- **CLI**: `monet schedule add|list|remove|run|enable|disable`. `monet schedule run <name>` for manual dispatch.
+- **Config vs. CRUD**: `[schedules.<name>]` in `monet.toml` for declarative-at-boot; HTTP API for runtime CRUD.
+- **Tenant scoping**: triggers carry `tenant_id` once Priority 1 lands.
+- **Observability**: trigger firings emit OTel spans for missed / late / overlapping fires.
+
+Out of scope: schedule editors, calendar UIs, retry semantics beyond standard run lifecycle.
+
+**Motivating use cases**: agent recruitment (discovery + trial pipelines), agent performance management (telemetry pipeline scoring agents on cost + quality). Scheduler is graph-agnostic — `monet schedule add --graph execution --input '<json>' --cron '<expr>'` is the only missing piece over the existing `examples/agent-recruitment/` reference implementation.
+
+**Queue Phase 4 deferred items** (standalone, none blocks routine work):
+
+- **Multi-replica Aegra completion handling** — trigger: second replica added.
+- **JWT task tokens with `kid` + `exp`** — trigger: HMAC proves insufficient for cross-tenant revocation.
+- **`schema_version` envelope field** — trigger: first incompatible change to `TaskRecord` / `AgentResult`.
+- **`MAXLEN` tuning from measurement** — trigger: first production observation at 100 users.
+- **`monet queue stats` / `monet queue reclaim` CLI** — trigger: first operator page for reclaim storm.
+- **Backup / restore for stream contents** — trigger: customer needs run replay across Redis failover.
+
+### Lower priority / triggered
+
+- **Sandbox integration (Modal / E2B)** — `examples/agent-recruitment/src/recruitment/sandbox.py` is subprocess-based (not a security boundary). Ship `modal_sandbox.py` / `e2b_sandbox.py` implementing same signature. Trigger: first user running recruitment pipeline against untrusted candidates.
+- **Chat auto-open artifact links** — `/autolink on|off` TUI command, regex detection of `…/api/v1/artifacts/<id>/view`, `webbrowser.open_new_tab()`. Default off.
+- **Agentic chat reference graph** — `examples/agentic-chat/` with `build_chat_agentic_graph` + `conversationalist` reference agent. Opt-in via `MONET_CHAT_GRAPH` or `[chat] graph = "..."`.
+- **Reference agent quality pass** — `src/monet/agents/` functional but minimal. Improve prompting, broaden signal coverage, add few-shot anchoring, tighten output schemas. Three concrete migrations specced: researcher → GPT Researcher (`architecture/researcher-migration.md`), planner structured output (`architecture/planner-structured-output.md`), writer → section-level editing (`architecture/writer-migration.md`).
+- **AgentStream transport examples** — add SSE and HTTP/webhook examples. All five constructors ship in `src/monet/streams.py:57-114`; only `.cli()` has an example today.
+- **Queryable telemetry and meta-agents** — queryable surface over OTel spans for manager-agent and self-learning patterns. Prereq decisions: query surface, persistence source, cross-run artifact access, tenant-scope boundary.
+- **Graph extension points (slots)** — named injection points in `planning` / `execution` + adapter-level `post_run`. Full spec in `docs/architecture/graph-extension-points.md`. Trigger: first concrete user request for a specific slot. Phase 1: `post_run` only.
+- **In-process driver reintroduction** — trigger: concrete server-less library use case. `src/monet/__main__.py` deleted with `_run.py`; driver should use `build_default_graph` directly.
+- **E2E integration tests** across deployment topologies — scaffold in `tests/e2e/`; fill scenarios as topologies stabilise.
+- **Optional summarizer agent** — framework-inserted wave context condensation.
+- **Memory service** — long-lived agent memory, peer of artifact store. Full design in `docs/architecture/memory-service.md`. Trigger: concrete cross-run memory request.
+
+## Refactor History
+
+- **Three-graph collapse** (current HEAD): `entry` / `planning` / `execution` become uncompiled subgraphs composed under one `StateGraph[RunState]` via `build_default_graph`. `monet.pipelines.default` adapter (~350 LoC) deleted. See `docs/architecture/adr-001-collapse-three-graph-split.md`.
+- **Client decoupling** (prior HEAD): `MonetClient.run(graph_id, input)` replaced pipeline-composition `run(topic)`. `_run.py` and `Entrypoint.kind` removed. `_events.py` split into graph-agnostic core + per-pipeline events.

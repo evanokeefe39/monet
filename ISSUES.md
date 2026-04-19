@@ -1,16 +1,20 @@
-# Known Issues
+# Issues
 
-Bugs and design gaps not yet addressed. Roadmap features live in `CLAUDE.md` under `## Roadmap`; this file is for things that are broken, deprecated, or violating stated standards. Pick items from here when doing maintenance passes.
+Known bugs, deprecations, standards violations, and design gaps. Check before picking maintenance work.
 
-Each entry: **symptom**, **location**, **why it matters**, **fix sketch** where obvious.
+## E2E Test Gaps
 
----
+No E2E coverage across deployment topologies. Needs tests for:
 
-The prior I1–I10 slate is resolved. New findings land here.
+1. `monet dev` → `monet run` full pipeline with HITL approve/revise/reject
+2. `aegra serve` with external Postgres
+3. Multiple concurrent `monet worker` instances claiming from the same server
+4. `RedisStreamsTaskQueue` under load against a real Redis
+5. Custom graph registration via `aegra.json` with non-monet graphs driven via `--graph`
+6. Worker reconnection after server restart
+7. `monet run --auto-approve` happy path end-to-end
+8. Push pool round trip with a live Cloud Run Service / Lambda Function URL
 
----
+## Deferred Items
 
-## Out of scope for this file
-
-- **Roadmap features** (SaaS enabling primitives, push pool dispatch, pluggable pipeline adapters, in-process driver reintroduction, graph↔client wire-contract test, summarizer agent) live in `CLAUDE.md ## Roadmap` and `docs/architecture/roadmap.md`. Those are forward-looking commitments, not present-tense defects.
-- **Resolved items** from prior sessions (catalogue sync-in-async, artifact double-write, server-process agent wiring, Langfuse OTLP setup, Windows CLI encoding, triage nondeterminism, resume/stream race, alembic pre-existing-DB crash, SignalType msgpack allowlist, triage suggested_agents validation, langchain-tavily migration, redis_streams mypy drift, E2E coverage gap, triage classification bias) were verified fixed in the current code and removed from this list.
+- **In-process (no-server) programmatic driver**: removed during client-decoupling refactor. Library callers use `monet dev` + `MonetClient`, or shell to `aegra dev`. Trigger: concrete need for server-less library usage (e.g. notebook example). If reintroduced, driver should use `build_default_graph` directly.
