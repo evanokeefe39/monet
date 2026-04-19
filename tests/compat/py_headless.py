@@ -56,34 +56,57 @@ async def _drive_stream(
     step: int,
 ) -> None:
     started_emitted = False
+    last_run_id = ""
+    saw_interrupt = False
+    # Canonical JSON of the last __interrupt__ payload so we can drop
+    # Aegra's subgraph/top-level double-broadcast (see ADR-006 F1).
+    last_interrupt_json = ""
     async for mode, data in stream_run(
         client, thread_id, graph_id, input=input, command=command
     ):
+        if mode == "metadata":
+            if isinstance(data, dict):
+                run_id = data.get("run_id", "")
+                if run_id and not started_emitted:
+                    last_run_id = run_id
+                    emit(
+                        sink,
+                        "run_started",
+                        step=step,
+                        payload={"run_id": run_id},
+                    )
+                    started_emitted = True
+            continue
         if mode == "error":
             emit(
                 sink,
                 "run_failed",
                 step=step,
-                payload={"error": str(data)},
+                payload={"error": str(data), "run_id": last_run_id},
             )
             return
         if not isinstance(data, dict):
             continue
         if mode == "updates":
             if "__interrupt__" in data:
-                emit(
-                    sink,
-                    "interrupt",
-                    step=step,
-                    payload={"values": data.get("__interrupt__")},
-                )
+                payload = {
+                    "values": data.get("__interrupt__"),
+                    "run_id": last_run_id,
+                }
+                payload_json = json.dumps(payload, sort_keys=True)
+                if payload_json == last_interrupt_json:
+                    continue
+                last_interrupt_json = payload_json
+                saw_interrupt = True
+                emit(sink, "interrupt", step=step, payload=payload)
                 # Keep draining — closing the stream here cancels Aegra's
                 # finalize_run before it commits thread.status="interrupted",
-                # and the next resume step 400s. Waiting for natural close
-                # is faster and more reliable than polling afterward.
+                # and the next resume step 400s.
                 continue
+            last_interrupt_json = ""
             run_id = data.get("run_id")
             if run_id and not started_emitted:
+                last_run_id = run_id
                 emit(
                     sink,
                     "run_started",
@@ -92,31 +115,44 @@ async def _drive_stream(
                 )
                 started_emitted = True
                 continue
-            emit(sink, "updates", step=step, payload=data)
+            stamped = {**data, "run_id": last_run_id} if last_run_id else data
+            emit(sink, "updates", step=step, payload=stamped)
         elif mode == "custom":
+            last_interrupt_json = ""
             status = data.get("status")
             if status:
-                emit(sink, "progress", step=step, payload=data)
+                stamped = {**data}
+                if last_run_id and not stamped.get("run_id"):
+                    stamped["run_id"] = last_run_id
+                emit(sink, "progress", step=step, payload=stamped)
                 continue
             if data.get("signal_type"):
-                emit(sink, "signal", step=step, payload=data)
+                stamped = {**data}
+                if last_run_id and not stamped.get("run_id"):
+                    stamped["run_id"] = last_run_id
+                emit(sink, "signal", step=step, payload=stamped)
                 continue
             emit(sink, "updates", step=step, payload=data)
 
-    # SSE closed — synthesize terminal event from state.
+    # SSE closed — synthesize a terminal event from state only when the
+    # stream itself didn't already emit an interrupt. Skip for the
+    # interrupt case: the stream's version carries the full payload;
+    # the state version is just {tag, values} and would be a duplicate.
     values, nxt = await get_state_values(client, thread_id)
     if nxt:
-        emit(
-            sink,
-            "interrupt",
-            step=step,
-            payload={
-                "tag": nxt[0],
-                "values": values.get("__interrupt__"),
-            },
-        )
+        if not saw_interrupt:
+            emit(
+                sink,
+                "interrupt",
+                step=step,
+                payload={
+                    "tag": nxt[0],
+                    "values": values.get("__interrupt__"),
+                    "run_id": last_run_id,
+                },
+            )
     else:
-        emit(sink, "run_complete", step=step)
+        emit(sink, "run_complete", step=step, payload={"run_id": last_run_id})
 
 
 async def run_scenario(
@@ -174,6 +210,24 @@ async def run_scenario(
                 sink=sink,
                 step=i,
             )
+        elif op == "abort":
+            tid = _resolve(threads, step.get("thread"))
+            await _wait_interrupted(client, tid)
+            await _drive_stream(
+                client,
+                tid,
+                graph_id,
+                input=None,
+                command={
+                    "resume": {
+                        "tag": "abort",
+                        "payload": {"action": "abort"},
+                    },
+                },
+                sink=sink,
+                step=i,
+            )
+            emit(sink, "aborted", step=i)
         elif op == "get_state":
             tid = _resolve(threads, step.get("thread"))
             values, nxt = await get_state_values(client, tid)
