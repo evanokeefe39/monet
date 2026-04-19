@@ -30,3 +30,11 @@ class SemanticError(Exception):
         self.type = type
         self.message = message
         super().__init__(message)
+
+
+class PushDispatchTerminal(SemanticError):  # noqa: N818
+    """Push-pool webhook dispatch failed after exhausting retries or on terminal 4xx.
+
+    The failure result is already written to the task queue before this is raised
+    so ``wait_completion`` unblocks immediately with a DISPATCH_FAILED signal.
+    """

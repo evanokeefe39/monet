@@ -39,6 +39,7 @@ class SignalType(StrEnum):
     # Failure
     SEMANTIC_ERROR = "semantic_error"
     CAPABILITY_UNAVAILABLE = "capability_unavailable"
+    DISPATCH_FAILED = "dispatch_failed"
 
 
 BLOCKING: frozenset[SignalType] = frozenset(
@@ -57,6 +58,7 @@ RECOVERABLE: frozenset[SignalType] = frozenset(
         SignalType.TOOL_UNAVAILABLE,
         SignalType.SEMANTIC_ERROR,
         SignalType.CAPABILITY_UNAVAILABLE,
+        SignalType.DISPATCH_FAILED,
     }
 )
 INFORMATIONAL: frozenset[SignalType] = frozenset(

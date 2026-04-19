@@ -31,9 +31,9 @@ TUI_COMMANDS: tuple[tuple[str, str], ...] = (
 )
 
 #: Fallback text for the toolbar indicator before first refresh / when
-#: the registry is unreachable. Real content is ``● N agents · 📎 M
-#: artifacts``, refreshed on mount + after every turn completes.
-DEFAULT_TOOLBAR_HINTS = "● … · 📎 …"
+#: the registry is unreachable. Real content is ``N agents · M artifacts``,
+#: refreshed on mount + after every turn completes.
+DEFAULT_TOOLBAR_HINTS = "… agents · … artifacts"
 
 #: ASCII logo placeholder for the empty-state welcome screen.
 WELCOME_LOGO: tuple[str, ...] = (

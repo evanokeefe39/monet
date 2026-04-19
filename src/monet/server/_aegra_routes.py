@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from monet.orchestration._invoke import configure_capability_index
+from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 from monet.server._capabilities import CapabilityIndex
 from monet.server._deployment import DeploymentStore
 from monet.server._routes import router
@@ -35,6 +36,102 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 logger = logging.getLogger("monet.server")
+
+
+async def _reissue_in_flight_push(queue: object) -> None:
+    """Re-dispatch push tasks that were in-flight when the server last crashed.
+
+    Called once during lifespan startup, before the reclaim loop begins.
+    Tasks that already exhausted all retries are failed immediately; others
+    are re-dispatched via a fresh HTTP POST so Cloud Run / Lambda receives
+    the dispatch envelope again.
+    """
+    if not isinstance(queue, RedisStreamsTaskQueue):
+        return
+    records = await queue.list_in_flight_push_dispatches()
+    if not records:
+        return
+    logger.info(
+        "Reissuing %d in-flight push dispatch(es) from previous run",
+        len(records),
+    )
+
+    from monet.orchestration._invoke import (
+        _PUSH_MAX_ATTEMPTS,
+        _push_with_retry,
+        _write_dispatch_failed,
+    )
+
+    for rec in records:
+        task_id = rec["task_id"]
+        attempt = int(rec.get("attempt", 0))
+        url = rec.get("url", "")
+        dispatch_secret = rec.get("dispatch_secret") or None
+        task_payload = rec.get("task_payload", "")
+
+        if not url or not task_payload:
+            logger.warning(
+                "push_dispatch restart_recovery: incomplete record %s, skipping",
+                task_id,
+            )
+            await queue.pop_push_dispatch(task_id)
+            continue
+
+        if attempt >= _PUSH_MAX_ATTEMPTS:
+            logger.warning(
+                "push_dispatch restart_recovery: task %s exhausted, failing",
+                task_id,
+            )
+            await _write_dispatch_failed(
+                task_id, queue, f"exhausted {attempt} attempts before server restart"
+            )
+            continue
+
+        from monet.config import AuthConfig
+        from monet.server._auth import task_hmac
+
+        api_key = AuthConfig.load().api_key
+        if not api_key:
+            logger.warning(
+                "push_dispatch restart_recovery: MONET_API_KEY unset, skipping task %s",
+                task_id,
+            )
+            continue
+
+        from monet.config import MONET_SERVER_URL
+        from monet.config._env import read_str
+
+        api_url = read_str(MONET_SERVER_URL)
+        if not api_url:
+            logger.warning(
+                "push_dispatch restart_recovery: MONET_SERVER_URL unset, skip %s",
+                task_id,
+            )
+            continue
+
+        token = task_hmac(api_key, task_id)
+        envelope = {
+            "task_id": task_id,
+            "token": token,
+            "callback_url": f"{api_url.rstrip('/')}/api/v1/tasks/{task_id}",
+            "payload": task_payload,
+        }
+        headers: dict[str, str] = {}
+        if dispatch_secret:
+            headers["Authorization"] = f"Bearer {dispatch_secret}"
+
+        asyncio.create_task(  # noqa: RUF006
+            _push_with_retry(
+                task_id,
+                queue,
+                url,
+                headers,
+                envelope,
+                task_payload,
+                dispatch_secret=dispatch_secret,
+            )
+        )
+
 
 _deployments = DeploymentStore()
 _capability_index = CapabilityIndex()
@@ -60,12 +157,16 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``bootstrap_server()`` is idempotent and is never called from the
     file-path path.
     """
+    from monet.config import QueueConfig
     from monet.server.server_bootstrap import bootstrap_server
 
     queue = bootstrap_server()
     _app.state.queue = queue
 
     await _deployments.initialize()
+    await _reissue_in_flight_push(queue)
+
+    cfg = QueueConfig.load()
 
     async def _sweep_loop() -> None:
         while True:
@@ -80,6 +181,17 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
                         "Stale worker %s pruned %d capability entries",
                         wid,
                         len(pruned),
+                    )
+
+    async def _reclaim_loop() -> None:
+        interval = cfg.reclaim_interval_seconds
+        while True:
+            await asyncio.sleep(interval)
+            if isinstance(queue, RedisStreamsTaskQueue):
+                reclaimed = await queue.reclaim_expired_internal()
+                if reclaimed:
+                    logger.info(
+                        "PEL sweeper reclaimed %d expired entries", len(reclaimed)
                     )
 
     # Register reference agents via the explicit helper — a bare import
@@ -106,6 +218,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _capability_index.upsert_worker(in_proc_worker_id, "local", capabilities)
 
     sweeper_task = asyncio.create_task(_sweep_loop())
+    reclaim_task = asyncio.create_task(_reclaim_loop())
     worker_task = asyncio.create_task(
         run_worker(queue, pool="local", consumer_id=in_proc_worker_id)
     )
@@ -117,7 +230,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        for task in (sweeper_task, worker_task):
+        for task in (sweeper_task, reclaim_task, worker_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

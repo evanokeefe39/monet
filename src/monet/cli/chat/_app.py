@@ -48,6 +48,11 @@ from monet.cli.chat._constants import (
     PULSE_ENABLED,
     TUI_COMMANDS,
 )
+from monet.cli.chat._hitl_form import (
+    build_hitl_widget,
+    build_submit_summary,
+    envelope_supports_widgets,
+)
 from monet.cli.chat._menu import (
     MENU_ABOUT,
     MENU_EXIT,
@@ -60,7 +65,7 @@ from monet.cli.chat._menu import (
     MainMenuScreen,
     OptionsScreen,
 )
-from monet.cli.chat._pickers import PickerScreen as _PickerScreen
+from monet.cli.chat._pickers import TablePickerScreen as _TablePickerScreen
 from monet.cli.chat._pulse import BorderPulseController
 from monet.cli.chat._sidebar import (
     BREAKPOINT_COLS,
@@ -91,6 +96,8 @@ _log = logging.getLogger("monet.cli.chat")
 
 
 if TYPE_CHECKING:
+    from textual.worker import Worker
+
     from monet.client import MonetClient
 
 
@@ -248,10 +255,21 @@ class ChatApp(App[None]):
         # prompt submission when ``InterruptCoordinator.collect`` is
         # awaiting.
         self._interrupts = InterruptCoordinator()
+        # Mounted HITL widget (InlinePicker or HITLForm) + parsed
+        # envelope while a resume is awaiting. ``None`` in every other
+        # state.
+        self._hitl_widget: Any = None
+        self._hitl_envelope: Any = None
+        self._turn_worker: Worker[None] | None = None
+        # Set by ``_handle_exception`` when a Textual-unhandled error
+        # bubbles to the app. The CLI wrapper reads this after
+        # ``run_async`` returns to show a friendly crash message instead
+        # of a rich traceback.
+        self._crash_error: BaseException | None = None
         # ctrl+c two-press confirm-exit state.
         self._exit_arm_handle: asyncio.TimerHandle | None = None
         # Toolbar indicator state. ``_indicator_text`` holds the most
-        # recent "● N agents · 📎 M artifacts" string; transient hints
+        # recent "N agents · M artifacts" string; transient hints
         # (confirm-exit, error flash) set ``_indicator_override`` so the
         # periodic refresher knows not to clobber them. Restoring the
         # indicator just clears the override.
@@ -286,7 +304,7 @@ class ChatApp(App[None]):
         scoped = {"accept_suggestion", "focus_suggest", "hide_suggest"}
         if action not in scoped:
             return True
-        if isinstance(self.screen, _PickerScreen):
+        if isinstance(self.screen, _TablePickerScreen):
             return False
         return not self.query("#sidebar")
 
@@ -420,7 +438,7 @@ class ChatApp(App[None]):
             except Exception:
                 artifact_count = 0
 
-        text = f"● {agent_count} agents · 📎 {artifact_count} artifacts"
+        text = f"{agent_count} agents · {artifact_count} artifacts"
         self._indicator_text = text
         # Don't clobber a transient hint (e.g. confirm-exit).
         if not self._indicator_override:
@@ -430,6 +448,24 @@ class ChatApp(App[None]):
         """Stop any running pulse before teardown so no tick fires against
         a widget that is being removed."""
         self._pulse.shutdown()
+
+    def _handle_exception(self, error: Exception) -> None:
+        """Route unhandled errors to the log file + exit gracefully.
+
+        Textual's default prints a full rich traceback with locals to
+        stdout on crash, which is unreadable for end users. Instead we
+        log the traceback to the chat log file and call :meth:`exit`
+        with a stored ``_crash_error`` so the CLI wrapper can show a
+        one-line friendly message with the log path.
+        """
+        _log.error("unhandled exception in ChatApp", exc_info=error)
+        self._crash_error = error
+        self._return_code = 1
+        if self._exception is None:
+            self._exception = error
+            self._exception_event.set()
+        with contextlib.suppress(Exception):
+            self.exit(return_code=1)
 
     async def _load_thread_name(self) -> None:
         """Populate the toolbar thread-name input from server metadata."""
@@ -679,9 +715,20 @@ class ChatApp(App[None]):
             self._interrupts.consume_if_pending(text)
             return
         if self._busy:
+            head = text.split()[0] if text else ""
+            if head in {"/new", "/clear"}:
+                self._append_line(f"[user] {text}")
+                if self._turn_worker is not None:
+                    self._turn_worker.cancel()
+                    self._turn_worker = None
+                self._set_busy(False)
+                log = self.query_one("#transcript", RichLog)
+                self.run_worker(self._cmd_new_thread(log), exclusive=False)
             return
         # Detach. Worker reads `_busy` itself; we don't await it here.
-        self.run_worker(self._handle_user_text(text), exclusive=False)
+        self._turn_worker = self.run_worker(
+            self._handle_user_text(text), exclusive=False
+        )
 
     async def _rename_thread(self, name: str) -> None:
         """Persist a thread rename and surface success / failure as a notify."""
@@ -755,6 +802,8 @@ class ChatApp(App[None]):
                 focus_prompt=self._focus_prompt,
                 get_interrupt=self._client.chat.get_chat_interrupt,
                 resume=self._client.chat.resume_chat,
+                mount_widgets=self._mount_hitl_widgets,
+                unmount_widgets=self._unmount_hitl_widgets,
             )
         except Exception as exc:
             self._append_line(f"[error] {exc}")
@@ -787,6 +836,8 @@ class ChatApp(App[None]):
                 focus_prompt=self._focus_prompt,
                 get_interrupt=self._client.chat.get_chat_interrupt,
                 resume=self._client.chat.resume_chat,
+                mount_widgets=self._mount_hitl_widgets,
+                unmount_widgets=self._unmount_hitl_widgets,
             )
         except Exception as exc:
             self._append_line(f"[error] {exc}")
@@ -794,10 +845,12 @@ class ChatApp(App[None]):
             # Server may have restarted mid-execution; recover any
             # interrupt that survived in the checkpointer.
             await self._recover_pending_interrupt()
-        self.sub_title = ""
-        self._set_busy(False)
-        # Turn finished — any new artifacts now want counting.
-        self._refresh_indicator()
+        finally:
+            self.sub_title = ""
+            self._set_busy(False)
+            self._turn_worker = None
+            # Turn finished — any new artifacts now want counting.
+            self._refresh_indicator()
 
     def _focus_prompt(self) -> None:
         with contextlib.suppress(Exception):
@@ -905,6 +958,7 @@ class ChatApp(App[None]):
             on_select=self._on_sidebar_select,
             on_close=self._close_sidebar,
             on_fullscreen=self._go_fullscreen,
+            on_delete=self._on_sidebar_delete,
         )
         try:
             area = self.query_one("#transcript-area")
@@ -913,10 +967,14 @@ class ChatApp(App[None]):
             _log.exception("failed to mount sidebar")
 
     async def _push_fullscreen_picker(self, kind: SidebarKind) -> None:
-        title, options = await self._picker_options(kind)
-        if not options:
+        title, columns, rows = await self._picker_options(kind)
+        if not rows:
             # _picker_options already wrote the empty-state toast/line.
             return
+
+        on_delete = None
+        if kind == "threads":
+            on_delete = self._fullscreen_delete_thread
 
         def _on_pick(result: str | None) -> None:
             if result is None:
@@ -924,22 +982,29 @@ class ChatApp(App[None]):
                 return
             self._on_sidebar_select(kind, result)
 
-        self.push_screen(_PickerScreen(title, options), _on_pick)
+        self.push_screen(
+            _TablePickerScreen(title, columns, rows, on_delete=on_delete), _on_pick
+        )
 
     async def _picker_options(
         self, kind: SidebarKind
-    ) -> tuple[str, list[tuple[str, str]]]:
-        """Fetch options for the fullscreen picker. Mirrors sidebar fill."""
+    ) -> tuple[str, list[str], list[tuple[str, ...]]]:
+        """Fetch options for the fullscreen picker. Mirrors sidebar fill.
+
+        Returns ``(title, columns, rows)`` where each row is
+        ``(key, col1, col2, …)``.
+        """
         if kind == "agents":
             try:
                 caps = await self._client.list_capabilities()
             except Exception as exc:
                 self._append_line(f"[error] /agents failed: {exc}")
-                return "Select an agent command", []
+                return "Select an agent command", [], []
             if not caps:
                 self._append_line("[info] no agents registered on this server")
-                return "Select an agent command", []
-            options: list[tuple[str, str]] = []
+                return "Select an agent command", [], []
+            columns = ["Command", "Pool", "Description"]
+            rows: list[tuple[str, ...]] = []
             for cap in sorted(
                 caps,
                 key=lambda c: (c.get("agent_id") or "", c.get("command") or ""),
@@ -951,53 +1016,48 @@ class ChatApp(App[None]):
                 pool = str(cap.get("pool") or "local")
                 desc = str(cap.get("description") or "").strip()
                 value = f"/{agent_id}:{command}"
-                label = f"{value}  ·  pool={pool}"
-                if desc:
-                    label += f"  ·  {desc}"
-                options.append((value, label))
-            return "Select an agent command", options
+                rows.append((value, value, pool, desc or "—"))
+            return "Select an agent command", columns, rows
         if kind == "threads":
             try:
                 chats = await self._client.chat.list_chats()
             except Exception as exc:
                 self._append_line(f"[error] /threads failed: {exc}")
-                return "Select a chat thread", []
+                return "Select a chat thread", [], []
             if not chats:
                 self._append_line("[info] no chat threads yet")
-                return "Select a chat thread", []
-            options = []
+                return "Select a chat thread", [], []
+            columns = ["Name", "Messages", "ID"]
+            rows = []
             for c in chats:
-                marker = "* " if c.thread_id == self._chat_thread_id else "  "
-                name = c.name or "(unnamed)"
-                label = f"{marker}{name}  ·  {c.message_count} msgs  ·  {c.thread_id}"
-                options.append((c.thread_id, label))
-            return "Select a chat thread", options
+                marker = "▶ " if c.thread_id == self._chat_thread_id else ""
+                name = marker + (c.name or "(unnamed)")
+                rows.append((c.thread_id, name, str(c.message_count), c.thread_id[:8]))
+            return "Select a chat thread", columns, rows
         # artifacts
         thread_id = self._chat_thread_id or ""
-        rows: list[Any] = []
+        artifact_rows: list[Any] = []
         if thread_id:
             try:
                 from monet.core.artifacts import get_artifacts
 
-                rows = list(
+                artifact_rows = list(
                     await get_artifacts().query_recent(thread_id=thread_id, limit=50)
                 )
             except Exception as exc:
                 self._append_line(f"[error] /artifacts failed: {exc}")
-                return "Select an artifact", []
-        if not rows:
+                return "Select an artifact", [], []
+        if not artifact_rows:
             self._append_line("[info] no artifacts in this thread")
-            return "Select an artifact", []
-        options = []
-        for row in rows:
+            return "Select an artifact", [], []
+        columns = ["Key", "Kind", "ID"]
+        rows = []
+        for row in artifact_rows:
             art_id = str(getattr(row, "artifact_id", "") or getattr(row, "id", ""))
-            kind_str = str(getattr(row, "kind", "") or "")
-            key = str(getattr(row, "key", "") or "")
-            label_text = key or kind_str or art_id[:8]
-            if kind_str and key:
-                label_text = f"{label_text}  ·  {kind_str}"
-            options.append((art_id, label_text))
-        return "Select an artifact", options
+            kind_str = str(getattr(row, "kind", "") or "—")
+            key = str(getattr(row, "key", "") or "—")
+            rows.append((art_id, key, kind_str, art_id[:8]))
+        return "Select an artifact", columns, rows
 
     def _close_sidebar(self) -> None:
         with contextlib.suppress(Exception):
@@ -1028,6 +1088,28 @@ class ChatApp(App[None]):
         if kind == "artifacts":
             self._copy_artifact_url(value)
             return
+
+    def _on_sidebar_delete(self, kind: SidebarKind, value: str) -> None:
+        """Called by SidebarPanel after a successful thread delete."""
+        if kind != "threads":
+            return
+        if value == self._chat_thread_id:
+            log = self.query_one("#transcript", RichLog)
+            self.run_worker(self._cmd_new_thread(log), exclusive=False)
+        self._refresh_indicator()
+
+    async def _fullscreen_delete_thread(self, thread_id: str) -> bool:
+        """Delete callback passed to TablePickerScreen for the threads kind."""
+        try:
+            await self._client.chat.delete_chat(thread_id)
+        except Exception as exc:
+            self._append_line(f"[error] delete failed: {exc}")
+            return False
+        if thread_id == self._chat_thread_id:
+            log = self.query_one("#transcript", RichLog)
+            await self._cmd_new_thread(log)
+        self._refresh_indicator()
+        return True
 
     def on_resize(self, event: Any) -> None:
         """Swap sidebar → fullscreen picker if the terminal shrank below breakpoint."""
@@ -1078,7 +1160,67 @@ class ChatApp(App[None]):
             writer=self._append_line,
             busy_setter=self._set_busy,
             focus_prompt=self._focus_prompt,
+            mount_widgets=self._mount_hitl_widgets,
+            unmount_widgets=self._unmount_hitl_widgets,
         )
+
+    # ── HITL inline widgets ──────────────────────────────────────────
+
+    def _mount_hitl_widgets(self, form: dict[str, Any]) -> bool:
+        """Mount a widget tree for *form* via the TUI's render protocols.
+
+        Returns True when widgets were mounted (skip transcript-prompt
+        rendering, use widgets for resume), False when the app should
+        fall back to the existing text-parse path.
+        """
+        from monet.types import InterruptEnvelope
+
+        envelope = InterruptEnvelope.from_interrupt_values(form)
+        if envelope is None or not envelope_supports_widgets(envelope):
+            return False
+        try:
+            widget = build_hitl_widget(envelope, self._on_hitl_payload)
+            area = self.query_one("#transcript-area")
+            area.mount(widget)
+        except Exception:
+            _log.exception("mount hitl widgets failed")
+            return False
+        self._hitl_widget = widget
+        self._hitl_envelope = envelope
+        if envelope.prompt:
+            self._append_line(f"[info] {envelope.prompt}")
+        # Neutral hint — vocabulary-free so it works for any envelope
+        # whose render protocol matched. Text-path fallback stays
+        # advertised for users who prefer typing.
+        self._append_line("[info] select an option, or type a reply")
+        return True
+
+    def _unmount_hitl_widgets(self) -> None:
+        widget = self._hitl_widget
+        self._hitl_widget = None
+        self._hitl_envelope = None
+        if widget is None:
+            return
+        with contextlib.suppress(Exception):
+            widget.remove()
+
+    def _on_hitl_payload(self, payload: dict[str, Any] | None) -> None:
+        """Callback handed to every mounted HITL widget.
+
+        ``None`` means the widget tried to submit but found a required
+        field empty — surface a warning and leave the widget mounted
+        so the user can fix it. A valid dict is written to transcript
+        and handed to the :class:`InterruptCoordinator`.
+        """
+        envelope = self._hitl_envelope
+        if envelope is None:
+            return
+        if payload is None:
+            self.notify("please fill in every required field", severity="warning")
+            return
+        summary = build_submit_summary(envelope, payload)
+        self._append_line(f"[user] {summary}")
+        self._interrupts.consume_payload(payload)
 
     async def _drain_stream(
         self,

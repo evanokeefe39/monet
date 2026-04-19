@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ import httpx
 from opentelemetry import trace
 
 from monet.config import AuthConfig, OrchestrationConfig, QueueConfig
+from monet.exceptions import PushDispatchTerminal
 from monet.queue import TaskStatus
 from monet.queue.backends.memory import InMemoryTaskQueue
 from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
@@ -33,6 +35,10 @@ if TYPE_CHECKING:
 _log = logging.getLogger("monet.orchestration")
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
+
+# Push dispatch retry configuration. Monkeypatch in tests to skip real sleeps.
+_PUSH_MAX_ATTEMPTS: int = 3
+_PUSH_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 4.0, 16.0)
 
 # Module-level queue — set via configure_queue() at server boot.
 _task_queue: TaskQueue | None = None
@@ -221,8 +227,14 @@ async def invoke_agent(
         await _task_queue.enqueue(record)
         pool_cfg = _load_push_pool(pool)
         if pool_cfg is not None:
-            await _dispatch_push(task_id, record, pool_cfg)
-            span.set_attribute("agent.pool.type", "push")
+            try:
+                await _dispatch_push(task_id, record, pool_cfg, _task_queue)
+                span.set_attribute("agent.pool.type", "push")
+            except PushDispatchTerminal:
+                # Failure result already written to queue by _push_with_retry;
+                # fall through to wait_completion which resolves it immediately.
+                span.set_attribute("agent.pool.type", "push")
+                span.set_attribute("agent.dispatch_failed", True)
         # Forward worker-side progress into the current LangGraph stream
         # via emit_progress. Runs concurrently with wait_completion.
         progress_task = asyncio.create_task(_forward_progress(_task_queue, task_id))
@@ -266,9 +278,17 @@ def _load_push_pool(pool: str) -> PoolConfig | None:
 
 
 async def _dispatch_push(
-    task_id: str, record: TaskRecord, pool_cfg: PoolConfig
+    task_id: str,
+    record: TaskRecord,
+    pool_cfg: PoolConfig,
+    queue: TaskQueue,
 ) -> None:
-    """POST the dispatch envelope to a push-pool webhook."""
+    """POST the dispatch envelope to a push-pool webhook with retry.
+
+    On exhaustion or terminal 4xx, writes a DISPATCH_FAILED result to the
+    queue so ``wait_completion`` unblocks immediately, then raises
+    :exc:`~monet.exceptions.PushDispatchTerminal`.
+    """
     from monet.config import MONET_SERVER_URL
     from monet.config._env import read_str
     from monet.core._serialization import serialize_task_record
@@ -289,23 +309,134 @@ async def _dispatch_push(
         raise RuntimeError(msg)
 
     token = task_hmac(api_key, task_id)
+    task_payload = serialize_task_record(record)
     envelope = {
         "task_id": task_id,
         "token": token,
         "callback_url": f"{api_url.rstrip('/')}/api/v1/tasks/{task_id}",
-        "payload": serialize_task_record(record),
+        "payload": task_payload,
     }
-    headers = {}
+    headers: dict[str, str] = {}
     if pool_cfg.dispatch_secret:
         headers["Authorization"] = f"Bearer {pool_cfg.dispatch_secret}"
+
+    await _push_with_retry(
+        task_id,
+        queue,
+        pool_cfg.url,
+        headers,
+        envelope,
+        task_payload,
+        dispatch_secret=pool_cfg.dispatch_secret,
+    )
+
+
+async def _push_with_retry(
+    task_id: str,
+    queue: TaskQueue,
+    url: str,
+    headers: dict[str, str],
+    envelope: dict[str, Any],
+    task_payload: str,
+    *,
+    dispatch_secret: str | None = None,
+) -> None:
+    """POST with bounded exponential backoff.
+
+    Retries on connection errors, read timeouts, 429, and 5xx. Other 4xx
+    are treated as terminal and fail immediately. On exhaustion or terminal
+    error, writes a DISPATCH_FAILED result to the queue then raises
+    :exc:`~monet.exceptions.PushDispatchTerminal`.
+    """
+    _retryable_exceptions = (
+        httpx.ConnectError,
+        httpx.ReadTimeout,
+        httpx.RemoteProtocolError,
+    )
     client = await get_dispatch_client()
-    resp = await client.post(pool_cfg.url, json=envelope, headers=headers)
-    if resp.status_code >= 400:
-        msg = (
-            f"Push dispatch to {pool_cfg.url} for task {task_id} returned "
-            f"HTTP {resp.status_code}: {resp.text[:200]}"
+    last_exc: Exception | None = None
+
+    if isinstance(queue, RedisStreamsTaskQueue):
+        await queue.record_push_dispatch(
+            task_id, url, dispatch_secret, task_payload, attempt=0
         )
-        raise RuntimeError(msg)
+
+    for attempt in range(_PUSH_MAX_ATTEMPTS):
+        if isinstance(queue, RedisStreamsTaskQueue) and attempt > 0:
+            await queue.record_push_dispatch(
+                task_id, url, dispatch_secret, task_payload, attempt=attempt
+            )
+        try:
+            resp = await client.post(url, json=envelope, headers=headers)
+        except _retryable_exceptions as exc:
+            last_exc = exc
+            if attempt < _PUSH_MAX_ATTEMPTS - 1:
+                sleep_s = _PUSH_BACKOFF_SECONDS[attempt] * random.uniform(0.75, 1.25)
+                _log.warning(
+                    "push_dispatch retry %d/%d task=%s err=%s sleep=%.1fs",
+                    attempt + 1,
+                    _PUSH_MAX_ATTEMPTS,
+                    task_id,
+                    type(exc).__name__,
+                    sleep_s,
+                )
+                await asyncio.sleep(sleep_s)
+            continue
+
+        if resp.status_code < 400:
+            if isinstance(queue, RedisStreamsTaskQueue):
+                await queue.pop_push_dispatch(task_id)
+            return
+
+        if resp.status_code == 429 or resp.status_code >= 500:
+            last_exc = RuntimeError(f"HTTP {resp.status_code}")
+            if attempt < _PUSH_MAX_ATTEMPTS - 1:
+                sleep_s = _PUSH_BACKOFF_SECONDS[attempt] * random.uniform(0.75, 1.25)
+                _log.warning(
+                    "push_dispatch retry %d/%d task=%s status=%d sleep=%.1fs",
+                    attempt + 1,
+                    _PUSH_MAX_ATTEMPTS,
+                    task_id,
+                    resp.status_code,
+                    sleep_s,
+                )
+                await asyncio.sleep(sleep_s)
+            continue
+
+        # Terminal 4xx — fail immediately without retrying.
+        detail = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        _log.warning("push_dispatch terminal task_id=%s %s", task_id, detail)
+        await _write_dispatch_failed(task_id, queue, detail)
+        raise PushDispatchTerminal(
+            f"Push dispatch terminal for task {task_id}: {detail}"
+        )
+
+    # All attempts exhausted.
+    detail = f"exhausted {_PUSH_MAX_ATTEMPTS} attempts; last: {last_exc}"
+    _log.warning("push_dispatch exhausted task_id=%s %s", task_id, detail)
+    await _write_dispatch_failed(task_id, queue, detail)
+    raise PushDispatchTerminal(f"Push dispatch failed for task {task_id}: {detail}")
+
+
+async def _write_dispatch_failed(task_id: str, queue: TaskQueue, detail: str) -> None:
+    """Write a DISPATCH_FAILED result to the queue and clean up the tracking record."""
+    from monet.signals import SignalType
+    from monet.types import AgentResult, Signal
+
+    result = AgentResult(
+        success=False,
+        output="",
+        signals=(
+            Signal(
+                type=SignalType.DISPATCH_FAILED,
+                reason=f"dispatch_failed: {detail}",
+                metadata=None,
+            ),
+        ),
+    )
+    await queue.complete(task_id, result)
+    if isinstance(queue, RedisStreamsTaskQueue):
+        await queue.pop_push_dispatch(task_id)
 
 
 async def _forward_progress(queue: TaskQueue, task_id: str) -> None:

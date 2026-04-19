@@ -60,6 +60,7 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
             cfg.redis_uri,
             work_stream_maxlen=cfg.work_stream_maxlen,
             pool_size=cfg.redis_pool_size,
+            lease_ttl_seconds=cfg.lease_ttl_seconds,
         )
     raise ConfigError(
         MONET_QUEUE_BACKEND,
