@@ -229,7 +229,7 @@ async def run_turn(
         pending = await get_interrupt(thread_id)
         if not pending:
             if not had_output:
-                writer("[info] (no assistant response)")
+                writer("[error] run ended without output — check rate limits or config")
                 log.warning("turn ended with no output and no interrupt")
             return
         had_output = True  # interrupt form counts as output

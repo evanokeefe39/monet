@@ -68,6 +68,7 @@ __all__ = [
     "OTEL_SERVICE_NAME",
     "REDIS_URI",
     "TAVILY_API_KEY",
+    "XAI_API_KEY",
     "ConfigError",
     "agent_model",
     "agent_model_env",
@@ -214,6 +215,7 @@ OTEL_EXPORTER_OTLP_HEADERS: Final[str] = "OTEL_EXPORTER_OTLP_HEADERS"
 OTEL_SERVICE_NAME: Final[str] = "OTEL_SERVICE_NAME"
 GEMINI_API_KEY: Final[str] = "GEMINI_API_KEY"
 GROQ_API_KEY: Final[str] = "GROQ_API_KEY"
+XAI_API_KEY: Final[str] = "XAI_API_KEY"
 EXA_API_KEY: Final[str] = "EXA_API_KEY"
 TAVILY_API_KEY: Final[str] = "TAVILY_API_KEY"
 

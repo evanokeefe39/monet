@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>monet — S2: Self-Hosted Production</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'JetBrains Mono', monospace; background: #020617; min-height: 100vh; padding: 2rem; color: white; }
+    .container { max-width: 1300px; margin: 0 auto; }
+    .header { margin-bottom: 1.5rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #22d3ee; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container { background: rgba(15, 23, 42, 0.5); border-radius: 1rem; border: 1px solid #1e293b; padding: 1.5rem; overflow-x: auto; }
+    svg { width: 100%; min-width: 1100px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card-dot.orange { background: #fb923c; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .scenario-tag { display: inline-block; background: rgba(251, 191, 36, 0.15); border: 1px solid #fbbf24; color: #fbbf24; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; margin-left: 0.75rem; vertical-align: middle; font-weight: 600; letter-spacing: 0.05em; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-row">
+      <div class="pulse-dot"></div>
+      <h1>monet — S2: Self-Hosted Production</h1>
+      <span class="scenario-tag">YOUR OWN INFRA</span>
+    </div>
+    <p class="subtitle">aegra serve + managed Postgres/Redis • monet worker on remote machines • queue decouples orchestration from execution</p>
+  </div>
+
+  <div class="diagram-container">
+    <svg viewBox="0 0 1200 680">
+
+      <defs>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+        </marker>
+        <marker id="arr-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" />
+        </marker>
+        <marker id="arr-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399" />
+        </marker>
+        <marker id="arr-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24" />
+        </marker>
+        <marker id="arr-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" />
+        </marker>
+        <marker id="arr-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c" />
+        </marker>
+        <marker id="arr-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" />
+        </marker>
+        <marker id="arr-grey" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" />
+        </marker>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+      </defs>
+
+      <rect width="100%" height="100%" fill="url(#grid)" />
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- MACHINE 1: LAPTOP / CLIENT                           -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="20" y="20" width="300" height="100" rx="12" fill="rgba(120, 53, 15, 0.07)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="36" y="40" fill="#fbbf24" font-size="10" font-weight="700">LAPTOP — Developer</text>
+      <text x="36" y="53" fill="#64748b" font-size="8">your machine</text>
+
+      <rect x="36" y="65" width="130" height="44" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="101" y="83" fill="white" font-size="9" font-weight="600" text-anchor="middle">MonetClient</text>
+      <text x="101" y="97" fill="#94a3b8" font-size="8" text-anchor="middle">monet run &lt;task&gt;</text>
+
+      <rect x="176" y="65" width="130" height="44" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="241" y="83" fill="white" font-size="9" font-weight="600" text-anchor="middle">monet chat</text>
+      <text x="241" y="97" fill="#94a3b8" font-size="8" text-anchor="middle">Textual TUI</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- CLOUD REGION BOUNDARY                                 -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="20" y="135" width="1160" height="510" rx="14" fill="rgba(251, 191, 36, 0.03)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="10,5"/>
+      <text x="36" y="155" fill="#fbbf24" font-size="10" font-weight="700">YOUR CLOUD — us-west-2 (or any region)</text>
+      <text x="36" y="168" fill="#64748b" font-size="8">self-managed VPC • managed Postgres + managed Redis</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- ORCHESTRATION SERVER (Aegra)                          -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="40" y="188" width="360" height="440" rx="10" fill="rgba(251, 191, 36, 0.06)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="56" y="207" fill="#fbbf24" font-size="9" font-weight="700">ORCHESTRATION SERVER</text>
+      <text x="56" y="219" fill="#64748b" font-size="8">aegra serve — stateless, horizontally scalable</text>
+
+      <!-- Auth -->
+      <rect x="55" y="232" width="90" height="36" rx="5" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="100" y="247" fill="white" font-size="8" font-weight="600" text-anchor="middle">Auth</text>
+      <text x="100" y="260" fill="#94a3b8" font-size="7" text-anchor="middle">MONET_API_KEY</text>
+
+      <!-- Client HTTP arrow to server -->
+      <line x1="300" y1="87" x2="300" y2="250" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arr-cyan)" stroke-dasharray="6,4"/>
+      <text x="306" y="170" fill="#22d3ee" font-size="8">HTTPS</text>
+      <text x="306" y="182" fill="#64748b" font-size="7">monet.internal</text>
+
+      <!-- CHAT GRAPH -->
+      <rect x="55" y="278" width="155" height="115" rx="7" fill="rgba(8, 51, 68, 0.3)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="132" y="293" fill="#22d3ee" font-size="8" font-weight="700" text-anchor="middle">CHAT GRAPH</text>
+
+      <rect x="65" y="304" width="60" height="22" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="95" y="317" fill="white" font-size="7" font-weight="600" text-anchor="middle">parse</text>
+
+      <rect x="135" y="304" width="62" height="22" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="166" y="317" fill="white" font-size="7" font-weight="600" text-anchor="middle">triage</text>
+
+      <rect x="65" y="338" width="60" height="22" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="95" y="351" fill="white" font-size="7" font-weight="600" text-anchor="middle">respond</text>
+
+      <rect x="135" y="338" width="62" height="22" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="166" y="351" fill="white" font-size="7" font-weight="600" text-anchor="middle">planner</text>
+
+      <rect x="65" y="370" width="132" height="20" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="131" y="383" fill="white" font-size="7" font-weight="600" text-anchor="middle">specialist /agent:cmd</text>
+
+      <line x1="125" y1="315" x2="133" y2="315" stroke="#22d3ee" stroke-width="1" marker-end="url(#arr-cyan)"/>
+      <line x1="65" y1="326" x2="65" y2="336" stroke="#22d3ee" stroke-width="1" marker-end="url(#arr-cyan)"/>
+      <line x1="135" y1="326" x2="135" y2="336" stroke="#22d3ee" stroke-width="1" marker-end="url(#arr-cyan)"/>
+      <line x1="65" y1="360" x2="65" y2="368" stroke="#22d3ee" stroke-width="1" marker-end="url(#arr-cyan)"/>
+      <line x1="135" y1="360" x2="135" y2="368" stroke="#22d3ee" stroke-width="1" marker-end="url(#arr-cyan)"/>
+      <line x1="197" y1="349" x2="215" y2="349" stroke="#22d3ee" stroke-width="1" marker-end="url(#arr-cyan)"/>
+
+      <!-- PLANNING GRAPH -->
+      <rect x="55" y="408" width="330" height="105" rx="7" fill="rgba(6, 78, 59, 0.25)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="220" y="423" fill="#34d399" font-size="8" font-weight="700" text-anchor="middle">PLANNING GRAPH</text>
+
+      <rect x="65" y="435" width="85" height="24" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="107" y="449" fill="white" font-size="7" font-weight="600" text-anchor="middle">planner/plan</text>
+
+      <rect x="160" y="435" width="85" height="24" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="202" y="449" fill="white" font-size="7" font-weight="600" text-anchor="middle">researcher/fast</text>
+
+      <rect x="65" y="470" width="85" height="24" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="107" y="484" fill="white" font-size="7" font-weight="600" text-anchor="middle">analyst/ask</text>
+
+      <rect x="160" y="470" width="118" height="36" rx="5" fill="rgba(136, 19, 55, 0.35)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+      <text x="219" y="484" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">HUMAN APPROVAL</text>
+      <text x="219" y="496" fill="#94a3b8" font-size="6" text-anchor="middle">nemawashi gate</text>
+
+      <line x1="150" y1="447" x2="158" y2="447" stroke="#34d399" stroke-width="1" marker-end="url(#arr-emerald)"/>
+      <line x1="65" y1="459" x2="65" y2="468" stroke="#34d399" stroke-width="1" marker-end="url(#arr-emerald)"/>
+      <line x1="160" y1="459" x2="160" y2="468" stroke="#34d399" stroke-width="1" marker-end="url(#arr-emerald)"/>
+      <line x1="202" y1="459" x2="202" y2="468" stroke="#34d399" stroke-width="1" marker-end="url(#arr-emerald)"/>
+
+      <!-- execution graph -->
+      <rect x="55" y="528" width="330" height="88" rx="7" fill="rgba(76, 29, 149, 0.25)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="220" y="543" fill="#a78bfa" font-size="8" font-weight="700" text-anchor="middle">EXECUTION GRAPH</text>
+
+      <rect x="65" y="553" width="120" height="22" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="125" y="566" fill="white" font-size="7" font-weight="600" text-anchor="middle">load plan → phases/waves</text>
+
+      <rect x="195" y="553" width="120" height="22" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="255" y="566" fill="white" font-size="7" font-weight="600" text-anchor="middle">execute wave (Send API)</text>
+
+      <rect x="65" y="585" width="230" height="22" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="180" y="599" fill="white" font-size="7" font-weight="600" text-anchor="middle">QA/fast → final synthesis → kaizen</text>
+
+      <line x1="55" y1="513" x2="55" y2="526" stroke="#34d399" stroke-width="1.5" marker-end="url(#arr-emerald)"/>
+      <line x1="185" y1="564" x2="193" y2="564" stroke="#a78bfa" stroke-width="1" marker-end="url(#arr-violet)"/>
+      <line x1="65" y1="575" x2="65" y2="583" stroke="#a78bfa" stroke-width="1" marker-end="url(#arr-violet)"/>
+      <line x1="315" y1="564" x2="340" y2="564" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arr-violet)"/>
+
+      <!-- what server knows vs doesn't -->
+      <rect x="260" y="232" width="130" height="50" rx="5" fill="rgba(136, 19, 55, 0.12)" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="325" y="248" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">SERVER KNOWS</text>
+      <text x="325" y="260" fill="#94a3b8" font-size="6" text-anchor="middle">DAG structure</text>
+      <text x="325" y="271" fill="#94a3b8" font-size="6" text-anchor="middle">HITL decisions</text>
+      <text x="325" y="282" fill="#94a3b8" font-size="6" text-anchor="middle">artifact pointers</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- MANAGED SERVICES                                     -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="420" y="188" width="200" height="150" rx="8" fill="rgba(30, 41, 59, 0.3)" stroke="#64748b" stroke-width="1" stroke-dasharray="5,3"/>
+      <text x="432" y="206" fill="#94a3b8" font-size="8" font-weight="600">MANAGED SERVICES</text>
+
+      <!-- Postgres -->
+      <rect x="430" y="218" width="80" height="50" rx="5" fill="rgba(120, 53, 15, 0.35)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="470" y="236" fill="white" font-size="8" font-weight="600" text-anchor="middle">Postgres</text>
+      <text x="470" y="249" fill="#94a3b8" font-size="7" text-anchor="middle">LangGraph</text>
+      <text x="470" y="260" fill="#94a3b8" font-size="7" text-anchor="middle">Checkpoints</text>
+
+      <!-- Redis -->
+      <rect x="520" y="218" width="90" height="50" rx="5" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="565" y="236" fill="white" font-size="8" font-weight="600" text-anchor="middle">Redis</text>
+      <text x="565" y="249" fill="#94a3b8" font-size="7" text-anchor="middle">Task Queue</text>
+      <text x="565" y="260" fill="#94a3b8" font-size="7" text-anchor="middle">Pub/Sub signals</text>
+
+      <!-- Artifact Store (server-side, pointer-only) -->
+      <rect x="430" y="280" width="180" height="48" rx="5" fill="rgba(76, 29, 149, 0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="520" y="296" fill="white" font-size="8" font-weight="600" text-anchor="middle">ArtifactStore (server)</text>
+      <text x="520" y="310" fill="#94a3b8" font-size="7" text-anchor="middle">work_brief, RoutingSkeleton</text>
+      <text x="520" y="322" fill="#a78bfa" font-size="6" text-anchor="middle">pointer-only state</text>
+
+      <!-- arrows from server to infra -->
+      <line x1="400" y1="280" x2="428" y2="280" stroke="#a78bfa" stroke-width="1" marker-end="url(#arr-violet)" stroke-dasharray="3,3"/>
+      <line x1="400" y1="243" x2="428" y2="243" stroke="#fbbf24" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="400" y1="295" x2="428" y2="295" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- THE QUEUE — THE CRITICAL DECOUPling mechanism         -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="420" y="360" width="200" height="268" rx="8" fill="rgba(251, 146, 60, 0.08)" stroke="#fb923c" stroke-width="2"/>
+      <text x="520" y="378" fill="#fb923c" font-size="10" font-weight="700" text-anchor="middle">TASK QUEUE</text>
+      <text x="520" y="391" fill="#fb923c" font-size="8" text-anchor="middle">(Redis / Upstash)</text>
+      <text x="520" y="405" fill="#64748b" font-size="7" text-anchor="middle">poll-based, pull model</text>
+      <text x="520" y="415" fill="#64748b" font-size="7" text-anchor="middle">no inbound callbacks</text>
+
+      <!-- dashed line separator -->
+      <line x1="430" y1="425" x2="610" y2="425" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+
+      <!-- enqueue label -->
+      <text x="440" y="445" fill="#fb923c" font-size="7" font-weight="600">enqueue(RoutingNode)</text>
+      <text x="440" y="457" fill="#64748b" font-size="6">agent_id, command, depends_on</text>
+      <text x="440" y="467" fill="#64748b" font-size="6">NO: agent code, model calls,</text>
+      <text x="440" y="477" fill="#64748b" font-size="6">     runtime data, tool results</text>
+
+      <!-- dequeue label -->
+      <text x="440" y="497" fill="#fb923c" font-size="7" font-weight="600">dequeue() — worker polls</text>
+      <text x="440" y="509" fill="#64748b" font-size="6">only sees: what you put in</text>
+
+      <!-- signal labels -->
+      <text x="440" y="530" fill="#fb923c" font-size="7" font-weight="600">signals via Redis pub/sub</text>
+      <text x="440" y="542" fill="#64748b" font-size="6">needs_research, plan_ready</text>
+      <text x="440" y="554" fill="#64748b" font-size="6">needs_human_review</text>
+      <text x="440" y="566" fill="#64748b" font-size="6">semantic_error, escalation</text>
+      <text x="440" y="580" fill="#64748b" font-size="6">kaizen hook trigger</text>
+
+      <!-- arrow: execution → queue -->
+      <line x1="385" y1="568" x2="418" y2="568" stroke="#fb923c" stroke-width="2" marker-end="url(#arr-orange)"/>
+      <text x="401" y="562" fill="#fb923c" font-size="7">enqueue</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- WORKER MACHINE 1 — VPS / CLOUD RUN                    -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="640" y="188" width="255" height="268" rx="10" fill="rgba(6, 78, 59, 0.06)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="656" y="207" fill="#34d399" font-size="9" font-weight="700">WORKER — VPS / Cloud Run / etc.</text>
+      <text x="656" y="219" fill="#64748b" font-size="8">pool = "default" • monet worker</text>
+      <text x="656" y="230" fill="#64748b" font-size="8">you own the runtime environment</text>
+
+      <!-- agent implementations -->
+      <text x="656" y="250" fill="#34d399" font-size="8" font-weight="600">YOUR AGENT IMPLEMENTATIONS</text>
+
+      <rect x="656" y="260" width="100" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="706" y="276" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="706" y="289" fill="#94a3b8" font-size="7" text-anchor="middle">fast / deep</text>
+      <text x="706" y="299" fill="#64748b" font-size="6" text-anchor="middle">@agent def researcher(...)</text>
+
+      <rect x="766" y="260" width="100" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="816" y="276" fill="white" font-size="8" font-weight="600" text-anchor="middle">writer</text>
+      <text x="816" y="289" fill="#94a3b8" font-size="7" text-anchor="middle">deep</text>
+      <text x="816" y="299" fill="#64748b" font-size="6" text-anchor="middle">@agent def writer(...)</text>
+
+      <rect x="656" y="312" width="100" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="706" y="328" fill="white" font-size="8" font-weight="600" text-anchor="middle">qa</text>
+      <text x="706" y="341" fill="#94a3b8" font-size="7" text-anchor="middle">fast / deep</text>
+      <text x="706" y="351" fill="#64748b" font-size="6" text-anchor="middle">@agent def qa(...)</text>
+
+      <rect x="766" y="312" width="100" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="816" y="328" fill="white" font-size="8" font-weight="600" text-anchor="middle">analyst</text>
+      <text x="816" y="341" fill="#94a3b8" font-size="7" text-anchor="middle">ask</text>
+      <text x="816" y="351" fill="#64748b" font-size="6" text-anchor="middle">@agent def analyst(...)</text>
+
+      <!-- custom agent note -->
+      <rect x="656" y="366" width="210" height="36" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="761" y="380" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">+ any custom agents via @agent decorator</text>
+      <text x="761" y="393" fill="#94a3b8" font-size="6" text-anchor="middle">you control: model, tools, context injection</text>
+
+      <!-- worker runtime -->
+      <rect x="656" y="412" width="210" height="34" rx="5" fill="rgba(120, 53, 15, 0.2)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="761" y="425" fill="#fbbf24" font-size="7" font-weight="600" text-anchor="middle">WORKER RUNTIME</text>
+      <text x="761" y="438" fill="#94a3b8" font-size="6" text-anchor="middle">Python venv • LLM calls • tool execution</text>
+
+      <!-- queue poll arrow to worker -->
+      <line x1="520" y1="450" x2="638" y2="450" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arr-orange)"/>
+      <text x="579" y="444" fill="#fb923c" font-size="7">poll &amp; execute tasks</text>
+
+      <!-- worker → queue completion/results -->
+      <line x1="638" y1="500" x2="520" y2="500" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="579" y="510" fill="#64748b" font-size="7" text-anchor="middle">results via ArtifactStore pointer</text>
+
+      <!-- OpenTelemetry from worker -->
+      <rect x="640" y="535" width="255" height="36" rx="5" fill="rgba(251, 146, 60, 0.1)" stroke="#fb923c" stroke-width="1"/>
+      <text x="767" y="549" fill="#fb923c" font-size="7" font-weight="600" text-anchor="middle">OpenTelemetry — Langfuse / your exporter</text>
+      <text x="767" y="562" fill="#94a3b8" font-size="6" text-anchor="middle">traces from your worker env</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- WORKER MACHINE 2 — PHONE / EDGE (alternative)        -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="915" y="188" width="255" height="268" rx="10" fill="rgba(6, 78, 59, 0.06)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="931" y="207" fill="#34d399" font-size="9" font-weight="700">WORKER — Phone / Laptop / Edge</text>
+      <text x="931" y="219" fill="#64748b" font-size="8">pool = "local" or named pool</text>
+      <text x="931" y="230" fill="#64748b" font-size="8">monet worker --server-url monet.internal</text>
+
+      <text x="931" y="250" fill="#34d399" font-size="8" font-weight="600">AGENT IMPLEMENTATIONS (your code)</text>
+
+      <rect x="931" y="262" width="105" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="983" y="278" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="983" y="291" fill="#94a3b8" font-size="7" text-anchor="middle">fast / deep</text>
+      <text x="983" y="301" fill="#64748b" font-size="6" text-anchor="middle">you define it</text>
+
+      <rect x="931" y="314" width="105" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="983" y="330" fill="white" font-size="8" font-weight="600" text-anchor="middle">planner</text>
+      <text x="983" y="343" fill="#94a3b8" font-size="7" text-anchor="middle">plan</text>
+      <text x="983" y="353" fill="#64748b" font-size="6" text-anchor="middle">you define it</text>
+
+      <rect x="931" y="366" width="105" height="42" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="983" y="382" fill="white" font-size="8" font-weight="600" text-anchor="middle">writer</text>
+      <text x="983" y="395" fill="#94a3b8" font-size="7" text-anchor="middle">deep</text>
+      <text x="983" y="405" fill="#64748b" font-size="6" text-anchor="middle">you define it</text>
+
+      <rect x="1050" y="262" width="105" height="42" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="1102" y="278" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">+ custom</text>
+      <text x="1102" y="291" fill="#94a3b8" font-size="6" text-anchor="middle">your agents</text>
+      <text x="1102" y="301" fill="#64748b" font-size="6" text-anchor="middle">your runtime</text>
+
+      <rect x="1050" y="314" width="105" height="42" rx="5" fill="rgba(120, 53, 15, 0.2)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="1102" y="330" fill="#fbbf24" font-size="7" font-weight="600" text-anchor="middle">WORKER RUNTIME</text>
+      <text x="1102" y="343" fill="#94a3b8" font-size="6" text-anchor="middle">LLM, tools, API</text>
+
+      <!-- queue poll arrow -->
+      <line x1="520" y1="500" x2="520" y2="550" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+      <line x1="520" y1="550" x2="913" y2="550" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+      <line x1="913" y1="550" x2="913" y2="400" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4" marker-end="url(#arr-orange)"/>
+      <text x="718" y="544" fill="#fb923c" font-size="7">poll &amp; execute (pull model)</text>
+
+      <!-- worker → queue -->
+      <line x1="913" y1="380" x2="913" y2="570" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+      <line x1="913" y1="570" x2="620" y2="570" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+      <line x1="620" y1="570" x2="620" y2="628" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- WHAT THE ORCHESTRATOR NEVER SEES                     -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="640" y="610" width="530" height="50" rx="6" fill="rgba(136, 19, 55, 0.12)" stroke="#fb7185" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="660" y="627" fill="#fb7185" font-size="8" font-weight="700">ORCHESTRATOR IS BLIND TO:</text>
+      <text x="660" y="642" fill="#94a3b8" font-size="7">agent code • model choice • tool results • runtime logs • LLM calls • token usage • environment variables • hardware specs</text>
+      <text x="660" y="655" fill="#64748b" font-size="6">user decides what to leak into ArtifactStore / graph state</text>
+
+      <!-- LEGEND -->
+      <text x="40" y="628" fill="white" font-size="9" font-weight="600">Legend</text>
+      <rect x="40" y="636" width="12" height="8" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="58" y="643" fill="#94a3b8" font-size="8">Client / CLI</text>
+      <rect x="160" y="636" width="12" height="8" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+      <text x="178" y="643" fill="#94a3b8" font-size="8">Worker (you own)</text>
+      <rect x="315" y="636" width="12" height="8" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="333" y="643" fill="#94a3b8" font-size="8">ArtifactStore</text>
+      <rect x="445" y="636" width="12" height="8" rx="2" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1"/>
+      <text x="463" y="643" fill="#94a3b8" font-size="8">Task Queue (decoupling)</text>
+      <rect x="620" y="636" width="12" height="8" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="638" y="643" fill="#94a3b8" font-size="8">Cloud / Managed Infra</text>
+      <rect x="785" y="636" width="12" height="8" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
+      <text x="803" y="643" fill="#94a3b8" font-size="8">Security / Blind spot</text>
+
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header"><div class="card-dot amber"></div><h3>Scenario</h3></div>
+      <ul>
+        <li>• aegra serve + managed Postgres/Redis on your infra</li>
+        <li>• monet worker processes on any machine (VPS, Cloud Run, laptop, phone)</li>
+        <li>• Single MONET_API_KEY shared across server and all workers</li>
+        <li>• Pool name declared in monet.toml — used for routing</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-dot orange"></div><h3>Queue Decoupling (core design)</h3></div>
+      <ul>
+        <li>• Queue is the ONLY connection between orchestration and execution</li>
+        <li>• Pull model: workers poll Redis, no inbound firewall holes</li>
+        <li>• What goes in the queue: agent_id, command, depends_on</li>
+        <li>• What NEVER goes in: agent code, model calls, tool results, runtime data</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-dot rose"></div><h3>Orchestrator Blindness</h3></div>
+      <ul>
+        <li>• Server only sees: DAG structure, HITL decisions, artifact pointers</li>
+        <li>• User controls what leaks into graph state via ArtifactStore</li>
+        <li>• Agent runtime, LLM calls, tools, logs — always local to worker</li>
+        <li>• OTel traces from workers can ship to your exporter independently</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="footer">monet S2 — Self-Hosted Production • examples/deployed/server/ + examples/deployed/worker/</p>
+</div>
+</body>
+</html>

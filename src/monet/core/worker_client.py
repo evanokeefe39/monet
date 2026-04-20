@@ -277,3 +277,10 @@ class RemoteQueue:
             "Progress flows via POST /api/v1/tasks/{task_id}/progress "
             "from the worker to the server."
         )
+
+    async def await_completion(self, task_id: str, timeout: float) -> Any:
+        """Raise NotImplementedError — completion waits are server-side."""
+        raise NotImplementedError(
+            "await_completion is a server-side operation; "
+            "workers do not wait for task results."
+        )

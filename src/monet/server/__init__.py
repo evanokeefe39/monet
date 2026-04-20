@@ -35,7 +35,7 @@ def create_app(
     from fastapi import FastAPI as _FastAPI
 
     from monet.config import default_config_path
-    from monet.orchestration._invoke import configure_capability_index
+    from monet.orchestration import configure_capability_index
     from monet.server._capabilities import CapabilityIndex
     from monet.server._config import load_config
     from monet.server._deployment import DeploymentStore
@@ -59,7 +59,7 @@ def create_app(
     async def lifespan(app: _FastAPI) -> AsyncIterator[None]:
         import time as _time
 
-        from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+        from monet.queue import QueueMaintenance
 
         app.state.start_time = _time.monotonic()
         await deployments.initialize()
@@ -85,16 +85,16 @@ def create_app(
 
         sweeper_task = asyncio.create_task(_sweep_loop())
 
-        # Redis Streams queue sweeper — reclaims PEL entries whose lease
-        # has expired. Only active when the streams backend is wired.
-        if isinstance(queue, RedisStreamsTaskQueue):
-            interval = max(queue._lease_ttl / 3, 5.0)
+        # Queue sweeper — reclaims entries whose lease has expired.
+        # Only active when the backend supports maintenance operations.
+        if isinstance(queue, QueueMaintenance):
+            interval = max(queue.lease_ttl_seconds / 3, 5.0)
 
             async def _queue_sweep_loop() -> None:
                 while True:
                     await asyncio.sleep(interval)
                     try:
-                        await queue.reclaim_expired_internal()
+                        await queue.reclaim_expired()
                     except Exception:
                         logger.exception("Queue sweeper failed")
 
@@ -111,9 +111,8 @@ def create_app(
                 queue_sweeper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await queue_sweeper_task
-            if isinstance(queue, RedisStreamsTaskQueue):
-                await queue.close()
-            from monet.orchestration._invoke import close_dispatch_client
+            await queue.close()
+            from monet.orchestration import close_dispatch_client
 
             with contextlib.suppress(Exception):
                 await close_dispatch_client()

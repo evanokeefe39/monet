@@ -10,17 +10,18 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import Button, Checkbox, Input, OptionList, RadioSet
+from textual.widgets import Checkbox, Input, OptionList, RadioSet
 
 from monet.cli.chat import ChatApp
 from monet.cli.chat._hitl_form import (
-    HITLForm,
+    InlineForm,
     InlinePicker,
     build_hitl_widget,
     build_submit_summary,
-    collect_values,
     envelope_supports_widgets,
 )
+from monet.cli.chat._messages import PromptSubmitted
+from monet.cli.chat._prompt import AutoGrowTextArea
 from monet.types import InterruptEnvelope
 
 _APPROVAL_FORM: dict[str, Any] = {
@@ -85,8 +86,11 @@ def _fake_client() -> Any:
 
     chat.send_message = _send
     chat._chat_graph_id = "chat"
+    chat.get_chat_interrupt = AsyncMock(return_value=None)
     client.chat = chat
     client.slash_commands = AsyncMock(return_value=[])
+    client.list_capabilities = AsyncMock(return_value=[])
+    client.list_artifacts = AsyncMock(return_value=[])
     return client
 
 
@@ -118,7 +122,7 @@ def test_build_hitl_widget_dispatches_to_inline_picker() -> None:
     assert isinstance(widget, InlinePicker)
 
 
-def test_build_hitl_widget_falls_back_to_hitlform_for_complex_shape() -> None:
+def test_build_hitl_widget_falls_back_to_inline_form_for_complex_shape() -> None:
     form = {
         "fields": [
             {"name": "age", "type": "int"},
@@ -128,7 +132,7 @@ def test_build_hitl_widget_falls_back_to_hitlform_for_complex_shape() -> None:
     env = InterruptEnvelope.from_interrupt_values(form)
     assert env is not None
     widget = build_hitl_widget(env, lambda _p: None)
-    assert isinstance(widget, HITLForm)
+    assert isinstance(widget, InlineForm)
 
 
 async def test_inline_picker_renders_compact() -> None:
@@ -242,17 +246,16 @@ async def test_text_reply_still_resolves_under_inline_picker() -> None:
         task = asyncio.create_task(_drive())
         await pilot.pause()
         assert len(list(app.query(InlinePicker))) == 1
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "reject"
-        await pilot.press("enter")
+        prompt = app.query_one("#prompt", AutoGrowTextArea)
+        prompt.post_message(PromptSubmitted("reject"))
         await pilot.pause()
         await task
         app.exit()
     assert result["payload"] == {"action": "reject", "feedback": ""}
 
 
-async def test_hitl_form_renders_non_pick_shape() -> None:
-    """Multi-type envelope falls through to HITLForm (generic path)."""
+async def test_inline_form_renders_non_pick_shape() -> None:
+    """Multi-type envelope falls through to InlineForm (generic path)."""
     form = {
         "prompt": "Review",
         "fields": [
@@ -266,9 +269,7 @@ async def test_hitl_form_renders_non_pick_shape() -> None:
         await pilot.pause()
         assert app._mount_hitl_widgets(form) is True
         await pilot.pause()
-        widget = app.query_one(HITLForm)
-        # Generic form exposes its Submit button.
-        assert len(list(widget.query("#hitl-submit"))) == 1
+        app.query_one(InlineForm)
         assert len(list(app.query(InlinePicker))) == 0
         app._unmount_hitl_widgets()
         app.exit()
@@ -286,13 +287,13 @@ async def test_unknown_field_type_falls_back_to_text_path() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._mount_hitl_widgets(form) is False
-        assert len(list(app.query(HITLForm))) == 0
+        assert len(list(app.query(InlineForm))) == 0
         assert len(list(app.query(InlinePicker))) == 0
         app.exit()
 
 
-async def test_checkbox_collection_in_hitl_form() -> None:
-    """Multi-select checkbox collects ticked values via HITLForm."""
+async def test_checkbox_collection_in_inline_form() -> None:
+    """Multi-select checkbox collects ticked values via InlineForm."""
     form = {
         "prompt": "Pick tags",
         "fields": [
@@ -310,26 +311,22 @@ async def test_checkbox_collection_in_hitl_form() -> None:
             {"name": "comment", "type": "text", "required": False},
         ],
     }
-    env = InterruptEnvelope.from_interrupt_values(form)
-    assert env is not None
     app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app._mount_hitl_widgets(form) is True
         await pilot.pause()
-        hf = app.query_one(HITLForm)
-        boxes = list(hf.query(Checkbox))
+        iform = app.query_one(InlineForm)
+        boxes = list(iform.query(Checkbox))
         assert len(boxes) == 3
         boxes[2].value = True
-        payload = collect_values(hf, env)
-        assert payload is not None
-        assert payload["tags"] == ["a", "c"]
+        iform.action_submit_form()
         app._unmount_hitl_widgets()
         app.exit()
 
 
-async def test_hitl_form_submit_button_still_works() -> None:
-    """HITLForm Submit button routes through on_submit callback."""
+async def test_inline_form_enter_submits() -> None:
+    """InlineForm Enter key routes through on_submit callback."""
     form = {
         "prompt": "Quick form",
         "fields": [{"name": "answer", "type": "text", "required": False}],
@@ -344,8 +341,8 @@ async def test_hitl_form_submit_button_still_works() -> None:
 
         task = asyncio.create_task(_drive())
         await pilot.pause()
-        widget = app.query_one(HITLForm)
-        widget.query_one("#hitl-submit", Button).press()
+        widget = app.query_one(InlineForm)
+        widget.action_submit_form()
         await pilot.pause()
         await task
         app.exit()

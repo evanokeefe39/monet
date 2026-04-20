@@ -49,7 +49,7 @@ def _get_model(model_string: str, *, temperature: float = 0.0) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("planner", "google_genai:gemini-2.5-flash")
+    return agent_model("planner", "xai:grok-3-mini-fast")
 
 
 _PLANNER_EXCLUDE: tuple[str, ...] = ("planner",)

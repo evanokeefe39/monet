@@ -33,8 +33,7 @@ from monet.orchestration import (
 from monet.orchestration import (
     build_execution_subgraph as _build_execution_subgraph,
 )
-from monet.orchestration import configure_queue
-from monet.orchestration._invoke import get_queue
+from monet.orchestration import configure_queue, get_queue
 from monet.queue import InMemoryTaskQueue, TaskQueue
 
 if TYPE_CHECKING:

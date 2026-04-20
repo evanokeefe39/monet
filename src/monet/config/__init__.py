@@ -73,6 +73,7 @@ from ._graphs import (
     load_graph_roles,
 )
 from ._load import default_config_path, read_toml, read_toml_section
+from ._pools import PoolConfig, load_pool_config
 from ._schema import (
     ArtifactsConfig,
     AuthConfig,
@@ -135,6 +136,7 @@ __all__ = [
     "Entrypoint",
     "ObservabilityConfig",
     "OrchestrationConfig",
+    "PoolConfig",
     "QueueBackend",
     "QueueConfig",
     "ServerConfig",
@@ -145,6 +147,7 @@ __all__ = [
     "graph_role_env",
     "load_entrypoints",
     "load_graph_roles",
+    "load_pool_config",
     "pool_auth_env",
     "pool_url_env",
     "read_bool",

@@ -31,6 +31,7 @@ def _make_task(
 ) -> TaskRecord:
     ctx = _make_ctx(agent_id=agent_id, command=command)
     return {
+        "schema_version": 1,
         "task_id": str(uuid.uuid4()),
         "agent_id": agent_id,
         "command": command,
@@ -125,18 +126,19 @@ async def test_fail_posts_error_result() -> None:
     assert result.has_signal(SignalType.SEMANTIC_ERROR)
 
 
-async def test_wait_completion_cleans_up_memory() -> None:
-    """After wait_completion consumes a result, internal state is freed."""
-    q = InMemoryTaskQueue()
+async def test_wait_completion_result_accessible_within_ttl() -> None:
+    """Result cached within TTL window; second await returns same result."""
+    q = InMemoryTaskQueue(completion_ttl_seconds=600.0)
     task = _make_task(agent_id="agent")
     task_id = await q.enqueue(task)
     record = await q.claim("local", consumer_id="c1", block_ms=100)
     assert record is not None
     await q.complete(task_id, AgentResult(success=True, trace_id="t", run_id="r"))
-    await wait_completion(q, task_id, timeout=1.0)
-
-    assert task_id not in q._tasks
-    assert task_id not in q._completions
+    result = await wait_completion(q, task_id, timeout=1.0)
+    assert result.success is True
+    # Second await within TTL returns same result
+    result2 = await wait_completion(q, task_id, timeout=1.0)
+    assert result2.success is True
 
 
 async def test_concurrent_producers_consumers() -> None:

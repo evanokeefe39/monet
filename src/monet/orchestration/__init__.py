@@ -7,7 +7,22 @@ are locked by the graph builder implementations — changing them is a
 breaking change to the public API.
 """
 
-from ._invoke import configure_queue, invoke_agent
+from ._invoke import (
+    _PUSH_MAX_ATTEMPTS as PUSH_MAX_ATTEMPTS,
+)
+from ._invoke import (
+    _push_with_retry as push_with_retry,
+)
+from ._invoke import (
+    _write_dispatch_failed as write_dispatch_failed,
+)
+from ._invoke import (
+    close_dispatch_client,
+    configure_capability_index,
+    configure_queue,
+    get_queue,
+    invoke_agent,
+)
 from ._state import (
     ExecutionState,
     PlanningState,
@@ -23,6 +38,7 @@ from .planning_graph import build_planning_subgraph
 
 __all__ = [
     "AGENT_FAILED_EVENT_STATUS",
+    "PUSH_MAX_ATTEMPTS",
     "ChatState",
     "ExecutionState",
     "PlanningState",
@@ -34,6 +50,11 @@ __all__ = [
     "build_default_graph",
     "build_execution_subgraph",
     "build_planning_subgraph",
+    "close_dispatch_client",
+    "configure_capability_index",
     "configure_queue",
+    "get_queue",
     "invoke_agent",
+    "push_with_retry",
+    "write_dispatch_failed",
 ]

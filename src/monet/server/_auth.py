@@ -16,7 +16,6 @@ Two dependencies:
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 from typing import Annotated
 
@@ -24,6 +23,7 @@ from fastapi import HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from monet.config import AuthConfig
+from monet.core.auth import task_hmac
 
 __all__ = ["require_api_key", "require_task_auth", "task_hmac"]
 
@@ -32,11 +32,6 @@ _security = HTTPBearer(auto_error=True)
 # Lenient bearer — passes when Authorization is absent; used for
 # endpoints that must be accessible in keyless dev mode.
 _security_optional = HTTPBearer(auto_error=False)
-
-
-def task_hmac(api_key: str, task_id: str) -> str:
-    """Derive the per-task HMAC bearer. Hex digest of HMAC_SHA256."""
-    return hmac.new(api_key.encode(), task_id.encode(), hashlib.sha256).hexdigest()
 
 
 async def require_api_key(

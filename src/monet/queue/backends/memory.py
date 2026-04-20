@@ -33,6 +33,7 @@ _TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
 _SUBSCRIBER_QUEUE_MAX = 64
 
 _DEFAULT_COMPLETION_TTL = 600.0
+_MAX_PRUNED_IDS = 10_000
 
 
 class InMemoryTaskQueue:
@@ -40,11 +41,11 @@ class InMemoryTaskQueue:
 
     Per-pool queues ensure O(1) claim and FIFO ordering within each pool.
     Implements the six-method ``TaskQueue`` protocol plus a private
-    ``_await_completion`` used by ``wait_completion`` in orchestration
+    ``await_completion`` used by ``wait_completion`` in orchestration
     (isinstance-dispatched; not part of the protocol).
 
     Completed-task results are retained for ``completion_ttl_seconds``
-    (default 600 s) so a second ``_await_completion`` call within that
+    (default 600 s) so a second ``await_completion`` call within that
     window returns the cached result. After the TTL, the record is pruned
     and ``AwaitAlreadyConsumedError`` is raised to distinguish "expired" from
     "never existed" (``KeyError``).
@@ -77,6 +78,7 @@ class InMemoryTaskQueue:
 
     async def enqueue(self, task: TaskRecord) -> str:
         """Submit a pre-built TaskRecord. Raises on backpressure or duplicate id."""
+        self._prune_expired_completions()
         if self._max_pending and self.pending_count >= self._max_pending:
             msg = (
                 f"Queue backpressure: {self.pending_count} pending tasks "
@@ -142,11 +144,14 @@ class InMemoryTaskQueue:
         return record
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
-        """Post a successful result."""
+        """Post a successful result. Idempotent — skips if already terminal."""
         if task_id not in self._tasks:
             msg = f"Unknown task_id: {task_id}"
             raise KeyError(msg)
         record = self._tasks[task_id]
+        if record["status"] in _TERMINAL_STATUSES:
+            _log.debug("complete() already-terminal task %s, skipping", task_id)
+            return
         record["status"] = TaskStatus.COMPLETED
         record["result"] = result
         record["completed_at"] = datetime.now(UTC).isoformat()
@@ -161,11 +166,14 @@ class InMemoryTaskQueue:
         )
 
     async def fail(self, task_id: str, error: str) -> None:
-        """Post a failure."""
+        """Post a failure. Idempotent — skips if already terminal."""
         if task_id not in self._tasks:
             msg = f"Unknown task_id: {task_id}"
             raise KeyError(msg)
         record = self._tasks[task_id]
+        if record["status"] in _TERMINAL_STATUSES:
+            _log.debug("fail() already-terminal task %s, skipping", task_id)
+            return
         record["status"] = TaskStatus.FAILED
         record["result"] = AgentResult(
             success=False,
@@ -194,7 +202,7 @@ class InMemoryTaskQueue:
     def _prune_expired_completions(self) -> None:
         """Remove completed-task records that have exceeded the TTL.
 
-        Adds pruned IDs to ``_pruned_ids`` so ``_await_completion`` can
+        Adds pruned IDs to ``_pruned_ids`` so ``await_completion`` can
         raise ``AwaitAlreadyConsumedError`` instead of ``KeyError`` for callers
         that arrive after expiry.
         """
@@ -209,6 +217,10 @@ class InMemoryTaskQueue:
             self._completions.pop(tid, None)
             del self._completion_times[tid]
             self._pruned_ids.add(tid)
+        if len(self._pruned_ids) > _MAX_PRUNED_IDS:
+            excess = len(self._pruned_ids) - _MAX_PRUNED_IDS
+            for _ in range(excess):
+                self._pruned_ids.pop()
 
     # --- Progress streaming ---
 
@@ -245,7 +257,7 @@ class InMemoryTaskQueue:
 
     # --- Private helper for orchestration.wait_completion ---
 
-    async def _await_completion(self, task_id: str, timeout: float) -> AgentResult:
+    async def await_completion(self, task_id: str, timeout: float) -> AgentResult:
         """Block until the task is completed or failed.
 
         Isinstance-dispatched from ``monet.orchestration._invoke.wait_completion``.
@@ -297,3 +309,14 @@ class InMemoryTaskQueue:
             trace_id=record["context"]["trace_id"],
             run_id=record["context"]["run_id"],
         )
+
+    async def ping(self) -> bool:
+        """In-memory backend is always healthy."""
+        return True
+
+    @property
+    def backend_name(self) -> str:
+        return "memory"
+
+    async def close(self) -> None:
+        """No-op for in-memory backend."""

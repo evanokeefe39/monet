@@ -28,7 +28,7 @@ from monet.config import MONET_API_KEY, MONET_SERVER_URL
 _DEFAULT_LOG_PATH = Path.cwd() / ".cli-logs" / "chat.log"
 
 
-def _configure_chat_logging(path: Path) -> Path:
+def _configure_chat_logging(path: Path, verbose: bool = False) -> Path:
     """Route Python logging to *path* so the TUI has persistent observability.
 
     Textual swallows stdout/stderr while the app is running, so anything
@@ -36,10 +36,13 @@ def _configure_chat_logging(path: Path) -> Path:
     preserves tracebacks from the client, server-side retries, and any
     other module that logs. Existing handlers are removed so we don't
     double-log once the TUI takes over the terminal.
+
+    When *verbose* is True, the root logger is set to DEBUG and raw SSE
+    events are written to ``~/.monet/chat-debug.log`` for diagnostics.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(path, encoding="utf-8")
-    handler.setLevel(logging.INFO)
+    handler.setLevel(logging.DEBUG if verbose else logging.INFO)
     handler.setFormatter(
         logging.Formatter(
             "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -50,7 +53,22 @@ def _configure_chat_logging(path: Path) -> Path:
     for existing in list(root.handlers):
         root.removeHandler(existing)
     root.addHandler(handler)
-    root.setLevel(logging.INFO)
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    # Set up raw SSE debug log when verbose is enabled.
+    if verbose:
+        debug_log = Path.home() / ".monet" / "chat-debug.log"
+        debug_log.parent.mkdir(parents=True, exist_ok=True)
+        sse_handler = logging.FileHandler(debug_log, encoding="utf-8")
+        sse_handler.setLevel(logging.DEBUG)
+        sse_handler.setFormatter(
+            logging.Formatter("%(asctime)s SSE: %(message)s", datefmt="%H:%M:%S")
+        )
+        sse_logger = logging.getLogger("monet.cli.chat.sse")
+        sse_logger.setLevel(logging.DEBUG)
+        sse_logger.addHandler(sse_handler)
+        sse_logger.propagate = False
+
     return path
 
 
@@ -91,6 +109,15 @@ def _configure_chat_logging(path: Path) -> Path:
         "only way to see chat-side errors."
     ),
 )
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help=(
+        "Enable DEBUG-level logging and write raw SSE"
+        " events to ~/.monet/chat-debug.log."
+    ),
+)
 def chat(
     url: str,
     api_key: str | None,
@@ -100,10 +127,13 @@ def chat(
     session_name: str | None,
     graph_override: str | None,
     log_file: Path | None,
+    verbose: bool,
 ) -> None:
     """Interactive multi-turn conversation with the monet platform."""
     check_env()
-    resolved_log = _configure_chat_logging(log_file or _DEFAULT_LOG_PATH)
+    resolved_log = _configure_chat_logging(
+        log_file or _DEFAULT_LOG_PATH, verbose=verbose
+    )
     if not list_sessions:
         click.secho(f"chat logs → {resolved_log}", dim=True, err=True)
     try:
@@ -117,6 +147,7 @@ def chat(
                 session_name,
                 graph_override,
                 resolved_log,
+                verbose,
             )
         )
     except KeyboardInterrupt:
@@ -144,6 +175,7 @@ async def _chat_main(
     session_name: str | None,
     graph_override: str | None,
     log_path: Path,
+    verbose: bool,
 ) -> None:
     from monet.cli._run import _preflight_server
     from monet.cli.chat._app import ChatApp

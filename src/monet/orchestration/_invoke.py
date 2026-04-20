@@ -20,16 +20,14 @@ import httpx
 from opentelemetry import trace
 
 from monet.config import AuthConfig, OrchestrationConfig, QueueConfig
+from monet.core.auth import task_hmac
 from monet.exceptions import PushDispatchTerminal
-from monet.queue import TaskStatus
-from monet.queue.backends.memory import InMemoryTaskQueue
-from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
-from monet.server._auth import task_hmac
+from monet.queue import TASK_RECORD_SCHEMA_VERSION, QueueMaintenance, TaskStatus
 
 if TYPE_CHECKING:
+    from monet.config import PoolConfig
     from monet.queue import TaskQueue, TaskRecord
     from monet.server._capabilities import CapabilityIndex
-    from monet.server._config import PoolConfig
     from monet.types import AgentResult, AgentRunContext
 
 _log = logging.getLogger("monet.orchestration")
@@ -108,20 +106,14 @@ def _generate_trace_id() -> str:
 async def wait_completion(
     queue: TaskQueue, task_id: str, timeout: float
 ) -> AgentResult:
-    """Wait for a task's completion via a backend-appropriate channel.
-
-    Not part of the ``TaskQueue`` protocol — dispatches by concrete type
-    so the protocol stays minimal. Memory uses an asyncio.Event. The
-    Redis Streams branch lands in Phase 2 of the queue refactor.
+    """Wait for a task's completion via the protocol method.
 
     Raises:
         TimeoutError: if ``timeout`` seconds elapse without a result.
-        TypeError: if the queue backend does not support completion waits.
+        KeyError: if task_id was never enqueued.
+        AwaitAlreadyConsumedError: if result TTL has expired.
     """
-    if isinstance(queue, InMemoryTaskQueue | RedisStreamsTaskQueue):
-        return await queue._await_completion(task_id, timeout)
-    msg = f"wait_completion not supported for {type(queue).__name__}"
-    raise TypeError(msg)
+    return await queue.await_completion(task_id, timeout)
 
 
 async def invoke_agent(
@@ -192,6 +184,7 @@ async def invoke_agent(
 
     task_id = str(uuid.uuid4())
     record: TaskRecord = {
+        "schema_version": TASK_RECORD_SCHEMA_VERSION,
         "task_id": task_id,
         "agent_id": agent_id,
         "command": command,
@@ -267,7 +260,7 @@ def _load_push_pool(pool: str) -> PoolConfig | None:
     A missing monet.toml or unconfigured pool name falls through as
     ``None`` so local/pull pools skip the push branch transparently.
     """
-    from monet.server._config import load_config
+    from monet.config import load_pool_config as load_config
 
     try:
         pools = load_config()
@@ -358,13 +351,13 @@ async def _push_with_retry(
     client = await get_dispatch_client()
     last_exc: Exception | None = None
 
-    if isinstance(queue, RedisStreamsTaskQueue):
+    if isinstance(queue, QueueMaintenance):
         await queue.record_push_dispatch(
             task_id, url, dispatch_secret, task_payload, attempt=0
         )
 
     for attempt in range(_PUSH_MAX_ATTEMPTS):
-        if isinstance(queue, RedisStreamsTaskQueue) and attempt > 0:
+        if isinstance(queue, QueueMaintenance) and attempt > 0:
             await queue.record_push_dispatch(
                 task_id, url, dispatch_secret, task_payload, attempt=attempt
             )
@@ -386,7 +379,7 @@ async def _push_with_retry(
             continue
 
         if resp.status_code < 400:
-            if isinstance(queue, RedisStreamsTaskQueue):
+            if isinstance(queue, QueueMaintenance):
                 await queue.pop_push_dispatch(task_id)
             return
 
@@ -437,7 +430,7 @@ async def _write_dispatch_failed(task_id: str, queue: TaskQueue, detail: str) ->
         ),
     )
     await queue.complete(task_id, result)
-    if isinstance(queue, RedisStreamsTaskQueue):
+    if isinstance(queue, QueueMaintenance):
         await queue.pop_push_dispatch(task_id)
 
 

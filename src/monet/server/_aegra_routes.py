@@ -22,12 +22,12 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from fastapi import FastAPI
 
-from monet.orchestration._invoke import configure_capability_index
-from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+from monet.orchestration import configure_capability_index
+from monet.queue import QueueMaintenance
 from monet.server._capabilities import CapabilityIndex
 from monet.server._deployment import DeploymentStore
 from monet.server._routes import router
@@ -50,8 +50,13 @@ async def _reissue_in_flight_push(queue: object) -> None:
     or MONET_SERVER_URL is unset — silent continuation would drop every
     recovering task with no indication of the root cause.
     """
-    if not isinstance(queue, RedisStreamsTaskQueue):
+    if not isinstance(queue, QueueMaintenance):
         return
+    # queue satisfies both QueueMaintenance and TaskQueue in practice;
+    # cast for the push functions that accept TaskQueue.
+    from monet.queue import TaskQueue
+
+    task_queue = cast("TaskQueue", queue)
     records = await queue.list_in_flight_push_dispatches()
     if not records:
         return
@@ -77,10 +82,10 @@ async def _reissue_in_flight_push(queue: object) -> None:
             "re-dispatch but MONET_SERVER_URL is unset."
         )
 
-    from monet.orchestration._invoke import (
-        _PUSH_MAX_ATTEMPTS,
-        _push_with_retry,
-        _write_dispatch_failed,
+    from monet.orchestration import (
+        PUSH_MAX_ATTEMPTS,
+        push_with_retry,
+        write_dispatch_failed,
     )
     from monet.server._auth import task_hmac
 
@@ -99,14 +104,13 @@ async def _reissue_in_flight_push(queue: object) -> None:
             await queue.pop_push_dispatch(task_id)
             continue
 
-        if attempt >= _PUSH_MAX_ATTEMPTS:
+        if attempt >= PUSH_MAX_ATTEMPTS:
             logger.warning(
                 "push_dispatch restart_recovery: task %s exhausted, failing",
                 task_id,
             )
-            await _write_dispatch_failed(
-                task_id, queue, f"exhausted {attempt} attempts before server restart"
-            )
+            detail = f"exhausted {attempt} attempts before server restart"
+            await write_dispatch_failed(task_id, task_queue, detail)
             continue
 
         token = task_hmac(api_key, task_id)
@@ -121,9 +125,9 @@ async def _reissue_in_flight_push(queue: object) -> None:
             headers["Authorization"] = f"Bearer {dispatch_secret}"
 
         asyncio.create_task(  # noqa: RUF006
-            _push_with_retry(
+            push_with_retry(
                 task_id,
-                queue,
+                task_queue,
                 url,
                 headers,
                 envelope,
@@ -190,8 +194,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         interval = cfg.reclaim_interval_seconds
         while True:
             await asyncio.sleep(interval)
-            if isinstance(queue, RedisStreamsTaskQueue):
-                reclaimed = await queue.reclaim_expired_internal()
+            if isinstance(queue, QueueMaintenance):
+                reclaimed = await queue.reclaim_expired()
                 if reclaimed:
                     logger.info(
                         "PEL sweeper reclaimed %d expired entries", len(reclaimed)

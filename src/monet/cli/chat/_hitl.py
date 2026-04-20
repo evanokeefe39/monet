@@ -20,7 +20,10 @@ from monet.types import ApprovalAction, InterruptEnvelope
 def _hidden_defaults(form: dict[str, Any]) -> dict[str, Any]:
     """Carry-through defaults for ``hidden`` fields in *form*."""
     out: dict[str, Any] = {}
-    for f in form.get("fields") or []:
+    fields = form.get("fields")
+    if not isinstance(fields, list):
+        return out
+    for f in fields:
         if isinstance(f, dict) and f.get("type") == "hidden":
             name = str(f.get("name") or "")
             if name:
@@ -30,29 +33,41 @@ def _hidden_defaults(form: dict[str, Any]) -> dict[str, Any]:
 
 def _visible_fields(form: dict[str, Any]) -> list[dict[str, Any]]:
     """Fields that need user input (everything except ``hidden``)."""
-    return [
-        f
-        for f in form.get("fields") or []
-        if isinstance(f, dict) and f.get("type") != "hidden"
-    ]
+    fields = form.get("fields")
+    if not isinstance(fields, list):
+        return []
+    return [f for f in fields if isinstance(f, dict) and f.get("type") != "hidden"]
 
 
 def is_approval_form(form: dict[str, Any]) -> bool:
     """True when *form* carries an ``action`` radio with approve/reject options."""
+    if not form or not isinstance(form, dict):
+        return False
     envelope = InterruptEnvelope.from_interrupt_values(form)
-    return envelope.is_approval_form() if envelope is not None else False
+    if envelope is None or not envelope.fields:
+        return False
+    return envelope.is_approval_form()
 
 
 def format_form_prompt(form: dict[str, Any]) -> list[str]:
     """Render *form* as transcript lines telling the user how to respond."""
     lines: list[str] = []
+    if not form or not isinstance(form, dict):
+        return ["[info] graph paused — type your response"]
+    fields = form.get("fields") or []
+    if not fields:
+        return ["[info] graph paused — type your response"]
     prompt = str(form.get("prompt") or "Please respond:").strip()
     if prompt:
         lines.append(f"[info] {prompt}")
     if is_approval_form(form):
         lines.append("[info] Reply: approve | revise <feedback> | reject")
         return lines
+    # Guard: if no fields, fall back to generic prompt
     visible = _visible_fields(form)
+    if not visible:
+        lines.append("[info] graph paused — type your response")
+        return lines
     if len(visible) == 1:
         f = visible[0]
         label = str(f.get("label") or f.get("name") or "answer")
@@ -92,6 +107,8 @@ def parse_text_reply(form: dict[str, Any], text: str) -> dict[str, Any] | None:
     Returns ``None`` when *form* has an unrecognised shape or the reply
     doesn't match a recognised pattern — the caller re-prompts.
     """
+    if not isinstance(form, dict):
+        return None
     payload: dict[str, Any] = dict(_hidden_defaults(form))
     if is_approval_form(form):
         approval = parse_approval_reply(text)

@@ -38,6 +38,7 @@ def _make_task(i: int) -> TaskRecord:
         skills=[],
     )
     return {
+        "schema_version": 1,
         "task_id": f"load-{i}-{uuid.uuid4().hex[:8]}",
         "agent_id": "noop",
         "command": "default",

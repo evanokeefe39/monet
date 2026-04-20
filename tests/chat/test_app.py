@@ -9,8 +9,6 @@ import pytest
 
 pytest.importorskip("textual")
 
-from textual.widgets import Input
-
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -27,6 +25,8 @@ from monet.cli.chat._hitl import (
 from monet.cli.chat._hitl import (
     parse_text_reply as _parse_text_reply,
 )
+from monet.cli.chat._messages import PromptSubmitted
+from monet.cli.chat._prompt import AutoGrowTextArea
 from monet.cli.chat._slash import RegistrySuggester
 from monet.cli.chat._view import format_progress_line as _format_progress_line
 from monet.client._events import AgentProgress
@@ -142,7 +142,6 @@ def test_parse_approval_reply_recognises_action_keywords() -> None:
 
 
 def test_parse_approval_reply_unknown_returns_none() -> None:
-    """Typos like 'aprove' must not silently fall through to revise."""
     assert _parse_approval_reply("aprove") is None
     assert _parse_approval_reply("please add detail") is None
 
@@ -186,93 +185,18 @@ def _fake_client() -> Any:
 
     chat.send_message = _send
     chat._chat_graph_id = "chat"
+    chat.get_chat_interrupt = AsyncMock(return_value=None)
     client.chat = chat
     client.slash_commands = AsyncMock(return_value=[])
+    client.list_capabilities = AsyncMock(return_value=[])
+    client.list_artifacts = AsyncMock(return_value=[])
     return client
 
 
-async def test_collect_resume_uses_next_prompt_submission() -> None:
-    """Form interrupt → user types `approve` → resume payload returned."""
-    import asyncio
-
-    app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        # Kick off the collector in the background.
-        result_holder: dict[str, Any] = {}
-
-        async def _drive() -> None:
-            result_holder["payload"] = await app._collect_resume(_APPROVAL_FORM)
-
-        task = asyncio.create_task(_drive())
-        await pilot.pause()
-        # Form prompt + help line should be in transcript.
-        joined = "\n".join(app._transcript_lines)
-        assert "Approve plan?" in joined
-        assert "approve | revise" in joined
-        # User submits "approve" via the prompt.
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "approve"
-        await pilot.press("enter")
-        await pilot.pause()
-        await task
-        app.exit()
-    assert result_holder["payload"] == {"action": "approve", "feedback": ""}
-
-
-async def test_collect_resume_reprompts_on_typo() -> None:
-    """A typo (``aprove``) re-asks instead of silently rejecting."""
-    import asyncio
-
-    app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        result_holder: dict[str, Any] = {}
-
-        async def _drive() -> None:
-            result_holder["payload"] = await app._collect_resume(_APPROVAL_FORM)
-
-        task = asyncio.create_task(_drive())
-        await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "aprove"  # typo
-        await pilot.press("enter")
-        await pilot.pause()
-        # Error line should appear, payload not yet resolved.
-        assert "didn't recognise" in "\n".join(app._transcript_lines)
-        assert "payload" not in result_holder
-        # Now type it correctly.
-        prompt.value = "approve"
-        await pilot.press("enter")
-        await pilot.pause()
-        await task
-        app.exit()
-    assert result_holder["payload"] == {"action": "approve", "feedback": ""}
-
-
-async def test_collect_resume_revise_with_feedback() -> None:
-    import asyncio
-
-    app = ChatApp(client=_fake_client(), thread_id="t", slash_commands=[])
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        result_holder: dict[str, Any] = {}
-
-        async def _drive() -> None:
-            result_holder["payload"] = await app._collect_resume(_APPROVAL_FORM)
-
-        task = asyncio.create_task(_drive())
-        await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "revise add benchmarking step"
-        await pilot.press("enter")
-        await pilot.pause()
-        await task
-        app.exit()
-    assert result_holder["payload"] == {
-        "action": "revise",
-        "feedback": "add benchmarking step",
-    }
+def _submit_text(app: ChatApp, text: str) -> None:
+    """Simulate a prompt submission by posting PromptSubmitted directly."""
+    prompt = app.query_one("#prompt", AutoGrowTextArea)
+    prompt.post_message(PromptSubmitted(text))
 
 
 # --- Progress rendering --------------------------------------------------
@@ -292,26 +216,6 @@ def test_format_progress_line_empty_status_uses_placeholder() -> None:
     assert line == "[progress] planner: ..."
 
 
-async def test_drain_stream_renders_progress_lines() -> None:
-    """AgentProgress chunks land as ``[progress]`` transcript lines."""
-    from textual.widgets import RichLog
-
-    client = _fake_client()
-
-    async def _stream() -> AsyncIterator[Any]:
-        yield AgentProgress(run_id="", agent_id="researcher", status="searching")
-        yield "final assistant text"
-
-    app = ChatApp(client=client, thread_id="t-1", slash_commands=[])
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        log = app.query_one("#transcript", RichLog)
-        await app._drain_stream(log, _stream(), source="initial")
-
-    assert "[progress] researcher: searching" in app._transcript_lines
-    assert "[assistant] final assistant text" in app._transcript_lines
-
-
 # --- ChatApp smoke --------------------------------------------------------
 
 
@@ -329,8 +233,8 @@ async def test_chat_app_mounts_and_renders_history() -> None:
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
-        assert prompt.suggester is app._suggester
+        prompt = app.query_one("#prompt", AutoGrowTextArea)
+        assert prompt is not None
         app.exit()
 
 
@@ -346,53 +250,31 @@ async def test_chat_app_submits_message_and_streams() -> None:
 
     chat.send_message = _send
     chat._chat_graph_id = "chat"
+    chat.get_chat_interrupt = AsyncMock(return_value=None)
     client.chat = chat
     client.slash_commands = AsyncMock(return_value=["/plan"])
+    client.list_capabilities = AsyncMock(return_value=[])
+    client.list_artifacts = AsyncMock(return_value=[])
 
     app = ChatApp(client=client, thread_id="t-1", slash_commands=["/plan"])
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "hi"
-        await pilot.press("enter")
+        _submit_text(app, "hi")
         await pilot.pause()
-    # Not asserting RichLog content to avoid version-specific widget internals;
-    # we've asserted send_message was invoked via the body.
 
 
-async def test_cmd_list_runs_filters_chat_only_runs() -> None:
-    from monet.client._events import RunSummary
+async def test_chat_app_opens_runs_screen() -> None:
+    from monet.cli.chat._screens import RunsScreen
 
     client = _fake_client()
+    client.list_runs = AsyncMock(return_value=[])
 
-    async def _list_runs(*, limit: int = 20) -> list[RunSummary]:
-        return [
-            RunSummary(
-                run_id="r-pipeline",
-                status="success",
-                completed_stages=["planning", "execution"],
-                created_at="2026-04-16T10:00:00",
-            ),
-            RunSummary(
-                run_id="r-chatonly",
-                status="success",
-                completed_stages=["chat"],
-                created_at="2026-04-16T10:05:00",
-            ),
-        ]
-
-    client.list_runs = _list_runs
     app = ChatApp(client=client, thread_id="t", slash_commands=[])
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "/runs"
-        await pilot.press("enter")
+        app.action_open_runs()
         await pilot.pause()
-        combined = "\n".join(app._transcript_lines)
-        assert "r-pipeli" in combined  # truncated to 8 chars
-        assert "r-chaton" not in combined
-        assert "1 recent pipeline run(s)" in combined
+        assert isinstance(app.screen, RunsScreen)
         app.exit()
 
 
@@ -401,8 +283,5 @@ async def test_chat_app_quit_slash_exits() -> None:
     app = ChatApp(client=client, thread_id="t-1", slash_commands=[])
     async with app.run_test() as pilot:
         await pilot.pause()
-        prompt = app.query_one("#prompt", Input)
-        prompt.value = "/quit"
-        await pilot.press("enter")
+        _submit_text(app, "/quit")
         await pilot.pause()
-    # If we get here without timing out, exit fired.

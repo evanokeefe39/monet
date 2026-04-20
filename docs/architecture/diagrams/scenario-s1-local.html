@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>monet — S1: Local All-in-One</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'JetBrains Mono', monospace; background: #020617; min-height: 100vh; padding: 2rem; color: white; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    .header { margin-bottom: 1.5rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #22d3ee; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container { background: rgba(15, 23, 42, 0.5); border-radius: 1rem; border: 1px solid #1e293b; padding: 1.5rem; overflow-x: auto; }
+    svg { width: 100%; min-width: 900px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card-dot.orange { background: #fb923c; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .scenario-tag { display: inline-block; background: rgba(251, 191, 36, 0.15); border: 1px solid #fbbf24; color: #fbbf24; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; margin-left: 0.75rem; vertical-align: middle; font-weight: 600; letter-spacing: 0.05em; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-row">
+      <div class="pulse-dot"></div>
+      <h1>monet — S1: Local All-in-One</h1>
+      <span class="scenario-tag">DEVELOPMENT LAPTOP</span>
+    </div>
+    <p class="subtitle">monet dev — Aegra + Postgres + Redis in Docker, pool="local" (in-process workers)</p>
+  </div>
+
+  <div class="diagram-container">
+    <svg viewBox="0 0 900 600">
+
+      <defs>
+        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+        </marker>
+        <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" />
+        </marker>
+        <marker id="arrow-emerald" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#34d399" />
+        </marker>
+        <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24" />
+        </marker>
+        <marker id="arrow-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" />
+        </marker>
+        <marker id="arrow-orange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb923c" />
+        </marker>
+        <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" />
+        </marker>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+        </pattern>
+      </defs>
+
+      <rect width="100%" height="100%" fill="url(#grid)" />
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- LAPTOP BOUNDARY                                        -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="20" y="20" width="860" height="545" rx="14" fill="rgba(120, 53, 15, 0.05)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="36" y="40" fill="#fbbf24" font-size="10" font-weight="700">LAPTOP — your machine</text>
+      <text x="36" y="53" fill="#64748b" font-size="8">Python process • monet venv</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- DOCKER BOUNDARY (Postgres + Redis)                     -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="40" y="70" width="230" height="130" rx="8" fill="rgba(30, 41, 59, 0.3)" stroke="#64748b" stroke-width="1" stroke-dasharray="5,3"/>
+      <text x="52" y="87" fill="#94a3b8" font-size="8" font-weight="600">DOCKER CONTAINERS</text>
+
+      <!-- Postgres -->
+      <rect x="55" y="98" width="95" height="45" rx="6" fill="rgba(120, 53, 15, 0.35)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="102" y="115" fill="white" font-size="9" font-weight="600" text-anchor="middle">Postgres</text>
+      <text x="102" y="129" fill="#94a3b8" font-size="8" text-anchor="middle">:5432</text>
+      <text x="102" y="139" fill="#64748b" font-size="7" text-anchor="middle">state + checkpoints</text>
+
+      <!-- Redis -->
+      <rect x="160" y="98" width="95" height="45" rx="6" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="207" y="115" fill="white" font-size="9" font-weight="600" text-anchor="middle">Redis</text>
+      <text x="207" y="129" fill="#94a3b8" font-size="8" text-anchor="middle">:6379</text>
+      <text x="207" y="139" fill="#64748b" font-size="7" text-anchor="middle">task queue + pub/sub</text>
+
+      <text x="155" y="183" fill="#64748b" font-size="7" text-anchor="middle">monet dev manages lifecycle</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- AEGRA SERVER BOUNDARY                                  -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="290" y="70" width="580" height="475" rx="10" fill="rgba(251, 191, 36, 0.04)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="306" y="87" fill="#fbbf24" font-size="9" font-weight="700">AEGRA SERVER PROCESS (uvicorn)</text>
+      <text x="306" y="99" fill="#64748b" font-size="8">LangGraph Platform • FastAPI</text>
+
+      <!-- Auth box -->
+      <rect x="305" y="112" width="90" height="36" rx="5" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="350" y="127" fill="white" font-size="8" font-weight="600" text-anchor="middle">Auth</text>
+      <text x="350" y="140" fill="#94a3b8" font-size="7" text-anchor="middle">MONET_API_KEY</text>
+
+      <!-- MonetClient arrow -->
+      <line x1="295" y1="130" x2="303" y2="130" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+      <text x="299" y="124" fill="#22d3ee" font-size="7">HTTP</text>
+
+      <!-- ═══════════════════════════════ -->
+      <!-- CHAT GRAPH                       -->
+      <!-- ═══════════════════════════════ -->
+      <rect x="305" y="158" width="180" height="135" rx="7" fill="rgba(8, 51, 68, 0.3)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="395" y="173" fill="#22d3ee" font-size="8" font-weight="700" text-anchor="middle">CHAT GRAPH</text>
+
+      <rect x="315" y="182" width="70" height="24" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="350" y="196" fill="white" font-size="7" font-weight="600" text-anchor="middle">parse</text>
+
+      <rect x="400" y="182" width="72" height="24" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="436" y="196" fill="white" font-size="7" font-weight="600" text-anchor="middle">triage</text>
+
+      <rect x="315" y="220" width="70" height="24" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="350" y="234" fill="white" font-size="7" font-weight="600" text-anchor="middle">respond</text>
+
+      <rect x="400" y="220" width="72" height="24" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="436" y="234" fill="white" font-size="7" font-weight="600" text-anchor="middle">planner</text>
+
+      <rect x="315" y="258" width="157" height="24" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="393" y="272" fill="white" font-size="7" font-weight="600" text-anchor="middle">specialist /agent:cmd</text>
+
+      <line x1="385" y1="194" x2="398" y2="194" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+      <line x1="315" y1="206" x2="315" y2="218" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+      <line x1="400" y1="206" x2="400" y2="218" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+      <line x1="315" y1="244" x2="315" y2="256" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+      <line x1="400" y1="244" x2="400" y2="256" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+      <line x1="472" y1="232" x2="490" y2="232" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrow-cyan)"/>
+      <text x="327" y="209" fill="#64748b" font-size="6">/plan</text>
+      <text x="406" y="209" fill="#64748b" font-size="6">free text</text>
+      <text x="317" y="238" fill="#64748b" font-size="6">chat</text>
+      <text x="407" y="238" fill="#64748b" font-size="6">direct</text>
+
+      <!-- ═════════════════════════════════ -->
+      <!-- PLANNING GRAPH                    -->
+      <!-- ═════════════════════════════════ -->
+      <rect x="500" y="158" width="355" height="135" rx="7" fill="rgba(6, 78, 59, 0.25)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="677" y="173" fill="#34d399" font-size="8" font-weight="700" text-anchor="middle">PLANNING GRAPH</text>
+
+      <rect x="513" y="185" width="90" height="28" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="558" y="199" fill="white" font-size="7" font-weight="600" text-anchor="middle">planner/plan</text>
+      <text x="558" y="209" fill="#64748b" font-size="6" text-anchor="middle">structured output</text>
+
+      <rect x="617" y="185" width="90" height="28" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="662" y="199" fill="white" font-size="7" font-weight="600" text-anchor="middle">researcher/fast</text>
+      <text x="662" y="209" fill="#64748b" font-size="6" text-anchor="middle">on-demand</text>
+
+      <rect x="513" y="225" width="90" height="28" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="558" y="239" fill="white" font-size="7" font-weight="600" text-anchor="middle">analyst/ask</text>
+      <text x="558" y="249" fill="#64748b" font-size="6" text-anchor="middle">on-demand</text>
+
+      <rect x="617" y="225" width="130" height="46" rx="5" fill="rgba(136, 19, 55, 0.35)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+      <text x="682" y="241" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">HUMAN APPROVAL</text>
+      <text x="682" y="252" fill="#94a3b8" font-size="6" text-anchor="middle">nemawashi gate</text>
+      <text x="682" y="262" fill="#94a3b8" font-size="6" text-anchor="middle">MAX_REVISIONS=3</text>
+
+      <rect x="513" y="265" width="234" height="24" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="630" y="279" fill="white" font-size="7" font-weight="600" text-anchor="middle">work_brief + RoutingSkeleton → ArtifactStore</text>
+
+      <line x1="603" y1="199" x2="615" y2="199" stroke="#34d399" stroke-width="1" marker-end="url(#arrow-emerald)"/>
+      <line x1="513" y1="213" x2="513" y2="223" stroke="#34d399" stroke-width="1" marker-end="url(#arrow-emerald)"/>
+      <line x1="603" y1="239" x2="615" y2="239" stroke="#34d399" stroke-width="1" marker-end="url(#arrow-emerald)"/>
+      <line x1="662" y1="213" x2="662" y2="223" stroke="#34d399" stroke-width="1" marker-end="url(#arrow-emerald)"/>
+      <line x1="558" y1="239" x2="558" y2="265" stroke="#34d399" stroke-width="1" marker-end="url(#arrow-emerald)"/>
+      <!-- revise loop -->
+      <path d="M 617 248 Q 513 248 513 223" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="548" y="245" fill="#fb7185" font-size="6">revise</text>
+      <text x="607" y="196" fill="#64748b" font-size="6">needs_research</text>
+      <text x="615" y="236" fill="#64748b" font-size="6">plan_ready</text>
+
+      <!-- planning → execution -->
+      <line x1="747" y1="277" x2="765" y2="277" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-emerald)"/>
+      <text x="756" y="271" fill="#94a3b8" font-size="7">approved</text>
+
+      <!-- ═════════════════════════════════ -->
+      <!-- EXECUTION GRAPH                   -->
+      <!-- ═════════════════════════════════ -->
+      <rect x="500" y="308" width="355" height="130" rx="7" fill="rgba(76, 29, 149, 0.25)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="677" y="323" fill="#a78bfa" font-size="8" font-weight="700" text-anchor="middle">EXECUTION GRAPH</text>
+
+      <rect x="513" y="335" width="130" height="24" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="578" y="349" fill="white" font-size="7" font-weight="600" text-anchor="middle">load plan → phases/waves</text>
+
+      <rect x="513" y="370" width="130" height="24" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="578" y="384" fill="white" font-size="7" font-weight="600" text-anchor="middle">execute wave (Send API)</text>
+
+      <rect x="660" y="370" width="95" height="24" rx="4" fill="rgba(136, 19, 55, 0.5)" stroke="#fb7185" stroke-width="1"/>
+      <text x="707" y="384" fill="white" font-size="7" font-weight="600" text-anchor="middle">QA/fast (jidoka)</text>
+
+      <rect x="513" y="408" width="242" height="24" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="634" y="422" fill="white" font-size="7" font-weight="600" text-anchor="middle">final synthesis → kaizen hook → ArtifactStore</text>
+
+      <line x1="513" y1="359" x2="513" y2="368" stroke="#a78bfa" stroke-width="1" marker-end="url(#arrow-violet)"/>
+      <line x1="513" y1="394" x2="513" y2="406" stroke="#a78bfa" stroke-width="1" marker-end="url(#arrow-violet)"/>
+      <line x1="643" y1="375" x2="658" y2="382" stroke="#a78bfa" stroke-width="1" marker-end="url(#arrow-violet)"/>
+      <!-- retry loop -->
+      <path d="M 660 394 Q 660 440 578 440 Q 530 440 530 418" fill="none" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="540" y1="408" x2="530" y2="406" stroke="#fb7185" stroke-width="1" marker-end="url(#arrow-rose)"/>
+      <text x="598" y="436" fill="#fb7185" font-size="6">retry / needs_human_review</text>
+
+      <!-- ═════════════════════════════════ -->
+      <!-- TASK QUEUE DISPATCH               -->
+      <!-- ═════════════════════════════════ -->
+      <line x1="830" y1="390" x2="855" y2="390" stroke="#fb923c" stroke-width="2" marker-end="url(#arrow-orange)"/>
+      <text x="842" y="384" fill="#fb923c" font-size="7">enqueue</text>
+
+      <!-- ═════════════════════════════════════ -->
+      <!-- POOL="LOCAL" — IN-PROCESS WORKERS     -->
+      <!-- ═════════════════════════════════════ -->
+      <rect x="500" y="452" width="355" height="82" rx="7" fill="rgba(6, 78, 59, 0.1)" stroke="#34d399" stroke-width="1" stroke-dasharray="5,4"/>
+      <text x="516" y="468" fill="#34d399" font-size="8" font-weight="600">pool="local" — IN-PROCESS WORKER THREADS (background tasks)</text>
+
+      <!-- Agent pool boxes -->
+      <rect x="513" y="480" width="70" height="44" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="548" y="496" fill="white" font-size="8" font-weight="600" text-anchor="middle">planner</text>
+      <text x="548" y="509" fill="#94a3b8" font-size="7" text-anchor="middle">plan</text>
+      <text x="548" y="519" fill="#64748b" font-size="6" text-anchor="middle">agent</text>
+
+      <rect x="593" y="480" width="70" height="44" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="628" y="496" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="628" y="509" fill="#94a3b8" font-size="7" text-anchor="middle">fast/deep</text>
+      <text x="628" y="519" fill="#64748b" font-size="6" text-anchor="middle">agent</text>
+
+      <rect x="673" y="480" width="70" height="44" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="708" y="496" fill="white" font-size="8" font-weight="600" text-anchor="middle">writer</text>
+      <text x="708" y="509" fill="#94a3b8" font-size="7" text-anchor="middle">deep</text>
+      <text x="708" y="519" fill="#64748b" font-size="6" text-anchor="middle">agent</text>
+
+      <rect x="753" y="480" width="70" height="44" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="788" y="496" fill="white" font-size="8" font-weight="600" text-anchor="middle">qa</text>
+      <text x="788" y="509" fill="#94a3b8" font-size="7" text-anchor="middle">fast/deep</text>
+      <text x="788" y="519" fill="#64748b" font-size="6" text-anchor="middle">agent</text>
+
+      <!-- queue pull arrows from local pool -->
+      <line x1="513" y1="452" x2="513" y2="478" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="593" y1="452" x2="593" y2="478" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="673" y1="452" x2="673" y2="478" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="753" y1="452" x2="753" y2="478" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="783" y1="452" x2="830" y2="452" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="830" y1="452" x2="830" y2="390" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="840" y="420" fill="#fb923c" font-size="7">poll &amp; execute</text>
+
+      <!-- queue arrow from Redis to pool -->
+      <line x1="220" y1="120" x2="220" y2="500" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,4"/>
+      <line x1="220" y1="500" x2="511" y2="500" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,4"/>
+      <line x1="511" y1="500" x2="511" y2="478" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,4" marker-end="url(#arrow-orange)"/>
+
+      <!-- ═════════════════════════════════ -->
+      <!-- ARTIFACT STORE                      -->
+      <!-- ═════════════════════════════════ -->
+      <rect x="305" y="308" width="175" height="80" rx="6" fill="rgba(76, 29, 149, 0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="392" y="328" fill="white" font-size="9" font-weight="600" text-anchor="middle">ArtifactStore</text>
+      <text x="392" y="345" fill="#94a3b8" font-size="8" text-anchor="middle">work_brief</text>
+      <text x="392" y="358" fill="#94a3b8" font-size="8" text-anchor="middle">RoutingSkeleton (DAG)</text>
+      <text x="392" y="371" fill="#94a3b8" font-size="8" text-anchor="middle">phase outputs</text>
+      <text x="392" y="382" fill="#a78bfa" font-size="7" text-anchor="middle">pointer-only state</text>
+
+      <!-- ArtifactStore arrows to execution -->
+      <line x1="480" y1="370" x2="511" y2="370" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arrow-violet)"/>
+      <text x="495" y="364" fill="#64748b" font-size="7">pointer</text>
+
+      <!-- OTel note -->
+      <rect x="305" y="400" width="175" height="36" rx="5" fill="rgba(251, 146, 60, 0.15)" stroke="#fb923c" stroke-width="1"/>
+      <text x="392" y="414" fill="#fb923c" font-size="8" font-weight="600" text-anchor="middle">OpenTelemetry</text>
+      <text x="392" y="427" fill="#94a3b8" font-size="7" text-anchor="middle">traces through all graphs</text>
+
+      <!-- execution blind -->
+      <rect x="305" y="448" width="175" height="30" rx="5" fill="rgba(136, 19, 55, 0.15)" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="392" y="461" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">server sees: DAG + HITL decisions only</text>
+      <text x="392" y="473" fill="#64748b" font-size="6" text-anchor="middle">not: agent code, runtime data, model calls</text>
+
+      <!-- CLI / Client -->
+      <rect x="40" y="220" width="170" height="65" rx="6" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="125" y="240" fill="white" font-size="9" font-weight="600" text-anchor="middle">monet CLI / Client</text>
+      <text x="125" y="255" fill="#94a3b8" font-size="8" text-anchor="middle">monet run &lt;task&gt;</text>
+      <text x="125" y="268" fill="#94a3b8" font-size="8" text-anchor="middle">monet chat (Textual TUI)</text>
+      <text x="125" y="280" fill="#22d3ee" font-size="7" text-anchor="middle">MonetClient(localhost:2026)</text>
+
+      <line x1="210" y1="252" x2="302" y2="252" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-cyan)"/>
+      <text x="256" y="246" fill="#22d3ee" font-size="7">HTTP REST</text>
+
+      <!-- LEGEND -->
+      <text x="40" y="555" fill="white" font-size="9" font-weight="600">Legend</text>
+      <rect x="40" y="563" width="12" height="8" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="58" y="570" fill="#94a3b8" font-size="8">Client / CLI</text>
+      <rect x="140" y="563" width="12" height="8" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+      <text x="158" y="570" fill="#94a3b8" font-size="8">Agent (worker)</text>
+      <rect x="255" y="563" width="12" height="8" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="273" y="570" fill="#94a3b8" font-size="8">Artifact / State</text>
+      <rect x="370" y="563" width="12" height="8" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="388" y="570" fill="#94a3b8" font-size="8">Cloud / Infra</text>
+      <rect x="495" y="563" width="12" height="8" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
+      <text x="513" y="570" fill="#94a3b8" font-size="8">Security / HITL</text>
+      <rect x="610" y="563" width="12" height="8" rx="2" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1"/>
+      <text x="628" y="570" fill="#94a3b8" font-size="8">Queue / Redis</text>
+      <line x1="710" y1="567" x2="722" y2="567" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="728" y="570" fill="#94a3b8" font-size="8">Revise loop</text>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header"><div class="card-dot amber"></div><h3>Scenario</h3></div>
+      <ul>
+        <li>• Single laptop, no remote infra</li>
+        <li>• monet dev starts Aegra + Postgres + Redis via Docker</li>
+        <li>• pool="local" — workers run as background tasks in the server process</li>
+        <li>• MonetClient points to localhost:2026</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-dot violet"></div><h3>Key Design Points</h3></div>
+      <ul>
+        <li>• Orchestration server (Aegra) is blind to execution details</li>
+        <li>• Only sees: DAG structure + what user leaks into graph state</li>
+        <li>• Agents are opaque capability units — pool="local" is the dev default</li>
+        <li>• ArtifactStore holds pointer-only state (work_brief, RoutingSkeleton)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-dot rose"></div><h3>Separation of Concerns</h3></div>
+      <ul>
+        <li>• Server owns: graph orchestration, HITL gates, artifact pointers</li>
+        <li>• Queue owns: task dispatch, polling, pub/sub signals</li>
+        <li>• Workers own: agent runtime, model calls, tool execution</li>
+        <li>• User owns: what goes into graph state (and what doesn't)</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="footer">monet S1 — Local All-in-One • examples/quickstart, examples/local, examples/custom-graph</p>
+</div>
+</body>
+</html>

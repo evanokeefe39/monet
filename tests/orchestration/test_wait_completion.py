@@ -1,7 +1,7 @@
 """Race-scenario tests for wait_completion.
 
 Verifies the subscribe-then-GET pattern in
-``RedisStreamsTaskQueue._await_completion`` handles:
+``RedisStreamsTaskQueue.await_completion`` handles:
 
 1. Result lands BEFORE subscribe (caught by initial GET).
 2. Result lands AFTER subscribe (caught by PUBLISH notification).
@@ -30,6 +30,7 @@ from monet.types import AgentResult
 
 def _make_task(pool: str = "local") -> TaskRecord:
     return {
+        "schema_version": 1,
         "task_id": str(uuid.uuid4()),
         "agent_id": "a",
         "command": "fast",
@@ -124,9 +125,11 @@ async def test_wait_completion_memory_backend() -> None:
     assert observed.output == "m"
 
 
-async def test_wait_completion_rejects_unknown_backend() -> None:
+async def test_wait_completion_rejects_non_protocol_backend() -> None:
+    """A queue missing await_completion raises AttributeError."""
+
     class FakeQueue:
         pass
 
-    with pytest.raises(TypeError, match="wait_completion not supported"):
+    with pytest.raises(AttributeError):
         await wait_completion(FakeQueue(), "t", timeout=0.1)  # type: ignore[arg-type]

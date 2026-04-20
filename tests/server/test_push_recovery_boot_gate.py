@@ -111,7 +111,7 @@ async def test_push_records_with_credentials_dispatches(
         return m
 
     with (
-        patch("monet.orchestration._invoke._push_with_retry", new_callable=AsyncMock),
+        patch("monet.orchestration.push_with_retry", new_callable=AsyncMock),
         patch(
             "monet.server._aegra_routes.asyncio.create_task",
             side_effect=_fake_create_task,
@@ -131,7 +131,7 @@ async def test_exhausted_push_record_fails_not_dispatches(
 ) -> None:
     """Exhausted push records are failed, not re-dispatched."""
 
-    from monet.orchestration._invoke import _PUSH_MAX_ATTEMPTS
+    from monet.orchestration import PUSH_MAX_ATTEMPTS as _PUSH_MAX_ATTEMPTS
     from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 
     exhausted = [
@@ -159,7 +159,7 @@ async def test_exhausted_push_record_fails_not_dispatches(
 
     with (
         patch(
-            "monet.orchestration._invoke._write_dispatch_failed", new_callable=AsyncMock
+            "monet.orchestration.write_dispatch_failed", new_callable=AsyncMock
         ) as mock_fail,
         patch(
             "monet.server._aegra_routes.asyncio.create_task",

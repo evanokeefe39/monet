@@ -55,9 +55,7 @@ async def test_reissue_dispatches_in_flight_task(
     async def _fake_push_with_retry(*args: Any, **kwargs: Any) -> None:
         dispatched.append(args[0])  # task_id
 
-    monkeypatch.setattr(
-        "monet.orchestration._invoke._push_with_retry", _fake_push_with_retry
-    )
+    monkeypatch.setattr("monet.orchestration.push_with_retry", _fake_push_with_retry)
     monkeypatch.setenv("MONET_API_KEY", "test-api-key")
     monkeypatch.setenv("MONET_SERVER_URL", "http://orchestrator.example")
 
@@ -92,9 +90,9 @@ async def test_reissue_fails_exhausted_task(
     async def _fake_write_failed(tid: str, *_: Any, **__: Any) -> None:
         write_failed_calls.append(tid)
 
-    monkeypatch.setattr(
-        "monet.orchestration._invoke._write_dispatch_failed", _fake_write_failed
-    )
+    monkeypatch.setattr("monet.orchestration.write_dispatch_failed", _fake_write_failed)
+    monkeypatch.setenv("MONET_API_KEY", "test-key")
+    monkeypatch.setenv("MONET_SERVER_URL", "http://localhost:2026")
 
     await _reissue_in_flight_push(q)
     assert task_id in write_failed_calls

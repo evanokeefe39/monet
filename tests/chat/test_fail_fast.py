@@ -69,6 +69,8 @@ async def test_server_unreachable_fails_before_tui(
             resume_id=None,
             session_name=None,
             graph_override=None,
+            log_path=__import__("pathlib").Path("/dev/null"),
+            verbose=False,
         )
     assert exc.value.code == 2
 
@@ -98,6 +100,8 @@ async def test_chat_graph_missing_fails_before_tui(
             resume_id=None,
             session_name=None,
             graph_override=None,
+            log_path=__import__("pathlib").Path("/dev/null"),
+            verbose=False,
         )
     assert exc.value.code == 2
 
@@ -126,5 +130,7 @@ async def test_list_graphs_error_fails_before_tui(
             resume_id=None,
             session_name=None,
             graph_override=None,
+            log_path=__import__("pathlib").Path("/dev/null"),
+            verbose=False,
         )
     assert exc.value.code == 2

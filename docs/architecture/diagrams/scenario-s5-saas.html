@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>monet — S5: SaaS</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'JetBrains Mono', monospace; background: #020617; min-height: 100vh; padding: 2rem; color: white; }
+    .container { max-width: 1300px; margin: 0 auto; }
+    .header { margin-bottom: 1.5rem; }
+    .header-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+    .pulse-dot { width: 12px; height: 12px; background: #22d3ee; border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+    .subtitle { color: #94a3b8; font-size: 0.875rem; margin-left: 1.75rem; }
+    .diagram-container { background: rgba(15, 23, 42, 0.5); border-radius: 1rem; border: 1px solid #1e293b; padding: 1.5rem; overflow-x: auto; }
+    svg { width: 100%; min-width: 1100px; display: block; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: rgba(15, 23, 42, 0.5); border-radius: 0.75rem; border: 1px solid #1e293b; padding: 1.25rem; }
+    .card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .card-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .card-dot.cyan { background: #22d3ee; }
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.violet { background: #a78bfa; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+    .card-dot.orange { background: #fb923c; }
+    .card h3 { font-size: 0.875rem; font-weight: 600; }
+    .card ul { list-style: none; color: #94a3b8; font-size: 0.75rem; }
+    .card li { margin-bottom: 0.375rem; }
+    .footer { text-align: center; margin-top: 1.5rem; color: #475569; font-size: 0.75rem; }
+    .scenario-tag { display: inline-block; background: rgba(251, 191, 36, 0.15); border: 1px solid #fbbf24; color: #fbbf24; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; margin-left: 0.75rem; vertical-align: middle; font-weight: 600; letter-spacing: 0.05em; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="header-row">
+      <div class="pulse-dot"></div>
+      <h1>monet — S5: SaaS Platform</h1>
+      <span class="scenario-tag">VENDOR-HOSTED ORCHESTRATOR</span>
+    </div>
+    <p class="subtitle">monet SDK as MIT-licensed library — downstream SaaS repo builds multi-tenant product on top. Queue plane works today, control plane primitives in progress (roadmap).</p>
+  </div>
+
+  <div class="diagram-container">
+    <svg viewBox="0 0 1200 700">
+
+      <defs>
+        <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#64748b" /></marker>
+        <marker id="arrc" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee" /></marker>
+        <marker id="arre" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#34d399" /></marker>
+        <marker id="arrv" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa" /></marker>
+        <marker id="arro" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb923c" /></marker>
+        <marker id="arrr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#fb7185" /></marker>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/></pattern>
+      </defs>
+
+      <rect width="100%" height="100%" fill="url(#grid)" />
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- SAAS VENDOR BOUNDARY                                 -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="20" y="20" width="1160" height="270" rx="14" fill="rgba(251, 191, 36, 0.03)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="10,5"/>
+      <text x="36" y="40" fill="#fbbf24" font-size="10" font-weight="700">SAAS VENDOR — api.monet.cloud</text>
+      <text x="36" y="53" fill="#64748b" font-size="8">vendor infrastructure • multi-tenant • billing, user management, accounts (in downstream repo)</text>
+
+      <!-- Vendor SaaS app -->
+      <rect x="36" y="70" width="240" height="200" rx="10" fill="rgba(8, 51, 68, 0.2)" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="6,4"/>
+      <text x="52" y="90" fill="#22d3ee" font-size="9" font-weight="700">VENDOR SAAS APP</text>
+      <text x="52" y="103" fill="#64748b" font-size="8">downstream repo — NOT in monet</text>
+
+      <rect x="48" y="112" width="100" height="32" rx="4" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="98" y="127" fill="white" font-size="8" font-weight="600" text-anchor="middle">Auth / Tenants</text>
+      <text x="98" y="139" fill="#94a3b8" font-size="7" text-anchor="middle">accounts, billing,</text>
+      <text x="98" y="149" fill="#94a3b8" font-size="7" text-anchor="middle">API key issuance</text>
+
+      <rect x="158" y="112" width="100" height="32" rx="4" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="208" y="127" fill="white" font-size="8" font-weight="600" text-anchor="middle">Multi-tenant</text>
+      <text x="208" y="139" fill="#94a3b8" font-size="7" text-anchor="middle">workspace, project,</text>
+      <text x="208" y="149" fill="#94a3b8" font-size="7" text-anchor="middle">tenant ID in path</text>
+
+      <rect x="48" y="160" width="210" height="32" rx="4" fill="rgba(120, 53, 15, 0.25)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="153" y="175" fill="#fbbf24" font-size="8" font-weight="600" text-anchor="middle">User Management, Quotas, Rate Limits, Dashboard UI</text>
+
+      <!-- Boundary: auth swap — vendor app mounts monet's server factory -->
+      <rect x="48" y="210" width="210" height="48" rx="5" fill="rgba(251, 191, 36, 0.12)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,3"/>
+      <text x="153" y="228" fill="#fbbf24" font-size="8" font-weight="700" text-anchor="middle">AUTH SWAP BOUNDARY</text>
+      <text x="153" y="241" fill="#94a3b8" font-size="7" text-anchor="middle">Vendor FastAPI app mounts monet.server.factory()</text>
+      <text x="153" y="253" fill="#64748b" font-size="6" text-anchor="middle">injects own auth/tenant resolver • everything downstream = monet</text>
+
+      <!-- Arrow: vendor app → monet server -->
+      <line x1="258" y1="234" x2="296" y2="234" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arr)"/>
+      <text x="277" y="228" fill="#fbbf24" font-size="7">mounts</text>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- MONET SERVER (vendor-managed)                         -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="306" y="70" width="860" height="200" rx="10" fill="rgba(251, 191, 36, 0.05)" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="322" y="90" fill="#fbbf24" font-size="9" font-weight="700">MONET ORCHESTRATION SERVER (MIT — monet repo)</text>
+      <text x="322" y="102" fill="#64748b" font-size="8">aegra serve + Postgres + Redis/Upstash • single MONET_API_KEY replaced by tenant-scoped auth</text>
+
+      <!-- Auth sub -->
+      <rect x="322" y="115" width="85" height="36" rx="5" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1.5"/>
+      <text x="364" y="130" fill="white" font-size="8" font-weight="600" text-anchor="middle">Auth (swap)</text>
+      <text x="364" y="143" fill="#94a3b8" font-size="7" text-anchor="middle">per-tenant key</text>
+
+      <!-- CHAT GRAPH -->
+      <rect x="322" y="162" width="140" height="95" rx="7" fill="rgba(8, 51, 68, 0.3)" stroke="#22d3ee" stroke-width="1.5"/>
+      <text x="392" y="177" fill="#22d3ee" font-size="8" font-weight="700" text-anchor="middle">CHAT GRAPH</text>
+      <rect x="332" y="188" width="52" height="18" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="358" y="200" fill="white" font-size="7" font-weight="600" text-anchor="middle">parse</text>
+      <rect x="392" y="188" width="58" height="18" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="421" y="200" fill="white" font-size="7" font-weight="600" text-anchor="middle">triage</text>
+      <rect x="332" y="214" width="52" height="18" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="358" y="226" fill="white" font-size="7" font-weight="600" text-anchor="middle">respond</text>
+      <rect x="392" y="214" width="58" height="18" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="421" y="226" fill="white" font-size="7" font-weight="600" text-anchor="middle">planner</text>
+      <rect x="332" y="238" width="118" height="16" rx="3" fill="rgba(8, 51, 68, 0.5)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="391" y="249" fill="white" font-size="7" font-weight="600" text-anchor="middle">specialist /agent:cmd</text>
+      <line x1="384" y1="197" x2="390" y2="197" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrc)"/>
+      <line x1="332" y1="206" x2="332" y2="212" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrc)"/>
+      <line x1="392" y1="206" x2="392" y2="212" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrc)"/>
+      <line x1="332" y1="232" x2="332" y2="236" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrc)"/>
+      <line x1="392" y1="232" x2="392" y2="236" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrc)"/>
+      <line x1="450" y1="223" x2="468" y2="223" stroke="#22d3ee" stroke-width="1" marker-end="url(#arrc)"/>
+
+      <!-- PLANNING GRAPH -->
+      <rect x="480" y="162" width="270" height="95" rx="7" fill="rgba(6, 78, 59, 0.25)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="615" y="177" fill="#34d399" font-size="8" font-weight="700" text-anchor="middle">PLANNING GRAPH</text>
+      <rect x="490" y="193" width="75" height="22" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="527" y="206" fill="white" font-size="7" font-weight="600" text-anchor="middle">planner/plan</text>
+      <rect x="573" y="193" width="75" height="22" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="610" y="206" fill="white" font-size="7" font-weight="600" text-anchor="middle">researcher/fast</text>
+      <rect x="490" y="222" width="75" height="22" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="527" y="235" fill="white" font-size="7" font-weight="600" text-anchor="middle">analyst/ask</text>
+      <rect x="573" y="222" width="100" height="32" rx="5" fill="rgba(136, 19, 55, 0.35)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+      <text x="623" y="236" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">HUMAN APPROVAL</text>
+      <text x="623" y="248" fill="#94a3b8" font-size="6" text-anchor="middle">nemawashi gate</text>
+      <rect x="490" y="255" width="183" height="18" rx="4" fill="rgba(6, 78, 59, 0.55)" stroke="#34d399" stroke-width="1"/>
+      <text x="581" y="267" fill="white" font-size="7" font-weight="600" text-anchor="middle">work_brief + RoutingSkeleton → ArtifactStore</text>
+      <line x1="565" y1="204" x2="571" y2="204" stroke="#34d399" stroke-width="1" marker-end="url(#arre)"/>
+      <line x1="490" y1="215" x2="490" y2="220" stroke="#34d399" stroke-width="1" marker-end="url(#arre)"/>
+      <line x1="573" y1="215" x2="573" y2="220" stroke="#34d399" stroke-width="1" marker-end="url(#arre)"/>
+      <line x1="610" y1="215" x2="610" y2="220" stroke="#34d399" stroke-width="1" marker-end="url(#arre)"/>
+
+      <!-- planning → execution -->
+      <line x1="663" y1="264" x2="683" y2="264" stroke="#34d399" stroke-width="2" marker-end="url(#arre)"/>
+      <text x="673" y="258" fill="#94a3b8" font-size="7">approved</text>
+
+      <!-- EXECUTION GRAPH -->
+      <rect x="695" y="162" width="255" height="95" rx="7" fill="rgba(76, 29, 149, 0.25)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="822" y="177" fill="#a78bfa" font-size="8" font-weight="700" text-anchor="middle">EXECUTION GRAPH</text>
+      <rect x="705" y="193" width="105" height="20" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="757" y="206" fill="white" font-size="7" font-weight="600" text-anchor="middle">load plan → phases/waves</text>
+      <rect x="705" y="220" width="105" height="20" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="757" y="233" fill="white" font-size="7" font-weight="600" text-anchor="middle">execute wave (Send API)</text>
+      <rect x="820" y="220" width="80" height="20" rx="4" fill="rgba(136, 19, 55, 0.5)" stroke="#fb7185" stroke-width="1"/>
+      <text x="860" y="233" fill="white" font-size="7" font-weight="600" text-anchor="middle">QA/fast</text>
+      <rect x="705" y="248" width="195" height="20" rx="4" fill="rgba(76, 29, 149, 0.55)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="802" y="261" fill="white" font-size="7" font-weight="600" text-anchor="middle">final synthesis → kaizen → ArtifactStore</text>
+      <line x1="810" y1="225" x2="818" y2="232" stroke="#a78bfa" stroke-width="1" marker-end="url(#arrv)"/>
+      <line x1="705" y1="240" x2="705" y2="246" stroke="#a78bfa" stroke-width="1" marker-end="url(#arrv)"/>
+      <line x1="900" y1="230" x2="920" y2="230" stroke="#fb923c" stroke-width="2" marker-end="url(#arro)"/>
+      <text x="910" y="224" fill="#fb923c" font-size="7">enqueue</text>
+
+      <!-- server knows box -->
+      <rect x="990" y="115" width="165" height="50" rx="5" fill="rgba(136, 19, 55, 0.12)" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="1072" y="131" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">SERVER KNOWS</text>
+      <text x="1072" y="145" fill="#94a3b8" font-size="6" text-anchor="middle">DAG + HITL decisions</text>
+      <text x="1072" y="157" fill="#94a3b8" font-size="6" text-anchor="middle">artifact pointers</text>
+      <text x="1072" y="169" fill="#64748b" font-size="6" text-anchor="middle">NOT: agent runtime, LLM calls</text>
+
+      <!-- queue arrow from execution -->
+      <line x1="950" y1="230" x2="968" y2="230" stroke="#fb923c" stroke-width="2" marker-end="url(#arro)"/>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- INFRA — VENDOR SIDE                                  -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="980" y="70" width="190" height="200" rx="8" fill="rgba(30, 41, 59, 0.3)" stroke="#64748b" stroke-width="1" stroke-dasharray="5,3"/>
+      <text x="992" y="90" fill="#94a3b8" font-size="8" font-weight="600">VENDOR INFRA</text>
+
+      <rect x="992" y="100" width="82" height="46" rx="5" fill="rgba(120, 53, 15, 0.35)" stroke="#fbbf24" stroke-width="1.5"/>
+      <text x="1033" y="117" fill="white" font-size="8" font-weight="600" text-anchor="middle">Postgres</text>
+      <text x="1033" y="131" fill="#94a3b8" font-size="7" text-anchor="middle">checkpoints</text>
+
+      <rect x="1082" y="100" width="78" height="46" rx="5" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1.5"/>
+      <text x="1121" y="117" fill="white" font-size="8" font-weight="600" text-anchor="middle">Redis</text>
+      <text x="1121" y="131" fill="#94a3b8" font-size="7" text-anchor="middle">queue</text>
+
+      <rect x="992" y="158" width="168" height="46" rx="5" fill="rgba(76, 29, 149, 0.35)" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="1076" y="176" fill="white" font-size="8" font-weight="600" text-anchor="middle">ArtifactStore (server)</text>
+      <text x="1076" y="190" fill="#94a3b8" font-size="7" text-anchor="middle">work_brief + pointers</text>
+      <text x="1076" y="202" fill="#64748b" font-size="6" text-anchor="middle">pointer-only state</text>
+
+      <!-- server → infra arrows -->
+      <line x1="1160" y1="230" x2="1160" y2="230" stroke="#64748b" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="970" y1="220" x2="980" y2="220" stroke="#fb923c" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="970" y1="270" x2="980" y2="270" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- ══════════════════════════════════════════════════════ -->
+      <!-- TENANT BOUNDARY                                       -->
+      <!-- ══════════════════════════════════════════════════════ -->
+      <rect x="20" y="305" width="1160" height="370" rx="14" fill="rgba(136, 19, 55, 0.04)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="10,5"/>
+      <text x="36" y="325" fill="#fb7185" font-size="10" font-weight="700">TENANT BOUNDARY — each customer deploys their own workers</text>
+      <text x="36" y="338" fill="#64748b" font-size="8">tenant-scoped auth • shared queue infrastructure • isolated agent runtime</text>
+
+      <!-- Queue / Redis (shared vendor infra, tenant-isolated via keys) -->
+      <rect x="40" y="355" width="200" height="310" rx="8" fill="rgba(251, 146, 60, 0.08)" stroke="#fb923c" stroke-width="2"/>
+      <text x="140" y="373" fill="#fb923c" font-size="10" font-weight="700" text-anchor="middle">TASK QUEUE</text>
+      <text x="140" y="387" fill="#fb923c" font-size="8" text-anchor="middle">Redis / Upstash</text>
+      <text x="140" y="401" fill="#64748b" font-size="7" text-anchor="middle">vendor-managed • per-tenant</text>
+      <text x="140" y="413" font-size="7" text-anchor="middle" fill="#64748b">isolation via API key scoping</text>
+
+      <text x="52" y="435" fill="#fb923c" font-size="7" font-weight="600">enqueue(RoutingNode)</text>
+      <text x="52" y="449" fill="#94a3b8" font-size="6">agent_id, command, depends_on</text>
+
+      <text x="52" y="472" fill="#fb923c" font-size="7" font-weight="600">dequeue() — per-tenant</text>
+      <text x="52" y="486" fill="#94a3b8" font-size="6">workers only see their</text>
+      <text x="52" y="497" fill="#94a3b8" font-size="6">tenant's tasks</text>
+
+      <text x="52" y="520" fill="#fb923c" font-size="7" font-weight="600">signals via pub/sub</text>
+      <text x="52" y="534" fill="#94a3b8" font-size="6">needs_research</text>
+      <text x="52" y="546" fill="#94a3b8" font-size="6">needs_human_review</text>
+      <text x="52" y="558" fill="#94a3b8" font-size="6">kaizen trigger</text>
+      <text x="52" y="575" fill="#fbbf24" font-size="7" font-weight="600">OUT OF SCOPE for monet:</text>
+      <text x="52" y="589" fill="#94a3b8" font-size="6">tenant quotas, billing,</text>
+      <text x="52" y="601" fill="#94a3b8" font-size="6">user management,</text>
+      <text x="52" y="613" fill="#94a3b8" font-size="6">API key rotation UI</text>
+      <text x="52" y="627" fill="#64748b" font-size="6">(handled by vendor SaaS)</text>
+
+      <!-- queue poll arrows (shared, tenant-isolated) -->
+      <line x1="240" y1="490" x2="340" y2="490" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arro)"/>
+      <line x1="240" y1="490" x2="340" y2="490" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arro)"/>
+      <line x1="240" y1="490" x2="450" y2="490" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arro)"/>
+      <line x1="240" y1="490" x2="660" y2="490" stroke="#fb923c" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arro)"/>
+
+      <!-- Tenant 1 -->
+      <rect x="350" y="355" width="200" height="310" rx="10" fill="rgba(6, 78, 59, 0.06)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="366" y="374" fill="#34d399" font-size="9" font-weight="700">TENANT 1 — Acme Corp</text>
+      <text x="366" y="386" fill="#64748b" font-size="8">tenant_id in path</text>
+
+      <rect x="362" y="400" width="176" height="28" rx="5" fill="rgba(120, 53, 15, 0.2)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="450" y="414" fill="#fbbf24" font-size="8" font-weight="600" text-anchor="middle">Worker: Cloud Run (us-west-2)</text>
+
+      <text x="362" y="438" fill="#34d399" font-size="8" font-weight="600">pool: fast</text>
+      <rect x="362" y="446" width="80" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="402" y="460" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="402" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+      <rect x="452" y="446" width="76" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="490" y="460" fill="white" font-size="8" font-weight="600" text-anchor="middle">qa</text>
+      <text x="490" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+
+      <text x="362" y="498" fill="#34d399" font-size="8" font-weight="600">pool: heavy</text>
+      <rect x="362" y="506" width="80" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="402" y="520" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="402" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">deep</text>
+      <rect x="452" y="506" width="76" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="490" y="520" fill="white" font-size="8" font-weight="600" text-anchor="middle">writer</text>
+      <text x="490" y="533" fill="#94a3b8" font-size="7" text-anchor="middle">deep</text>
+
+      <rect x="362" y="556" width="166" height="30" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="445" y="571" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">monet worker --pool fast/heavy</text>
+      <text x="445" y="582" fill="#94a3b8" font-size="6" text-anchor="middle">--server-url api.monet.cloud</text>
+
+      <rect x="362" y="598" width="166" height="30" rx="5" fill="rgba(251, 146, 60, 0.1)" stroke="#fb923c" stroke-width="1"/>
+      <text x="445" y="612" fill="#fb923c" font-size="7" font-weight="600" text-anchor="middle">Own: model, tools, OTel, API key</text>
+      <text x="445" y="623" fill="#64748b" font-size="6" text-anchor="middle">Acme's proprietary agents</text>
+
+      <!-- Tenant 2 -->
+      <rect x="570" y="355" width="200" height="310" rx="10" fill="rgba(6, 78, 59, 0.06)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="586" y="374" fill="#34d399" font-size="9" font-weight="700">TENANT 2 — Globex</text>
+      <text x="586" y="386" fill="#64748b" font-size="8">tenant_id in path</text>
+
+      <rect x="582" y="400" width="176" height="28" rx="5" fill="rgba(120, 53, 15, 0.2)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="670" y="414" fill="#fbbf24" font-size="8" font-weight="600" text-anchor="middle">Worker: self-hosted VPS</text>
+
+      <text x="582" y="438" fill="#34d399" font-size="8" font-weight="600">pool: default</text>
+      <rect x="582" y="446" width="80" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="622" y="460" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="622" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+      <rect x="672" y="446" width="76" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="710" y="460" fill="white" font-size="8" font-weight="600" text-anchor="middle">qa</text>
+      <text x="710" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+      <rect x="582" y="490" width="166" height="28" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="665" y="506" fill="white" font-size="8" font-weight="600" text-anchor="middle">publisher</text>
+      <text x="665" y="518" fill="#94a3b8" font-size="7" text-anchor="middle">publish</text>
+
+      <rect x="582" y="530" width="166" height="30" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="665" y="545" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">monet worker --pool default</text>
+      <text x="665" y="556" fill="#94a3b8" font-size="6" text-anchor="middle">--server-url api.monet.cloud</text>
+
+      <rect x="582" y="572" width="166" height="30" rx="5" fill="rgba(251, 146, 60, 0.1)" stroke="#fb923c" stroke-width="1"/>
+      <text x="665" y="586" fill="#fb923c" font-size="7" font-weight="600" text-anchor="middle">Own: model, tools, OTel, API key</text>
+      <text x="665" y="597" fill="#64748b" font-size="6" text-anchor="middle">Globex's proprietary agents</text>
+
+      <!-- Customer's own laptop (Tenant 3 — ad-hoc) -->
+      <rect x="790" y="355" width="200" height="310" rx="10" fill="rgba(6, 78, 59, 0.06)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="806" y="374" fill="#34d399" font-size="9" font-weight="700">TENANT 3 — Solo / Startup</text>
+      <text x="806" y="386" fill="#64748b" font-size="8">customer laptop behind NAT</text>
+
+      <rect x="802" y="400" width="176" height="28" rx="5" fill="rgba(120, 53, 15, 0.2)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="890" y="414" fill="#fbbf24" font-size="8" font-weight="600" text-anchor="middle">Worker: laptop (NAT, no inbound)</text>
+
+      <text x="802" y="438" fill="#34d399" font-size="8" font-weight="600">pool: laptop</text>
+      <rect x="802" y="446" width="76" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="840" y="460" fill="white" font-size="8" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="840" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+      <rect x="888" y="446" width="70" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="923" y="460" fill="white" font-size="8" font-weight="600" text-anchor="middle">writer</text>
+      <text x="923" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">deep</text>
+
+      <rect x="802" y="494" width="88" height="28" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="846" y="508" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">+ custom</text>
+      <text x="846" y="519" fill="#94a3b8" font-size="6" text-anchor="middle">agents</text>
+
+      <rect x="802" y="530" width="176" height="30" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="890" y="545" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">monet worker --pool laptop</text>
+      <text x="890" y="556" fill="#94a3b8" font-size="6" text-anchor="middle">--server-url api.monet.cloud</text>
+
+      <rect x="802" y="572" width="176" height="30" rx="5" fill="rgba(136, 19, 55, 0.1)" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="890" y="586" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">NO INBOUND FIREWALL NEEDED</text>
+      <text x="890" y="597" fill="#94a3b8" font-size="6" text-anchor="middle">polling works behind NAT</text>
+
+      <!-- Customer's phone (Tenant 4) -->
+      <rect x="1010" y="355" width="165" height="310" rx="10" fill="rgba(6, 78, 59, 0.06)" stroke="#34d399" stroke-width="1.5" stroke-dasharray="8,4"/>
+      <text x="1026" y="374" fill="#34d399" font-size="9" font-weight="700">TENANT 4 — Mobile</text>
+      <text x="1026" y="386" fill="#64748b" font-size="8">phone / edge device</text>
+
+      <rect x="1022" y="400" width="143" height="28" rx="5" fill="rgba(120, 53, 15, 0.2)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="1093" y="414" fill="#fbbf24" font-size="8" font-weight="600" text-anchor="middle">Worker: phone (4G)</text>
+
+      <text x="1022" y="438" fill="#34d399" font-size="8" font-weight="600">pool: mobile</text>
+      <rect x="1022" y="446" width="68" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1056" y="460" fill="white" font-size="7" font-weight="600" text-anchor="middle">researcher</text>
+      <text x="1056" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+      <rect x="1100" y="446" width="65" height="36" rx="5" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="1132" y="460" fill="white" font-size="7" font-weight="600" text-anchor="middle">qa</text>
+      <text x="1132" y="473" fill="#94a3b8" font-size="7" text-anchor="middle">fast</text>
+
+      <rect x="1022" y="494" width="143" height="30" rx="5" fill="rgba(8, 51, 68, 0.25)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="1093" y="509" fill="#22d3ee" font-size="7" font-weight="600" text-anchor="middle">monet worker --pool mobile</text>
+      <text x="1093" y="520" fill="#94a3b8" font-size="6" text-anchor="middle">--server-url api.monet.cloud</text>
+
+      <rect x="1022" y="536" width="143" height="30" rx="5" fill="rgba(136, 19, 55, 0.1)" stroke="#fb7185" stroke-width="1" stroke-dasharray="3,3"/>
+      <text x="1093" y="550" fill="#fb7185" font-size="7" font-weight="600" text-anchor="middle">Works on 4G, no inbound</text>
+      <text x="1093" y="561" fill="#94a3b8" font-size="6" text-anchor="middle">tenant-scoped API key</text>
+
+      <!-- LEGEND -->
+      <text x="40" y="688" fill="white" font-size="9" font-weight="600">Legend</text>
+      <rect x="40" y="696" width="12" height="8" rx="2" fill="rgba(8, 51, 68, 0.4)" stroke="#22d3ee" stroke-width="1"/>
+      <text x="58" y="703" fill="#94a3b8" font-size="8">Vendor SaaS App</text>
+      <rect x="195" y="696" width="12" height="8" rx="2" fill="rgba(6, 78, 59, 0.4)" stroke="#34d399" stroke-width="1"/>
+      <text x="213" y="703" fill="#94a3b8" font-size="8">Customer Worker</text>
+      <rect x="360" y="696" width="12" height="8" rx="2" fill="rgba(251, 146, 60, 0.3)" stroke="#fb923c" stroke-width="1"/>
+      <text x="378" y="703" fill="#94a3b8" font-size="8">Task Queue (shared)</text>
+      <rect x="510" y="696" width="12" height="8" rx="2" fill="rgba(76, 29, 149, 0.4)" stroke="#a78bfa" stroke-width="1"/>
+      <text x="528" y="703" fill="#94a3b8" font-size="8">ArtifactStore</text>
+      <rect x="645" y="696" width="12" height="8" rx="2" fill="rgba(120, 53, 15, 0.3)" stroke="#fbbf24" stroke-width="1"/>
+      <text x="663" y="703" fill="#94a3b8" font-size="8">Managed Infra</text>
+      <rect x="795" y="696" width="12" height="8" rx="2" fill="rgba(136, 19, 55, 0.4)" stroke="#fb7185" stroke-width="1"/>
+      <text x="813" y="703" fill="#94a3b8" font-size="8">Auth / Tenant</text>
+      <line x1="930" y1="700" x2="946" y2="700" stroke="#fb923c" stroke-width="1" stroke-dasharray="4,4"/>
+      <text x="952" y="703" fill="#94a3b8" font-size="8">poll (pull)</text>
+
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-header"><div class="card-dot rose"></div><h3>Boundary: monet as MIT Library</h3></div>
+      <ul>
+        <li>• SaaS product (user accounts, billing, quotas, dashboards) lives in a downstream repo — NOT in monet</li>
+        <li>• Vendor ships a FastAPI app that mounts monet.server.factory() and injects its own auth/tenant resolver</li>
+        <li>• Everything downstream of that boundary is pure monet MIT code</li>
+        <li>• Keeps monet MIT-licensed and focused on orchestration correctness</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-dot orange"></div><h3>Queue Plane: Works Today</h3></div>
+      <ul>
+        <li>• Redis/Upstash backend is fully pull-based — no inbound callbacks needed</li>
+        <li>• Tenant isolation via API key scoping in Redis</li>
+        <li>• Customer workers poll their vendor's queue just like S2/S3</li>
+        <li>• Works for customers behind NAT, on mobile, on laptops</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-dot amber"></div><h3>Control Plane: Roadmap (Priority 1)</h3></div>
+      <ul>
+        <li>• Today: single global MONET_API_KEY — needs per-tenant key primitive</li>
+        <li>• Needs: tenant/workspace/project ID in request path, state, MonetClient.list_runs()</li>
+        <li>• See CLAUDE.md ## Roadmap Priority 1 for 5 required extension points</li>
+        <li>• Queue plane + auth swap boundary are already the right primitives</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="footer">monet S5 — SaaS Platform • vendor-hosted orchestrator, customer-hosted workers</p>
+</div>
+</body>
+</html>
