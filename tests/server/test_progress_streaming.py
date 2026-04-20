@@ -29,6 +29,7 @@ def _make_task(
     agent_id: str = "a", command: str = "fast", pool: str = "local"
 ) -> TaskRecord:
     return {
+        "schema_version": 1,
         "task_id": str(uuid.uuid4()),
         "agent_id": agent_id,
         "command": command,

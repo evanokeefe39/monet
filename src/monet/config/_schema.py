@@ -70,6 +70,7 @@ from ._env import (
     OTEL_SERVICE_NAME,
     REDIS_URI,
     TAVILY_API_KEY,
+    XAI_API_KEY,
     ConfigError,
     read_bool,
     read_enum,
@@ -402,8 +403,8 @@ class OrchestrationConfig(BaseModel):
 
 
 _DEFAULT_CHAT_GRAPH = "monet.orchestration.chat_graph:build_chat_graph"
-_DEFAULT_CHAT_RESPOND_MODEL = "google_genai:gemini-2.5-flash"
-_DEFAULT_CHAT_TRIAGE_MODEL = "google_genai:gemini-2.5-flash-lite"
+_DEFAULT_CHAT_RESPOND_MODEL = "xai:grok-3-mini-fast"
+_DEFAULT_CHAT_TRIAGE_MODEL = "xai:grok-3-mini-fast"
 
 
 class ChatConfig(BaseModel):
@@ -680,6 +681,7 @@ class CLIDevConfig(BaseModel):
 
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
+    xai_api_key: str | None = None
     exa_api_key: str | None = None
     tavily_api_key: str | None = None
 
@@ -688,20 +690,19 @@ class CLIDevConfig(BaseModel):
         return cls(
             gemini_api_key=read_str(GEMINI_API_KEY),
             groq_api_key=read_str(GROQ_API_KEY),
+            xai_api_key=read_str(XAI_API_KEY),
             exa_api_key=read_str(EXA_API_KEY),
             tavily_api_key=read_str(TAVILY_API_KEY),
         )
 
     @model_validator(mode="after")
     def _at_least_one_llm_key_is_informational(self) -> CLIDevConfig:
-        # No validation here — the boot check is in validate_for_boot.
-        # This hook only exists so future cross-field rules have a home.
         return self
 
     def validate_for_boot(self) -> None:
-        if not (self.gemini_api_key or self.groq_api_key):
+        if not (self.gemini_api_key or self.groq_api_key or self.xai_api_key):
             raise ConfigError(
-                f"{GEMINI_API_KEY} or {GROQ_API_KEY}",
+                f"{GEMINI_API_KEY} or {GROQ_API_KEY} or {XAI_API_KEY}",
                 None,
                 "at least one LLM provider key (set it in .env or the "
                 "environment before running monet dev/run/chat)",
@@ -711,6 +712,7 @@ class CLIDevConfig(BaseModel):
         return {
             "gemini_api_key": _redact(self.gemini_api_key),
             "groq_api_key": _redact(self.groq_api_key),
+            "xai_api_key": _redact(self.xai_api_key),
             "exa_api_key": _redact(self.exa_api_key),
             "tavily_api_key": _redact(self.tavily_api_key),
         }

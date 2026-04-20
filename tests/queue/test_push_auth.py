@@ -24,6 +24,7 @@ API_KEY = "server-api-key"
 def _make_task(pool: str = "local") -> TaskRecord:
     ctx = make_ctx(agent_id="a", command="fast")
     return {
+        "schema_version": 1,
         "task_id": str(uuid.uuid4()),
         "agent_id": "a",
         "command": "fast",

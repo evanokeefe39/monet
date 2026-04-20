@@ -14,14 +14,12 @@ _URL_RE = re.compile(r"https?://\S+")
 
 #: Default per-role styles for transcript tag highlighting.
 DEFAULT_TAG_STYLES: dict[str, str] = {
-    "[user]": "bold #3498db",
-    "[assistant]": "bold #9b59b6",
-    "[info]": "bold #e74c8b",
-    "[progress]": "bold #f39c12",
-    "[error]": "bold #27ae60",
-    # Ephemeral UX hints (welcome banner, transient guidance). Dim so
-    # users recognise them as advisory, not conversational.
-    "[hint]": "dim italic",
+    "[user]": "bold #00c8da",
+    "[assistant]": "bold #46b2e4",
+    "[info]": "bold #0095a1",
+    "[progress]": "bold #c47445",
+    "[error]": "bold #d04936",
+    "[hint]": "dim italic #7a7a85",
 }
 
 #: Mapping from ``/colors <role>`` argument to the matching transcript tag.

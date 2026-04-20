@@ -31,6 +31,7 @@ async def test_forward_progress_injects_run_id(queue: InMemoryTaskQueue) -> None
     # Enqueue, publish a progress event, then complete — _forward_progress drains.
     await queue.enqueue(
         {
+            "schema_version": 1,
             "task_id": task_id,
             "agent_id": "test-agent",
             "command": "fast",
@@ -88,6 +89,7 @@ async def test_forward_progress_preserves_existing_fields(
 
     await queue.enqueue(
         {
+            "schema_version": 1,
             "task_id": task_id,
             "agent_id": "a",
             "command": "fast",

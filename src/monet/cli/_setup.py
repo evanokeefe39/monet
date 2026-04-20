@@ -7,10 +7,10 @@ from pathlib import Path
 
 import click
 
-from monet.config._env import GEMINI_API_KEY, GROQ_API_KEY
+from monet.config._env import GEMINI_API_KEY, GROQ_API_KEY, XAI_API_KEY
 
 # Keys that qualify as LLM provider configuration.
-_LLM_KEYS: tuple[str, ...] = (GEMINI_API_KEY, GROQ_API_KEY)
+_LLM_KEYS: tuple[str, ...] = (GEMINI_API_KEY, GROQ_API_KEY, XAI_API_KEY)
 
 # Aegra's Postgres connection string. Required so the bundled
 # ``.monet/docker-compose.yml`` credentials match what Aegra dials; without

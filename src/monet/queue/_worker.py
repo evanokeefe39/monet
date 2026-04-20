@@ -37,6 +37,7 @@ async def run_worker(
     max_concurrency: int = 10,
     poll_interval: float = 0.1,
     shutdown_timeout: float = 30.0,
+    task_timeout: float = 300.0,
     consumer_id: str | None = None,
 ) -> None:
     """Poll queue by pool, execute concurrently via registry.
@@ -54,6 +55,8 @@ async def run_worker(
             pool queue is empty. Default 0.1.
         shutdown_timeout: Max seconds to wait for in-flight tasks during
             graceful shutdown. Default 30.
+        task_timeout: Max seconds a single task handler may run before
+            being failed with a timeout error. Default 300.
     """
     if registry is None:
         from monet.core.registry import default_registry
@@ -181,7 +184,10 @@ async def run_worker(
                         pool,
                     )
                     try:
-                        result = await handler(record["context"])
+                        result = await asyncio.wait_for(
+                            handler(record["context"]),
+                            timeout=task_timeout,
+                        )
                         # Flush progress BEFORE completing so subscribers
                         # see all events — completing the task triggers
                         # wait_completion cleanup which terminates subscriptions.
@@ -193,6 +199,19 @@ async def run_worker(
                             command,
                             task_id,
                             getattr(result, "success", True),
+                        )
+                    except TimeoutError:
+                        logger.warning(
+                            "worker: task %s timed out after %ss (%s/%s)",
+                            task_id,
+                            task_timeout,
+                            agent_id,
+                            command,
+                        )
+                        await _flush_drain()
+                        await queue.fail(
+                            task_id,
+                            f"Task execution timed out after {task_timeout}s",
                         )
                     except Exception as exc:
                         logger.exception(

@@ -13,7 +13,6 @@ from pydantic import BaseModel
 from monet import get_artifacts
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
 from monet.queue import TaskQueue
-from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._capabilities import Capability, CapabilityIndex
 from monet.server._deployment import DeploymentStore
@@ -320,7 +319,7 @@ async def invoke_agent_endpoint(
     can drive a single capability without composing a graph. Fails with
     400 if the capability isn't in the manifest.
     """
-    from monet.orchestration._invoke import invoke_agent
+    from monet.orchestration import invoke_agent
 
     try:
         result = await invoke_agent(
@@ -849,25 +848,24 @@ async def health(
     queued = getattr(queue, "pending_count", 0)
     start_time: float = getattr(request.app.state, "start_time", 0.0)
     uptime = time.monotonic() - start_time if start_time else 0.0
-    backend = type(queue).__name__
+    backend = queue.backend_name
     version_str = _monet_version()
 
+    healthy = await queue.ping()
     redis_status: str | None = None
-    if isinstance(queue, RedisStreamsTaskQueue):
-        if await queue.ping():
-            redis_status = "ok"
-        else:
-            redis_status = "down"
-            response.status_code = 503
-            return HealthResponse(
-                status="degraded",
-                workers=worker_count,
-                queued=queued,
-                redis=redis_status,
-                version=version_str,
-                queue_backend=backend,
-                uptime_seconds=uptime,
-            )
+    if backend != "memory":
+        redis_status = "ok" if healthy else "down"
+    if not healthy:
+        response.status_code = 503
+        return HealthResponse(
+            status="degraded",
+            workers=worker_count,
+            queued=queued,
+            redis=redis_status,
+            version=version_str,
+            queue_backend=backend,
+            uptime_seconds=uptime,
+        )
     return HealthResponse(
         status="ok",
         workers=worker_count,

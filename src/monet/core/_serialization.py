@@ -77,9 +77,12 @@ def serialize_task_record(record: TaskRecord) -> str:
     :func:`serialize_result` so enum/datetime/tuple shapes survive the
     round-trip; all other fields are JSON-native.
     """
+    from monet.queue._interface import TASK_RECORD_SCHEMA_VERSION
+
     result = record.get("result")
     return json.dumps(
         {
+            "schema_version": TASK_RECORD_SCHEMA_VERSION,
             "task_id": record["task_id"],
             "agent_id": record["agent_id"],
             "command": record["command"],
@@ -100,12 +103,21 @@ def deserialize_task_record(raw: str) -> TaskRecord:
     Raises:
         json.JSONDecodeError: if ``raw`` is not valid JSON.
         KeyError: if required fields are missing.
+        ValueError: if schema_version is newer than supported.
     """
-    from monet.queue import TaskStatus
+    from monet.queue import TASK_RECORD_SCHEMA_VERSION, TaskStatus
 
     d: dict[str, Any] = json.loads(raw)
+    version = d.get("schema_version", 1)
+    if version > TASK_RECORD_SCHEMA_VERSION:
+        msg = (
+            f"TaskRecord schema_version {version} is newer than supported "
+            f"({TASK_RECORD_SCHEMA_VERSION}); upgrade monet to read this payload"
+        )
+        raise ValueError(msg)
     raw_result = d.get("result")
     record: dict[str, Any] = {
+        "schema_version": version,
         "task_id": d["task_id"],
         "agent_id": d["agent_id"],
         "command": d["command"],

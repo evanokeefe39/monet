@@ -1,32 +1,25 @@
 """Custom Textual themes for the monet chat TUI.
 
-We ship two themes — one dark (default), one light — tuned to the
-transcript tag palette in :mod:`~monet.cli.chat._view`. The themes
-replace Textual's built-in dark/light defaults so the chat has a
-coherent, monet-native look rather than the Textual system palette
-peeking through.
+Palettes sourced from color-palettes.txt. Dark-first identity — light
+variant is a fallback, not a second product.
 
 Registered on app mount via ``self.register_theme(...)``; the active
-theme is selected by ``self.theme = "monet-dark"`` (or whatever
-``UserChatStyle.theme`` specifies).
+theme is selected by ``self.theme = "monet-dark"``.
 """
 
 from __future__ import annotations
 
 from textual.theme import Theme
 
-#: Default dark theme. Magenta/purple accent matches the historic
-#: ``#9b59b6`` the border pulse falls back to when no override is set,
-#: and the pink ``$primary`` tracks the ``[info]`` transcript tag so
-#: borders, status pills, and tag colours read as one palette.
+# Palette 1: teal/blue/coral
 MONET_DARK = Theme(
     name="monet-dark",
-    primary="#e74c8b",  # bright pink — borders, headers, focus rings
-    secondary="#3498db",  # blue — [user] tag
-    accent="#9b59b6",  # purple — pulse peak, highlights
-    warning="#f39c12",  # orange — [progress] tag
-    error="#e74c3c",  # red — destructive confirmations
-    success="#27ae60",  # green — [error] tag uses this too
+    primary="#168b9f",
+    secondary="#46b2e4",
+    accent="#2d8db5",
+    warning="#c47445",
+    error="#d04936",
+    success="#ea584b",
     foreground="#e0e0e8",
     background="#000000",
     surface="#0a0a12",
@@ -40,17 +33,102 @@ MONET_DARK = Theme(
     },
 )
 
-#: Light companion for operators on bright terminals. Same hue family,
-#: inverted surfaces. Kept intentionally simple — monet's visual
-#: identity is dark-first; this is a fallback, not a second product.
+# Palette 2: deep crimson/teal
+MONET_RETRO = Theme(
+    name="monet-retro",
+    primary="#008896",
+    secondary="#00adbb",
+    accent="#007977",
+    warning="#d14e4c",
+    error="#900000",
+    success="#d03468",
+    foreground="#e0e0e8",
+    background="#000000",
+    surface="#0a0a12",
+    panel="#14141e",
+    boost="#1e1e2a",
+    dark=True,
+    variables={
+        "text-muted": "#7a7a85",
+        "panel-lighten-1": "#1e1e2a",
+        "panel-lighten-2": "#2a2a38",
+    },
+)
+
+# Palette 3: bright cyan/scarlet
+MONET_VIVID = Theme(
+    name="monet-vivid",
+    primary="#0095a1",
+    secondary="#00c8da",
+    accent="#00bfd5",
+    warning="#d65f45",
+    error="#d00722",
+    success="#c4564a",
+    foreground="#e0e0e8",
+    background="#000000",
+    surface="#0a0a12",
+    panel="#14141e",
+    boost="#1e1e2a",
+    dark=True,
+    variables={
+        "text-muted": "#7a7a85",
+        "panel-lighten-1": "#1e1e2a",
+        "panel-lighten-2": "#2a2a38",
+    },
+)
+
+# Palette 8: deep forest/navy
+MONET_FOREST = Theme(
+    name="monet-forest",
+    primary="#587857",
+    secondary="#006e30",
+    accent="#00527b",
+    warning="#523300",
+    error="#004013",
+    success="#225240",
+    foreground="#c8d8c0",
+    background="#000000",
+    surface="#0a0f0a",
+    panel="#101a10",
+    boost="#182418",
+    dark=True,
+    variables={
+        "text-muted": "#6a7a6a",
+        "panel-lighten-1": "#182418",
+        "panel-lighten-2": "#243024",
+    },
+)
+
+# Palette 9: burnt terracotta/ocean
+MONET_EMBER = Theme(
+    name="monet-ember",
+    primary="#c6583c",
+    secondary="#ae463d",
+    accent="#007065",
+    warning="#006246",
+    error="#004c79",
+    success="#00365f",
+    foreground="#e0dcd8",
+    background="#000000",
+    surface="#120a08",
+    panel="#1e1210",
+    boost="#2a1a16",
+    dark=True,
+    variables={
+        "text-muted": "#8a7a72",
+        "panel-lighten-1": "#2a1a16",
+        "panel-lighten-2": "#362420",
+    },
+)
+
 MONET_LIGHT = Theme(
     name="monet-light",
-    primary="#c0357a",
-    secondary="#1f6fb3",
-    accent="#7a3f91",
-    warning="#c47713",
+    primary="#0f6d7d",
+    secondary="#2178bd",
+    accent="#1f7090",
+    warning="#a35c36",
     error="#b33a2d",
-    success="#1e8a4a",
+    success="#c44840",
     foreground="#1a1a22",
     background="#f5f5f7",
     surface="#eaeaef",
@@ -64,6 +142,11 @@ MONET_LIGHT = Theme(
     },
 )
 
-#: Every theme the chat app registers. The first entry becomes the
-#: default when no operator override is configured.
-MONET_THEMES: tuple[Theme, ...] = (MONET_DARK, MONET_LIGHT)
+MONET_THEMES: tuple[Theme, ...] = (
+    MONET_DARK,
+    MONET_RETRO,
+    MONET_VIVID,
+    MONET_FOREST,
+    MONET_EMBER,
+    MONET_LIGHT,
+)

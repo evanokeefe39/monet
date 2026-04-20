@@ -1,7 +1,7 @@
 """Contract tests shared between InMemoryTaskQueue and RedisStreamsTaskQueue.
 
 Both backends implement the 6-method ``TaskQueue`` protocol and both
-provide a private ``_await_completion`` consumed by
+provide ``await_completion`` consumed by
 ``monet.orchestration._invoke.wait_completion``. Running the same tests
 against both catches drift between the implementations.
 """
@@ -41,6 +41,7 @@ def _make_task(
         "skills": [],
     }
     return {
+        "schema_version": 1,
         "task_id": task_id or str(uuid.uuid4()),
         "agent_id": agent_id,
         "command": command,
@@ -115,7 +116,7 @@ async def test_enqueue_claim_complete_round_trip(
     result = AgentResult(success=True, output="done", trace_id="t-1", run_id="r-1")
     await queue.complete(task_id, result)
 
-    done = await queue._await_completion(task_id, timeout=2.0)
+    done = await queue.await_completion(task_id, timeout=2.0)
     assert done.success is True
     assert done.output == "done"
 
@@ -128,7 +129,7 @@ async def test_fail_stores_error_result(
     await queue.claim("local", consumer_id="c1", block_ms=500)
     await queue.fail(task_id, "boom")
 
-    result = await queue._await_completion(task_id, timeout=2.0)
+    result = await queue.await_completion(task_id, timeout=2.0)
     assert result.success is False
     assert any("boom" in s["reason"] for s in result.signals)
 
@@ -187,7 +188,7 @@ async def test_await_completion_timeout(
     task = _make_task()
     task_id = await queue.enqueue(task)
     with pytest.raises(TimeoutError):
-        await queue._await_completion(task_id, timeout=0.1)
+        await queue.await_completion(task_id, timeout=0.1)
 
 
 async def test_idempotent_complete(
@@ -202,7 +203,7 @@ async def test_idempotent_complete(
     # Second complete: memory raises KeyError (record consumed),
     # streams silently overwrites the TTL key. Either is acceptable;
     # we just assert the first completion is observable.
-    observed = await queue._await_completion(task_id, timeout=1.0)
+    observed = await queue.await_completion(task_id, timeout=1.0)
     assert observed.success is True
 
 

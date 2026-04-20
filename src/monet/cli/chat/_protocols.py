@@ -66,6 +66,8 @@ class InlinePickProtocol:
 
     @staticmethod
     def matches(envelope: InterruptEnvelope) -> bool:
+        if envelope is None or not envelope.fields:
+            return False
         radios: list[EnvelopeField] = []
         free_text: list[EnvelopeField] = []
         for f in envelope.fields:

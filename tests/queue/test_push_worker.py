@@ -50,6 +50,7 @@ def _ctx(agent_id: str = "a", command: str = "go") -> AgentRunContext:
 
 def _record(agent_id: str = "a", command: str = "go") -> TaskRecord:
     return {
+        "schema_version": 1,
         "task_id": "t-1",
         "agent_id": agent_id,
         "command": command,

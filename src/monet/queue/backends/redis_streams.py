@@ -115,6 +115,8 @@ class RedisStreamsTaskQueue:
                 self._uri,
                 max_connections=self._pool_size,
                 decode_responses=True,
+                socket_timeout=float(self._lease_ttl),
+                socket_connect_timeout=5.0,
             )
         return self._client
 
@@ -126,6 +128,14 @@ class RedisStreamsTaskQueue:
         except Exception:
             _log.exception("Redis PING failed")
             return False
+
+    @property
+    def backend_name(self) -> str:
+        return "redis"
+
+    @property
+    def lease_ttl_seconds(self) -> float:
+        return self._lease_ttl
 
     async def close(self) -> None:
         """Close the Redis client and release the connection pool."""
@@ -160,15 +170,18 @@ class RedisStreamsTaskQueue:
             xadd_kwargs["approximate"] = True
 
         stream_id = await client.xadd(stream, {"task": payload}, **xadd_kwargs)  # type: ignore[misc]
-        await client.hset(  # type: ignore[misc]
+        # Pipeline HSET+EXPIRE atomically; if this fails, claim() rebinds.
+        pipe = client.pipeline(transaction=True)
+        pipe.hset(
             _index_key(task["task_id"]),
             mapping={"stream_id": stream_id, "pool": task["pool"]},
         )
-        await client.expire(_index_key(task["task_id"]), self._lease_ttl * 4)  # type: ignore[misc]
+        pipe.expire(_index_key(task["task_id"]), self._lease_ttl * 4)
+        await pipe.execute()
         self._known_pools.add(task["pool"])
         return task["task_id"]
 
-    async def _await_completion(self, task_id: str, timeout: float) -> AgentResult:
+    async def await_completion(self, task_id: str, timeout: float) -> AgentResult:
         """Wait for a task result, race-free via subscribe-then-GET.
 
         Called by :func:`monet.orchestration._invoke.wait_completion` via
@@ -283,8 +296,14 @@ class RedisStreamsTaskQueue:
         return record
 
     async def complete(self, task_id: str, result: AgentResult) -> None:
-        """Store the result with TTL, XACK the stream entry, notify waiters."""
+        """Store the result with TTL, XACK the stream entry, notify waiters.
+
+        Idempotent — if result already stored, skips silently.
+        """
         client = await self._ensure_client()
+        if await client.exists(_result_key(task_id)):
+            _log.debug("complete() already-completed task %s, skipping", task_id)
+            return
         stream_id, pool = await self._lookup_index(task_id)
         result_ttl = self._lease_ttl * _DEFAULT_RESULT_TTL_MULTIPLIER
         pipe = client.pipeline(transaction=True)
@@ -416,6 +435,12 @@ class RedisStreamsTaskQueue:
                 task_id = key.removeprefix("push_dispatch:")
                 records.append({"task_id": task_id, **data})
         return records
+
+    # --- QueueMaintenance protocol -----------------------------------------
+
+    async def reclaim_expired(self) -> list[str]:
+        """Protocol-compliant reclaim. Delegates to reclaim_expired_internal."""
+        return await self.reclaim_expired_internal()
 
     # --- Sweeper (crash recovery via XPENDING / XCLAIM) ------------------
 

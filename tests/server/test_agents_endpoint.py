@@ -117,7 +117,7 @@ async def test_invoke_agent_endpoint_calls_orchestration_primitive(
         }
 
     monkeypatch.setattr(
-        "monet.orchestration._invoke.invoke_agent",
+        "monet.orchestration.invoke_agent",
         _fake_invoke,
     )
 
@@ -153,7 +153,7 @@ async def test_invoke_agent_endpoint_surfaces_invoke_errors_as_400(
         raise ValueError(msg)
 
     monkeypatch.setattr(
-        "monet.orchestration._invoke.invoke_agent",
+        "monet.orchestration.invoke_agent",
         _raises,
     )
 

@@ -18,6 +18,7 @@ API_KEY = "test-secret-key"
 def _make_task(agent_id: str, command: str, pool: str) -> TaskRecord:
     ctx = make_ctx(agent_id=agent_id, command=command)
     return {
+        "schema_version": 1,
         "task_id": str(uuid.uuid4()),
         "agent_id": agent_id,
         "command": command,

@@ -22,7 +22,7 @@ def _get_model(model_string: str) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("writer", "google_genai:gemini-2.5-flash")
+    return agent_model("writer", "xai:grok-3-mini-fast")
 
 
 writer = agent("writer")

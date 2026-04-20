@@ -23,7 +23,9 @@ if TYPE_CHECKING:
     from monet.types import AgentResult, AgentRunContext
 
 __all__ = [
+    "TASK_RECORD_SCHEMA_VERSION",
     "AwaitAlreadyConsumedError",
+    "QueueMaintenance",
     "TaskQueue",
     "TaskRecord",
     "TaskStatus",
@@ -50,9 +52,13 @@ class TaskStatus(StrEnum):
     FAILED = "failed"
 
 
+TASK_RECORD_SCHEMA_VERSION = 1
+
+
 class TaskRecord(TypedDict):
     """Snapshot of a task at a point in time."""
 
+    schema_version: int
     task_id: str
     agent_id: str
     command: str
@@ -112,4 +118,79 @@ class TaskQueue(Protocol):
 
     def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
         """Yield progress events for a task until it completes."""
+        ...
+
+    async def await_completion(self, task_id: str, timeout: float) -> AgentResult:
+        """Block until task completes or times out.
+
+        Raises:
+            TimeoutError: if deadline exceeded.
+            KeyError: if task_id was never enqueued.
+            AwaitAlreadyConsumedError: if result TTL has expired.
+        """
+        ...
+
+    async def ping(self) -> bool:
+        """Check backend connectivity. Returns True if healthy.
+
+        In-memory backends always return True. Network-backed
+        implementations verify the transport is reachable.
+        """
+        ...
+
+    @property
+    def backend_name(self) -> str:
+        """Human-readable backend identifier (e.g. 'redis', 'memory').
+
+        Used in health responses and logging without isinstance checks.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Release connections and background resources.
+
+        No-op for in-memory backends. Network-backed implementations
+        close connection pools.
+        """
+        ...
+
+
+@runtime_checkable
+class QueueMaintenance(Protocol):
+    """Optional maintenance operations for persistent queue backends.
+
+    Not part of the core transport-neutral contract. Backends that
+    support lease-based crash recovery and push-dispatch tracking
+    implement this protocol. Server lifespans check
+    ``isinstance(queue, QueueMaintenance)`` to activate sweepers and
+    boot recovery without coupling to a specific backend class.
+    """
+
+    @property
+    def lease_ttl_seconds(self) -> float:
+        """Lease duration for claimed tasks. Used to derive sweep intervals."""
+        ...
+
+    async def reclaim_expired(self) -> list[str]:
+        """Reclaim tasks whose lease has expired. Returns reclaimed task_ids."""
+        ...
+
+    async def record_push_dispatch(
+        self,
+        task_id: str,
+        url: str,
+        dispatch_secret: str | None,
+        task_payload: str,
+        *,
+        attempt: int = 0,
+    ) -> None:
+        """Track an in-flight push dispatch for restart recovery."""
+        ...
+
+    async def pop_push_dispatch(self, task_id: str) -> None:
+        """Remove a push dispatch tracking record on success or terminal failure."""
+        ...
+
+    async def list_in_flight_push_dispatches(self) -> list[dict[str, Any]]:
+        """List all in-flight push dispatch records for boot recovery."""
         ...
