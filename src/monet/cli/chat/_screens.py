@@ -122,9 +122,12 @@ class AgentsScreen(_TableScreen):
         except Exception as exc:
             _log.warning("agents load failed: %s", exc)
             return
-        for cap in sorted(caps, key=lambda c: (c.agent_id, c.command)):
-            cmd = f"/{cap.agent_id}:{cap.command}"
-            table.add_row(cmd, cap.description or "", key=cmd)
+        for cap in sorted(
+            caps,
+            key=lambda c: (c.get("agent_id", ""), c.get("command", "")),
+        ):
+            cmd = f"/{cap.get('agent_id')}:{cap.get('command')}"
+            table.add_row(cmd, cap.get("description") or "", key=cmd)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         table = self.query_one("#table", DataTable)

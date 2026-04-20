@@ -35,8 +35,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def test_defaults() -> None:
     cfg = ChatConfig.load()
     assert cfg.graph == "monet.orchestration.chat_graph:build_chat_graph"
-    assert cfg.respond_model == "google_genai:gemini-2.5-flash"
-    assert cfg.triage_model == "google_genai:gemini-2.5-flash-lite"
+    assert cfg.respond_model == "groq:llama-3.1-8b-instant"
+    assert cfg.triage_model == "groq:llama-3.1-8b-instant"
 
 
 def test_env_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:

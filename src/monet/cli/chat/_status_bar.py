@@ -53,6 +53,14 @@ class StatusBar(Widget):
         self._override_text: str = ""
         self._spinner_frame: int = 0
 
+    def on_mount(self) -> None:
+        self.set_interval(0.1, self._tick_spinner)
+
+    def _tick_spinner(self) -> None:
+        if self._active_run:
+            self._spinner_frame = (self._spinner_frame + 1) % len(self._SPINNER_FRAMES)
+            self.refresh()
+
     def set_override(self, text: str) -> None:
         self._override_text = text
         self.refresh()
@@ -122,7 +130,5 @@ class StatusBar(Widget):
         self.refresh()
 
     def update_spinner(self) -> str:
-        """Return the next spinner frame and advance the cycle."""
-        frame = self._SPINNER_FRAMES[self._spinner_frame]
-        self._spinner_frame = (self._spinner_frame + 1) % len(self._SPINNER_FRAMES)
-        return frame
+        """Return the current spinner frame."""
+        return self._SPINNER_FRAMES[self._spinner_frame]

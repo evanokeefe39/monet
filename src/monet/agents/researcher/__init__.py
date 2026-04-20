@@ -90,7 +90,7 @@ def _last_ai_message(messages: list[Any]) -> str:
 
 
 def _model_string() -> str:
-    return agent_model("researcher", "xai:grok-3-mini-fast")
+    return agent_model("researcher", "groq:llama-3.1-8b-instant")
 
 
 #: Output token cap applied when the researcher synthesises its final
