@@ -88,7 +88,7 @@ dev = [
     "symdex>=0.1",
     "graphifyy>=0.1",
     "fakeredis[lua]>=2.26",
-    "respx>=0.22",
+    "respx>=0.23.1",
     "testcontainers>=4.0",
 ]
 
