@@ -22,7 +22,7 @@ def _get_model(model_string: str) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("publisher", "xai:grok-3-mini-fast")
+    return agent_model("publisher", "groq:llama-3.1-8b-instant")
 
 
 publisher = agent("publisher")

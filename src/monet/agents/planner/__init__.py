@@ -49,7 +49,7 @@ def _get_model(model_string: str, *, temperature: float = 0.0) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("planner", "xai:grok-3-mini-fast")
+    return agent_model("planner", "groq:llama-3.1-8b-instant")
 
 
 _PLANNER_EXCLUDE: tuple[str, ...] = ("planner",)

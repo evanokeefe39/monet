@@ -49,7 +49,7 @@ from monet.cli.chat._screens import (
 )
 from monet.cli.chat._slash import RegistrySuggester
 from monet.cli.chat._status_bar import FocusMode, StatusBar
-from monet.cli.chat._themes import MONET_DARK, MONET_THEMES
+from monet.cli.chat._themes import MONET_EMBER, MONET_THEMES
 from monet.cli.chat._transcript import Transcript
 from monet.cli.chat._turn import (
     InterruptCoordinator,
@@ -162,7 +162,7 @@ class ChatApp(App[None]):
         for theme in MONET_THEMES:
             with contextlib.suppress(Exception):
                 self.register_theme(theme)
-        self.theme = MONET_DARK.name
+        self.theme = MONET_EMBER.name
 
         self.thread_id = self._initial_thread_id
         self.title = (
@@ -221,6 +221,18 @@ class ChatApp(App[None]):
             return
         if text in {"/quit", "/exit"}:
             self.exit()
+            return
+        if text == "/threads":
+            self.action_open_threads()
+            return
+        if text == "/agents":
+            self.action_open_agents()
+            return
+        if text == "/artifacts":
+            self.action_open_artifacts()
+            return
+        if text == "/runs":
+            self.action_open_runs()
             return
         if self._interrupts.is_pending():
             self._transcript.append(f"[user] {text}")
