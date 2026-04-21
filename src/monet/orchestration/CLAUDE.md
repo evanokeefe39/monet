@@ -11,7 +11,8 @@ Two-graph pipeline (planning + execution) plus chat graph. Owns graph constructi
 | `planning_graph.py` | Planning subgraph — LLM planner, HITL revision loop (MAX_REVISIONS=3), emits `work_brief_pointer` + `RoutingSkeleton` |
 | `execution_graph.py` | Execution subgraph — DAG traversal via `completed_node_ids`, dispatches `RoutingNode` to queue |
 | `default_graph.py` | Compound graph: planning → execution |
-| `chat_graph.py` | Chat graph — triage node, respond node, HITL interrupt |
+| `chat_graph.py` | Thin Aegra-compatible entry point — absolute imports only (Aegra re-executes under synthetic namespace); delegates to `chat/` subpackage |
+| `chat/` | monet's default chat implementation — private subpackage, see below |
 | `_invoke.py` | `invoke_agent()` — builds `TaskRecord`, enqueues, awaits result, routes signals |
 | `_state.py` | `OrchestrationState` TypedDict — pointer-only, no content |
 | `_signal_router.py` | Maps signal types to graph transitions |
@@ -19,6 +20,32 @@ Two-graph pipeline (planning + execution) plus chat graph. Owns graph constructi
 | `_result_parser.py` | Parse `AgentResult` from queue into typed graph events |
 | `_planner_outcome.py` | Parse planner structured output into `RoutingSkeleton` |
 | `_forms.py` | HITL form schema (`Form`, `Field`) for interrupt payloads |
+
+## Chat subpackage (`chat/`)
+
+monet's default chat graph implementation. All modules are private (`_*.py`). Neither the client nor the TUI imports from this package — the contract between the chat graph and its callers is protocol-based, not type-based.
+
+| Module | Owns |
+|--------|------|
+| `_state.py` | `ChatState` TypedDict — messages (append reducer), route, command_meta |
+| `_build.py` | `build_chat_graph()` — composes nodes and conditional edges into compiled graph |
+| `_parse.py` | `parse_command_node` — pure-string slash-command parser, no LLM |
+| `_triage.py` | `triage_node` — LLM classifier routing free-form text to chat/plan/specialist |
+| `_respond.py` | `respond_node` — direct LLM reply for conversational turns |
+| `_specialist.py` | `specialist_node` — dispatches `/<agent>:<cmd>` to `invoke_agent` |
+| `_format.py` | Render `AgentResult` and execution summaries as chat messages |
+| `_lc.py` | LangChain model binding (`init_chat_model`); single touch-point for LLM provider |
+
+### Chat graph contract (for replacement graphs)
+
+The client and TUI invoke the chat graph by string ID only. A replacement graph must:
+
+1. Accept `{"messages": [{"role": str, "content": str}]}` as input.
+2. Emit state patches with a `messages` field (same shape, append-only reducer).
+3. Optionally emit custom progress events as dicts with `agent`, `status`, `run_id` keys.
+4. Optionally call LangGraph `interrupt(payload_dict)` for HITL; payload with `prompt` + `fields` keys renders as a form in the TUI.
+
+`ChatState`, `ChatTriageResult`, and `build_chat_graph` are implementation details — do not extend them in replacement graphs. Configure replacement via `[chat] graph = "mymod:factory"` in `monet.toml`. Full replacement guide: `docs/guides/custom-graphs.md#replacing-the-chat-graph`.
 
 ## Pointer-only invariant
 

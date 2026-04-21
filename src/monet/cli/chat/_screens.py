@@ -165,7 +165,7 @@ class ArtifactsScreen(_TableScreen):
 
     async def _load_data(self) -> None:
         table = self.query_one("#table", DataTable)
-        table.add_columns("ID", "Summary", "Type", "View")
+        table.add_columns("ID", "Summary", "Type", "Agent", "View")
         if not self._tid:
             return
         try:
@@ -184,6 +184,7 @@ class ArtifactsScreen(_TableScreen):
                 short_id,
                 (a.summary or "")[:48],
                 kind,
+                (a.agent_id or "")[:16],
                 link,
                 key=a.artifact_id,
             )

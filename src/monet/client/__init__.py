@@ -108,6 +108,8 @@ class ArtifactSummary:
     artifact_id: str
     summary: str
     kind: str
+    agent_id: str = ""
+    key: str = ""
 
 
 __all__ = [
@@ -450,6 +452,8 @@ class MonetClient:
                 artifact_id=item.get("artifact_id", ""),
                 summary=item.get("summary", ""),
                 kind=item.get("content_type", ""),
+                agent_id=item.get("agent_id", "") or "",
+                key=item.get("key", "") or "",
             )
             for item in items
             if isinstance(item, dict)

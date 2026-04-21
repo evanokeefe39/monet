@@ -242,6 +242,87 @@ graph = "custom_pipeline"
 
 The server discovers and serves the graph. `monet run --graph custom_pipeline` and `MonetClient.run("custom_pipeline", ...)` both work.
 
+## Replacing the chat graph
+
+monet ships a default chat graph (`orchestration/chat/`) that handles slash-command parsing, triage, direct LLM responses, specialist agent dispatch, and planning handoff. For self-hosted deployments you can replace it entirely with your own implementation.
+
+### Minimal contract
+
+The client and TUI are protocol-based — they never import types from `orchestration/chat`. A replacement graph must satisfy four points:
+
+**1. Input shape**
+
+```python
+{"messages": [{"role": str, "content": str}]}
+```
+
+The `messages` field is the only required input key.
+
+**2. State patches — messages field**
+
+Emit state updates containing a `messages` list. The client reads the `messages` key from update events and yields chunks where `role == "assistant"`. Use an append-only reducer so prior history is not lost:
+
+```python
+from typing import Annotated, Any, TypedDict
+
+def _append(existing: list, new: list) -> list:
+    return existing + new
+
+class MyChatState(TypedDict, total=False):
+    messages: Annotated[list[dict[str, Any]], _append]
+```
+
+**3. Progress events (optional)**
+
+Custom events with `agent`, `status`, and `run_id` keys become `AgentProgress` objects on the client and render as progress lines in the TUI:
+
+```python
+from monet import emit_progress
+
+emit_progress({"agent": "mybot", "status": "thinking", "run_id": run_id})
+```
+
+Any events without these keys are silently ignored by the client.
+
+**4. HITL interrupts (optional)**
+
+Call LangGraph's `interrupt()` with any dict payload. The TUI renders the interrupt as raw text by default. If the payload has `prompt` and `fields` keys it renders as a structured form:
+
+```python
+from langgraph.types import interrupt
+
+# Plain text prompt
+interrupt({"prompt": "Confirm deletion?"})
+
+# Structured form — TUI renders labeled fields
+interrupt({
+    "prompt": "Configure connection",
+    "fields": [{"name": "host", "label": "Host", "type": "text"}],
+})
+```
+
+Resume by calling `client.resume(run_id, tag, payload)`.
+
+### Registration
+
+```toml
+# monet.toml
+[chat]
+graph = "myco.graphs.chat:build_chat_graph"
+```
+
+Or via env var: `MONET_CHAT_GRAPH=myco.graphs.chat:build_chat_graph`.
+
+`monet chat` and `MonetClient.chat(...)` both pick up the replacement automatically. No other code changes required.
+
+### What you do not need to replicate
+
+- `ChatState`, `ChatTriageResult`, `build_chat_graph` — these are monet's internal implementation. Do not import or extend them.
+- Slash-command parsing — your graph can define its own input conventions.
+- `ChatConfig` — your graph loads whatever config it needs independently.
+
+See [`examples/custom-stack/myco/graphs/chat.py`](https://github.com/evanokeefe39/monet/tree/master/examples/custom-stack/myco/graphs/chat.py) for a complete replacement that shares zero internals with the default implementation.
+
 ## Examples
 
 | Example | What it demonstrates |

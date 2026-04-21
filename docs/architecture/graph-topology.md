@@ -36,7 +36,7 @@ user message
 
 `respond_node` makes a direct LangChain `init_chat_model` call — no `invoke_agent`, no dependency on any registered agent. `triage_node` uses structured output (`ChatTriageResult` via `with_structured_output`) against the small/fast model configured in `MONET_CHAT_TRIAGE_MODEL`. Clarification-needed triage results stay in chat with an inline follow-up question rather than escalating with unclear intent.
 
-Swap the whole chat graph with a different implementation (e.g. an agentic variant that delegates response generation to a `conversationalist` agent) via `MONET_CHAT_GRAPH=<module.path>:<factory>` or `[chat] graph = ...` in `monet.toml`.
+Swap the whole chat graph with a different implementation (e.g. an agentic variant that delegates response generation to a `conversationalist` agent) via `MONET_CHAT_GRAPH=<module.path>:<factory>` or `[chat] graph = ...` in `monet.toml`. The client and TUI are graph-agnostic — they never import types from `orchestration/chat`. The minimal contract is: accept `{"messages": [{"role", "content"}]}` input, emit state patches with a `messages` field, optionally call `interrupt()` for HITL. See [Replacing the chat graph](../guides/custom-graphs.md#replacing-the-chat-graph) for the full contract.
 
 ## Planning graph
 

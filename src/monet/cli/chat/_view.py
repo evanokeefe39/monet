@@ -15,14 +15,17 @@ _AGENT_TAG_RE = re.compile(r"^\[[\w-]+:[\w-]+\]")
 
 #: Default per-role styles for transcript tag highlighting.
 DEFAULT_TAG_STYLES: dict[str, str] = {
-    "[user]": "bold #c6583c",
-    "[assistant]": "bold #007065",
-    "[info]": "bold #004c79",
-    "[error]": "bold #ae463d",
+    "[user]": "dim italic #ae6002",
+    "[assistant]": "dim italic #007065",
+    "[info]": "dim italic #004c79",
+    "[error]": "dim italic #ae463d",
     "│": "dim italic #aaaaaa",
-    "error: ": "bold #ae463d",
+    "error: ": "dim italic #ae463d",
     "[hint]": "dim italic #00365f",
 }
+
+#: Tags where the style should extend to the entire rest of the line.
+_FULL_LINE_TAGS: frozenset[str] = frozenset({"│", "error: ", "[hint]"})
 
 #: Mapping from ``/colors <role>`` argument to the matching transcript tag.
 ROLE_TAGS: dict[str, str] = {
@@ -53,7 +56,10 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
             rest = line[len(tag) :]
             text = Text(overflow="fold", no_wrap=False)
             text.append(tag, style=style)
-            text.append(rest)
+            if tag in _FULL_LINE_TAGS:
+                text.append(rest, style=style)
+            else:
+                text.append(rest)
             _linkify(text, rest, offset=len(tag))
             return text
     m = _AGENT_TAG_RE.match(line)

@@ -42,7 +42,7 @@ def _format_agent_result(result: Any, *, label: str) -> dict[str, str]:
 
 
 def _append_artifact_links(content: str, artifacts: Any) -> str:
-    """Append ``→ <url>`` lines for every artifact with an ``artifact_id``."""
+    """Append markdown artifact links for every artifact with an ``artifact_id``."""
     links: list[str] = []
     for artifact in artifacts or ():
         if not isinstance(artifact, dict):
@@ -50,9 +50,8 @@ def _append_artifact_links(content: str, artifacts: Any) -> str:
         artifact_id = str(artifact.get("artifact_id") or "").strip()
         if not artifact_id:
             continue
-        key = str(artifact.get("key") or "").strip()
-        label = f" ({key})" if key else ""
-        links.append(f"→ artifact{label}: {_artifact_url(artifact_id)}")
+        key = str(artifact.get("key") or "").strip() or artifact_id[:8]
+        links.append(f"- [{key}]({_artifact_url(artifact_id)})")
     if not links:
         return content
     return content + "\n\n" + "\n".join(links)
@@ -81,7 +80,7 @@ def _summarise_dict_output(label: str, output: dict[str, Any]) -> str:
                 lines.append(f"    … +{len(nodes) - 8} more")
         brief = output.get("work_brief_artifact_id")
         if brief:
-            lines.append(f"  • work_brief: {_artifact_url(str(brief))}")
+            lines.append(f"  • [work_brief]({_artifact_url(str(brief))})")
         return "\n".join(lines)
 
     for key in ("summary", "goal", "task", "verdict", "result", "content"):
@@ -112,24 +111,28 @@ async def execution_summary_node(state: ChatState) -> dict[str, Any]:
             "messages": [
                 {
                     "role": "assistant",
-                    "content": "Execution finished — no results recorded.",
+                    "content": "**Execution finished** — no results recorded.",
                 }
             ]
         }
-    lines = ["Execution finished:"]
+    lines = ["**Execution finished:**"]
     for entry in waves:
         if not isinstance(entry, dict):
             continue
         node_id = str(entry.get("node_id") or "?")
         agent_id = str(entry.get("agent_id") or "?")
         success = bool(entry.get("success", True))
-        marker = "ok" if success else "fail"
         artifacts = entry.get("artifacts") or []
-        link = ""
+        artifact_link = ""
         if isinstance(artifacts, list | tuple):
             for a in artifacts:
                 if isinstance(a, dict) and a.get("artifact_id"):
-                    link = f" → {_artifact_url(str(a['artifact_id']))}"
+                    aid = str(a["artifact_id"])
+                    key = str(a.get("key") or "").strip() or aid[:8]
+                    artifact_link = f" — [{key}]({_artifact_url(aid)})"
                     break
-        lines.append(f"  {marker} {node_id} ({agent_id}){link}")
+        if success:
+            lines.append(f"- ok `{node_id}` ({agent_id}){artifact_link}")
+        else:
+            lines.append(f"- **fail** `{node_id}` ({agent_id})")
     return {"messages": [{"role": "assistant", "content": "\n".join(lines)}]}
