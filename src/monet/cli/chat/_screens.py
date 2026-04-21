@@ -15,7 +15,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Header, Static
 
 from monet.cli._render import format_age
-from monet.cli.chat._themes import MONET_DARK as _T
+from monet.cli.chat._themes import MONET_EMBER as _T
 
 _V = _T.variables
 
@@ -225,10 +225,10 @@ class RunsScreen(_TableScreen):
             _log.warning("runs load failed: %s", exc)
             return
         status_styles: dict[str, str] = {
-            "success": _V["status-highlight"],
-            "interrupted": _V["status-interrupted"],
-            "error": _V["status-error"],
-            "running": _V["status-running"],
+            "success": _T.success or "",
+            "interrupted": _T.accent or "",
+            "error": _T.error or "",
+            "running": _T.secondary or "",
         }
         for r in runs:
             status_text = Text(r.status or "unknown")

@@ -89,7 +89,7 @@ class ChatApp(App[None]):
         height: auto;
         max-height: 8;
         margin-bottom: 5;
-        border: solid $accent;
+        border: solid $primary;
         background: black;
         display: none;
     }
@@ -104,13 +104,13 @@ class ChatApp(App[None]):
         padding: 0;
     }
     #prompt-area:focus-within {
-        border: solid $accent;
+        border: solid $primary;
     }
     #prompt-glyph {
         width: 2;
         height: 1;
         padding: 0;
-        color: $accent;
+        color: $primary;
         background: black;
     }
     """

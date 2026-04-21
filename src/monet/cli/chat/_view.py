@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from rich.text import Text
 
-from monet.cli.chat._themes import MONET_DARK as _T
+from monet.cli.chat._themes import MONET_EMBER as _T
 
 if TYPE_CHECKING:
     from monet.client._events import AgentProgress
@@ -18,13 +18,13 @@ _V = _T.variables
 
 #: Default per-role styles for transcript tag highlighting.
 DEFAULT_TAG_STYLES: dict[str, str] = {
-    "[user]": f"italic {_T.warning}",
-    "[assistant]": f"italic {_V['tag-assistant']}",
+    "[user]": f"italic {_T.primary}",
+    "[assistant]": f"italic {_T.primary}",
     "[info]": f"italic {_T.accent}",
-    "[error]": f"italic {_V['tag-error']}",
-    "│": f"dim italic {_V['progress-rule']}",
-    "error: ": f"italic {_V['tag-error']}",
-    "[hint]": f"dim italic {_V['tag-hint']}",
+    "[error]": f"italic {_T.error}",
+    "│": f"dim italic {_V['text-muted']}",
+    "error: ": f"italic {_T.error}",
+    "[hint]": f"dim italic {_T.secondary}",
 }
 
 #: Tags where the style should extend to the entire rest of the line.
@@ -62,7 +62,7 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
             if tag in _FULL_LINE_TAGS:
                 text.append(rest, style=style)
             else:
-                text.append(rest)
+                text.append(rest, style=_V["text-muted"])
             _linkify(text, rest, offset=len(tag))
             return text
     m = _AGENT_TAG_RE.match(line)
@@ -71,10 +71,10 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
         rest = line[len(tag) :]
         text = Text(overflow="fold", no_wrap=False)
         text.append(tag, style=_T.primary)
-        text.append(rest)
+        text.append(rest, style=_V["text-muted"])
         _linkify(text, rest, offset=len(tag))
         return text
-    text = Text(line, overflow="fold", no_wrap=False)
+    text = Text(line, style=_V["text-muted"], overflow="fold", no_wrap=False)
     _linkify(text, line)
     return text
 
