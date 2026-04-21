@@ -7,37 +7,32 @@ from typing import TYPE_CHECKING
 
 from rich.text import Text
 
-from monet.cli.chat._themes import MONET_EMBER as _T
+from monet.cli.chat._themes import MONET_EMBER
 
 if TYPE_CHECKING:
     from monet.client._events import AgentProgress
 
 _URL_RE = re.compile(r"https?://\S+")
 _AGENT_TAG_RE = re.compile(r"^\[[\w-]+:[\w-]+\]")
-_V = _T.variables
 
-#: Default per-role styles for transcript tag highlighting.
-DEFAULT_TAG_STYLES: dict[str, str] = {
-    "[user]": f"italic {_T.primary}",
-    "[assistant]": f"italic {_T.primary}",
-    "[info]": f"italic {_T.accent}",
-    "[error]": f"italic {_T.error}",
-    "│": f"dim italic {_V['text-muted']}",
-    "error: ": f"italic {_T.error}",
-    "[hint]": f"dim italic {_T.secondary}",
+_V = MONET_EMBER.variables
+_PRIMARY = MONET_EMBER.primary
+_ACCENT = MONET_EMBER.accent
+_ERROR = MONET_EMBER.error
+_SECONDARY = MONET_EMBER.secondary
+_MUTED = _V["text-muted"]
+
+TAG_STYLES: dict[str, str] = {
+    "[user]": f"italic {_PRIMARY}",
+    "[assistant]": f"italic {_PRIMARY}",
+    "[info]": f"italic {_ACCENT}",
+    "[error]": f"italic {_ERROR}",
+    "│": f"dim italic {_MUTED}",
+    "error: ": f"italic {_ERROR}",
+    "[hint]": f"dim italic {_SECONDARY}",
 }
 
-#: Tags where the style should extend to the entire rest of the line.
 _FULL_LINE_TAGS: frozenset[str] = frozenset({"│", "error: ", "[hint]"})
-
-#: Mapping from ``/colors <role>`` argument to the matching transcript tag.
-ROLE_TAGS: dict[str, str] = {
-    "user": "[user]",
-    "assistant": "[assistant]",
-    "info": "[info]",
-    "progress": "│",
-    "error": "[error]",
-}
 
 
 def _linkify(text: Text, content: str, offset: int = 0) -> None:
@@ -48,13 +43,13 @@ def _linkify(text: Text, content: str, offset: int = 0) -> None:
         text.stylize(f"link {m.group()}", offset + m.start(), offset + m.end())
 
 
-def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
-    """Return a ``rich.Text`` with the leading tag coloured per *tag_styles*.
+def styled_line(line: str) -> Text:
+    """Return a ``rich.Text`` with the leading tag coloured per theme.
 
     URLs anywhere in the line are made clickable via Rich's link style so
     terminals that support OSC 8 (most modern ones) render them as hyperlinks.
     """
-    for tag, style in tag_styles.items():
+    for tag, style in TAG_STYLES.items():
         if line.startswith(tag):
             rest = line[len(tag) :]
             text = Text(overflow="fold", no_wrap=False)
@@ -62,7 +57,7 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
             if tag in _FULL_LINE_TAGS:
                 text.append(rest, style=style)
             else:
-                text.append(rest, style=_V["text-muted"])
+                text.append(rest, style=_MUTED)
             _linkify(text, rest, offset=len(tag))
             return text
     m = _AGENT_TAG_RE.match(line)
@@ -70,11 +65,11 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
         tag = m.group()
         rest = line[len(tag) :]
         text = Text(overflow="fold", no_wrap=False)
-        text.append(tag, style=_T.primary)
-        text.append(rest, style=_V["text-muted"])
+        text.append(tag, style=_PRIMARY)
+        text.append(rest, style=_MUTED)
         _linkify(text, rest, offset=len(tag))
         return text
-    text = Text(line, style=_V["text-muted"], overflow="fold", no_wrap=False)
+    text = Text(line, style=_MUTED, overflow="fold", no_wrap=False)
     _linkify(text, line)
     return text
 

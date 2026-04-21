@@ -260,14 +260,11 @@ async def _chat_main(
         except Exception as exc:
             click.secho(f"(history load failed: {exc})", dim=True, err=True)
 
-    from monet.config._user_chat import load_user_chat_style
-
     app = ChatApp(
         client=client,
         thread_id=thread_id,
         slash_commands=slash_commands,
         history=history,
-        style=load_user_chat_style(),
     )
     await app.run_async()
     final_tid = app.thread_id

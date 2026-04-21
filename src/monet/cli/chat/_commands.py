@@ -84,9 +84,6 @@ async def dispatch_slash(ctx: CommandContext, text: str) -> bool:
     if head == "/help":
         _cmd_help(ctx)
         return True
-    if head == "/colors":
-        _cmd_colors(ctx, arg)
-        return True
     return False
 
 
@@ -156,46 +153,6 @@ def _cmd_copy(ctx: CommandContext, arg: str = "") -> None:
     ctx.transcript.append(f"[info] copied {len(text.splitlines())} line(s)")
 
 
-def _cmd_colors(ctx: CommandContext, arg: str) -> None:
-    from textual.color import Color
-
-    from monet.cli.chat._view import ROLE_TAGS
-
-    parts = arg.split() if arg else []
-    if not parts:
-        ctx.transcript.append("[info] current colors (session):")
-        for target, tag in ROLE_TAGS.items():
-            style = ctx.transcript.get_tag_style(tag)
-            ctx.transcript.append(f"  {target:<11} {style}")
-        ctx.transcript.append(
-            "[info] set via: /colors <target> <colour> | /colors reset"
-        )
-        return
-    if parts == ["reset"]:
-        ctx.transcript.append("[info] colors reset to defaults")
-        return
-    if len(parts) != 2:
-        ctx.transcript.append(
-            "[error] usage: /colors | /colors reset | /colors <target> <colour>"
-        )
-        return
-    target, value = parts[0].lower(), parts[1]
-    try:
-        Color.parse(value)
-    except Exception:
-        ctx.transcript.append(f"[error] '{value}' is not a valid colour")
-        return
-    role_tag = ROLE_TAGS.get(target)
-    if role_tag is None:
-        known = ", ".join(ROLE_TAGS.keys())
-        ctx.transcript.append(f"[error] unknown target '{target}' (try: {known})")
-        return
-    existing = ctx.transcript.get_tag_style(role_tag)
-    modifier = "bold " if "bold" in existing.split() else ""
-    ctx.transcript.set_tag_style(role_tag, f"{modifier}{value}".strip())
-    ctx.transcript.append(f"[info] [{target}] colour set to {value}")
-
-
 def _cmd_help(ctx: CommandContext) -> None:
     ctx.transcript.append("[info] commands:")
     ctx.transcript.append("  /new, /clear        start a fresh thread")
@@ -207,7 +164,6 @@ def _cmd_help(ctx: CommandContext) -> None:
     ctx.transcript.append("  /rename <name>      rename current thread")
     ctx.transcript.append("  /copy               copy last message")
     ctx.transcript.append("  /copy all           copy full transcript")
-    ctx.transcript.append("  /colors             show/change palette")
     ctx.transcript.append("  /quit, /exit        leave the REPL")
     ctx.transcript.append("[info] keys: ctrl+q quit · ctrl+x cancel · tab navigate")
     if ctx.server_slash_commands:
