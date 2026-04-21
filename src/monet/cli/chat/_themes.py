@@ -4,7 +4,7 @@ Palettes sourced from color-palettes.txt. Dark-first identity — light
 variant is a fallback, not a second product.
 
 Registered on app mount via ``self.register_theme(...)``; the active
-theme is selected by ``self.theme = "monet-dark"``.
+theme is selected by ``self.theme = "monet-ember"``.
 """
 
 from __future__ import annotations
@@ -113,12 +113,12 @@ MONET_FOREST = Theme(
 # Palette 9: burnt terracotta/ocean
 MONET_EMBER = Theme(
     name="monet-ember",
-    primary="#c6583c",
-    secondary="#ae463d",
-    accent="#007065",
-    warning="#006246",
-    error="#004c79",
-    success="#00365f",
+    primary="#007065",
+    secondary="#004c79",
+    accent="#ae6002",
+    warning="#c6583c",
+    error="#ae463d",
+    success="#006246",
     foreground="#e0dcd8",
     background="#000000",
     surface="#120a08",
@@ -129,6 +129,7 @@ MONET_EMBER = Theme(
         "text-muted": "#8a7a72",
         "panel-lighten-1": "#2a1a16",
         "panel-lighten-2": "#362420",
+        "status-highlight": "#00c8da",
     },
 )
 
