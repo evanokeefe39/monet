@@ -68,33 +68,36 @@ if TYPE_CHECKING:
     from monet.client import MonetClient
 
 _log = logging.getLogger("monet.cli.chat")
+_V = MONET_EMBER.variables
+
+_PROMPT_ACCENT = _V["teal-600"]
 
 
 class ChatApp(App[None]):
     """Monet chat TUI — thin dispatcher over self-contained widgets."""
 
-    CSS = """
-    Screen { background: black; overflow: hidden; }
-    * {
+    CSS = f"""
+    Screen {{ background: black; overflow: hidden; }}
+    * {{
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 0;
         scrollbar-background: black;
         scrollbar-color: $accent 60%;
         scrollbar-color-hover: $accent;
-    }
-    #main-body { height: 100%; layers: base overlay; }
-    #slash-suggest {
+    }}
+    #main-body {{ height: 100%; layers: base overlay; }}
+    #slash-suggest {{
         layer: overlay;
         dock: bottom;
         height: auto;
         max-height: 8;
         margin-bottom: 5;
-        border: solid $primary;
+        border: solid {_PROMPT_ACCENT};
         background: black;
         display: none;
-    }
-    #slash-suggest.visible { display: block; }
-    #prompt-area {
+    }}
+    #slash-suggest.visible {{ display: block; }}
+    #prompt-area {{
         dock: bottom;
         height: 3;
         max-height: 8;
@@ -102,17 +105,17 @@ class ChatApp(App[None]):
         border: solid $surface;
         background: black;
         padding: 0;
-    }
-    #prompt-area:focus-within {
-        border: solid $primary;
-    }
-    #prompt-glyph {
+    }}
+    #prompt-area:focus-within {{
+        border: solid {_PROMPT_ACCENT};
+    }}
+    #prompt-glyph {{
         width: 2;
         height: 1;
         padding: 0;
-        color: $primary;
+        color: {_PROMPT_ACCENT};
         background: black;
-    }
+    }}
     """
 
     COMMANDS: ClassVar[set[Any]] = set()
