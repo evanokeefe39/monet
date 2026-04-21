@@ -133,6 +133,9 @@ async def _invoke_planner(
     roster_entry = _roster_context_entry()
     if roster_entry is not None:
         context_entries = [*context_entries, roster_entry]
+    configurable = (config or {}).get("configurable") or {}
+    tid = configurable.get("thread_id")
+    thread_id: str | None = tid if isinstance(tid, str) else None
     async with attached_trace(extract_carrier_from_config(config)):
         result = await invoke_agent(
             "planner",
@@ -141,6 +144,7 @@ async def _invoke_planner(
             context=context_entries,
             trace_id=state.get("trace_id", ""),
             run_id=state.get("run_id", ""),
+            thread_id=thread_id,
         )
 
     cleared: dict[str, Any] = {

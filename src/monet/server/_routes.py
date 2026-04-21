@@ -438,7 +438,7 @@ async def list_artifacts(
     items = [
         ArtifactListItem(
             artifact_id=r["artifact_id"],
-            key=r["artifact_id"],
+            key=str(r.get("key") or r["artifact_id"]),
             content_type=r.get("content_type", ""),
             content_length=r.get("content_length", 0),
             summary=r.get("summary", ""),
