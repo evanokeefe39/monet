@@ -10,6 +10,9 @@ from rich.text import Text
 from textual.widget import Widget
 
 from monet.cli.chat._constants import SPINNER_INTERVAL
+from monet.cli.chat._themes import MONET_DARK as _T
+
+_V = _T.variables
 
 if TYPE_CHECKING:
     from textual.timer import Timer
@@ -122,34 +125,36 @@ class StatusBar(Widget):
 
     def _build_text(self) -> Text:
         t = Text(overflow="ellipsis", no_wrap=True)
-        glyph_style = "bold #2d8db5" if self._focus == FocusMode.INPUT else "#7a7a85"
+        glyph_style = (
+            f"bold {_T.accent}" if self._focus == FocusMode.INPUT else _V["text-muted"]
+        )
         t.append("▎ ", style=glyph_style)
 
         if self._active_run:
             elapsed = int(time.monotonic() - self._run_start)
             mins, secs = divmod(elapsed, 60)
-            t.append(f"{mins}:{secs:02d} ", style="#7a7a85")
-            t.append("run:", style="#168b9f")
-            t.append(self._active_run[:8], style="#e0e0e8")
+            t.append(f"{mins}:{secs:02d} ", style=_V["text-muted"])
+            t.append("run:", style=_T.primary)
+            t.append(self._active_run[:8], style=_T.foreground)
             t.append(" ", style="")
-            t.append(self.update_spinner(), style="#00c8da")
-            t.append(" · ", style="#7a7a85")
+            t.append(self.update_spinner(), style=_V["status-highlight"])
+            t.append(" · ", style=_V["text-muted"])
 
         if self._thread_name:
-            t.append("thread:", style="#168b9f")
-            t.append(self._thread_name, style="#e0e0e8")
-            t.append(" · ", style="#7a7a85")
+            t.append("thread:", style=_T.primary)
+            t.append(self._thread_name, style=_T.foreground)
+            t.append(" · ", style=_V["text-muted"])
 
-        t.append("runs:", style="#168b9f")
-        t.append(str(self._runs), style="#e0e0e8")
-        t.append(" · ", style="#7a7a85")
+        t.append("runs:", style=_T.primary)
+        t.append(str(self._runs), style=_T.foreground)
+        t.append(" · ", style=_V["text-muted"])
 
-        t.append("agents:", style="#168b9f")
-        t.append(str(self._agents), style="#e0e0e8")
-        t.append(" · ", style="#7a7a85")
+        t.append("agents:", style=_T.primary)
+        t.append(str(self._agents), style=_T.foreground)
+        t.append(" · ", style=_V["text-muted"])
 
-        t.append("artifacts:", style="#168b9f")
-        t.append(str(self._artifacts), style="#e0e0e8")
+        t.append("artifacts:", style=_T.primary)
+        t.append(str(self._artifacts), style=_T.foreground)
 
         return t
 

@@ -15,6 +15,9 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Header, Static
 
 from monet.cli._render import format_age
+from monet.cli.chat._themes import MONET_DARK as _T
+
+_V = _T.variables
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -179,7 +182,8 @@ class ArtifactsScreen(_TableScreen):
             kind = (a.kind or "").split("/")[-1].split(";")[0][:10]
             view_url = f"{base}/api/v1/artifacts/{a.artifact_id}/view"
             link = Text()
-            link.append("↗ view", style=f"link {view_url} bold #00c8da")
+            hl = _V["status-highlight"]
+            link.append("↗ view", style=f"link {view_url} bold {hl}")
             table.add_row(
                 short_id,
                 (a.summary or "")[:48],
@@ -221,19 +225,19 @@ class RunsScreen(_TableScreen):
             _log.warning("runs load failed: %s", exc)
             return
         status_styles: dict[str, str] = {
-            "success": "#00c8da",
-            "interrupted": "#e8a838",
-            "error": "#e05050",
-            "running": "#50b0e0",
+            "success": _V["status-highlight"],
+            "interrupted": _V["status-interrupted"],
+            "error": _V["status-error"],
+            "running": _V["status-running"],
         }
         for r in runs:
             status_text = Text(r.status or "unknown")
-            style = status_styles.get(r.status, "#7a7a85")
+            style = status_styles.get(r.status, _V["text-muted"])
             status_text.stylize(style)
             resumed = r.resumed_by[:8] if r.resumed_by else ""
             resumed_text = Text(resumed)
             if resumed:
-                resumed_text.stylize("#00c8da")
+                resumed_text.stylize(_V["status-highlight"])
             table.add_row(
                 r.run_id[:12],
                 status_text,
@@ -264,7 +268,7 @@ class ShortcutsScreen(Screen[None]):
         width = max(len(k) for k, _ in SHORTCUTS)
         body = Text()
         for i, (key, desc) in enumerate(SHORTCUTS):
-            body.append(f"{key:<{width}}", style="bold $primary")
+            body.append(f"{key:<{width}}", style=f"bold {_T.primary}")
             body.append(f"   {desc}")
             if i < len(SHORTCUTS) - 1:
                 body.append("\n")

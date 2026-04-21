@@ -30,6 +30,17 @@ MONET_DARK = Theme(
         "text-muted": "#7a7a85",
         "panel-lighten-1": "#1e1e2a",
         "panel-lighten-2": "#2a2a38",
+        # transcript tag colors (sourced from palette 9)
+        "tag-assistant": "#007065",
+        "tag-info": "#004c79",
+        "tag-error": "#ae463d",
+        "tag-hint": "#00365f",
+        "progress-rule": "#aaaaaa",
+        # run-state / UI highlight colors
+        "status-highlight": "#00c8da",
+        "status-interrupted": "#e8a838",
+        "status-error": "#e05050",
+        "status-running": "#50b0e0",
     },
 )
 
