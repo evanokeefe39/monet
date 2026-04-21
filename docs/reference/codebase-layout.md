@@ -34,7 +34,7 @@
 - `_dev.py` — `monet dev` as a group with `down` subcommand + auto-teardown
 - `_run.py` — single generic streaming path for every entrypoint; form-schema interrupt prompting
 - `_runs.py` — list / pending / inspect / resume; `resume` renders the pending interrupt's form schema
-- `_chat.py` — thin Click entry: resolves thread, fetches slash commands + history, configures file logging to `./.cli-logs/chat.log` via `--log-file`, hands off to Textual
+- `_chat.py` — thin Click entry: resolves thread, fetches slash commands + history, configures per-thread file logging to `.cli-logs/<timestamp>_<thread_id>.log` when `--verbose` is set, hands off to Textual
 - `chat/` subpackage:
   - `_app.py` — Textual `ChatApp`: `RichLog` transcript with `_styled_line` role tag colours, toolbar, `RegistrySuggester` ghost-text, dropdown `OptionList` for slash completions with `tab` accept, `_PickerScreen`, `SidebarPanel` (ctrl+b) with agents / threads / artifacts / keys tabs, `MainMenuScreen` (ctrl+p) replacing built-in command palette — submenus: options/theme, keyboard shortcuts, command library, about. TUI-local commands `/new` `/clear` `/threads` `/switch` `/agents` `/artifacts` `/runs` `/help` `/quit` `/exit`. HITL interrupts render as transcript text; next user submission parsed as resume payload. `_format_form_prompt` + `_parse_text_reply` handle three shapes: approval (`approve | revise <feedback> | reject`), single-field, multi-field (one line per field).
   - `_sidebar.py` — right-docked `SidebarPanel` with four `TabbedContent` tabs; min width `FLOOR_COLS=50`

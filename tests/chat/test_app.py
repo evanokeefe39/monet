@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 import pytest
 
 pytest.importorskip("textual")
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
 
 from monet.cli.chat import ChatApp
 from monet.cli.chat._hitl import (
@@ -30,6 +30,7 @@ from monet.cli.chat._prompt import AutoGrowTextArea
 from monet.cli.chat._slash import RegistrySuggester
 from monet.cli.chat._view import format_progress_line as _format_progress_line
 from monet.client._events import AgentProgress
+from tests.chat.conftest import APPROVAL_FORM, make_fake_client
 
 # --- RegistrySuggester ----------------------------------------------------
 
@@ -64,28 +65,7 @@ def test_suggester_update_replaces_list() -> None:
 # --- HITL form-text parser -----------------------------------------------
 
 
-_APPROVAL_FORM: dict[str, Any] = {
-    "prompt": "Approve plan?",
-    "fields": [
-        {
-            "name": "action",
-            "type": "radio",
-            "label": "Decision",
-            "options": [
-                {"value": "approve", "label": "Approve"},
-                {"value": "revise", "label": "Revise with feedback"},
-                {"value": "reject", "label": "Reject"},
-            ],
-            "default": "approve",
-        },
-        {
-            "name": "feedback",
-            "type": "textarea",
-            "label": "Feedback (required for revise)",
-            "default": "",
-        },
-    ],
-}
+_APPROVAL_FORM = APPROVAL_FORM
 
 
 def test_is_approval_form_detects_action_radio() -> None:
@@ -175,22 +155,7 @@ def test_parse_text_reply_carries_hidden_defaults() -> None:
 # --- Resume integration via prompt --------------------------------------
 
 
-def _fake_client() -> Any:
-    client = MagicMock()
-    chat = MagicMock()
-
-    async def _send(*_args: Any, **_kwargs: Any) -> AsyncIterator[str]:
-        if False:
-            yield ""
-
-    chat.send_message = _send
-    chat._chat_graph_id = "chat"
-    chat.get_chat_interrupt = AsyncMock(return_value=None)
-    client.chat = chat
-    client.slash_commands = AsyncMock(return_value=[])
-    client.list_capabilities = AsyncMock(return_value=[])
-    client.list_artifacts = AsyncMock(return_value=[])
-    return client
+_fake_client = make_fake_client
 
 
 def _submit_text(app: ChatApp, text: str) -> None:
@@ -206,14 +171,49 @@ def test_format_progress_line_default() -> None:
     line = _format_progress_line(
         AgentProgress(run_id="", agent_id="researcher", status="searching with Exa")
     )
-    assert line == "[progress] researcher: searching with Exa"
+    assert line == "│ searching with Exa"
+
+
+def test_format_progress_line_with_command() -> None:
+    line = _format_progress_line(
+        AgentProgress(
+            run_id="", agent_id="researcher", status="searching", command="deep"
+        )
+    )
+    assert line == "│ searching"
 
 
 def test_format_progress_line_empty_status_uses_placeholder() -> None:
     line = _format_progress_line(
         AgentProgress(run_id="", agent_id="planner", status="")
     )
-    assert line == "[progress] planner: ..."
+    assert line == "│ ..."
+
+
+def test_format_progress_line_started_suppressed() -> None:
+    line = _format_progress_line(
+        AgentProgress(run_id="", agent_id="planner", status="agent:started")
+    )
+    assert line is None
+
+
+def test_format_progress_line_completed_suppressed() -> None:
+    line = _format_progress_line(
+        AgentProgress(run_id="", agent_id="planner", status="agent:completed")
+    )
+    assert line is None
+
+
+def test_format_progress_line_failed_red() -> None:
+    line = _format_progress_line(
+        AgentProgress(
+            run_id="",
+            agent_id="planner",
+            status="agent:failed",
+            reasons="429 rate limit",
+        )
+    )
+    assert line == "error: 429 rate limit"
 
 
 # --- ChatApp smoke --------------------------------------------------------

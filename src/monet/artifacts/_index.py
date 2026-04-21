@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import Float, Index, Integer, String, Text, and_, select
+from sqlalchemy import Float, Index, Integer, String, Text, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -190,3 +190,16 @@ class SQLiteIndex:
                 row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
                 results.append(cast("ArtifactMetadata", row_dict))
             return results
+
+    async def count_per_thread(self, thread_ids: list[str]) -> dict[str, int]:
+        """Return artifact count keyed by thread_id for the given IDs."""
+        if not thread_ids:
+            return {}
+        stmt = (
+            select(ArtifactRecord.thread_id, func.count(ArtifactRecord.artifact_id))
+            .where(ArtifactRecord.thread_id.in_(thread_ids))
+            .group_by(ArtifactRecord.thread_id)
+        )
+        async with AsyncSession(self._engine) as session:
+            rows = await session.execute(stmt)
+            return {tid: count for tid, count in rows if tid is not None}

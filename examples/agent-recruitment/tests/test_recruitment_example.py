@@ -5,8 +5,8 @@ Covers the full recruitment cycle at the capability-agent level:
 1. Subprocess sandbox runs candidate code against a fixture + assertions.
 2. ``code_executor(eval_all)`` aggregates per-candidate reports into a
    ``trial_scorecard`` artifact and emits the right signals.
-3. ``qa(eval)`` consumes the scorecard, applies the baseline, ranks
-   survivors, and writes a ``comparative_review``.
+3. ``evaluator(compare)`` consumes the scorecard, applies the baseline,
+   ranks survivors, and writes a ``comparative_review``.
 4. ``record_run_summary`` hook writes one ``run_summary`` per invocation.
 5. ``data_analyst(score_agents)`` reads the run summaries, scores the
    roster, and emits ``ESCALATION_REQUIRED`` for underperformers.
@@ -78,7 +78,7 @@ class _StubOtelBackend:
 
 
 async def test_recruitment_capability_chain() -> None:
-    """Exercise code_executor → qa(eval) → data_analyst end-to-end."""
+    """Exercise code_executor → evaluator(compare) → data_analyst end-to-end."""
     configure_artifacts(InMemoryArtifactClient())
     with (
         default_registry.registry_scope(),
@@ -97,7 +97,7 @@ async def test_recruitment_capability_chain() -> None:
         )
         from recruitment.tools import configure_otel_backend
 
-        from monet.agents.qa import qa_eval
+        from monet.agents.evaluator import evaluator_compare
 
         harness = _harness()
 
@@ -131,9 +131,11 @@ async def test_recruitment_capability_chain() -> None:
         }
         qa_context = [{"type": "upstream_result", "artifacts": [scorecard_pointer]}]
 
-        # ── 2. qa(eval) ──
+        # ── 2. evaluator(compare) ──
         qa_spec = json.dumps(_baseline())
-        review_json = await qa_eval.__wrapped__(task=qa_spec, context=qa_context)  # type: ignore[attr-defined]
+        review_json = await evaluator_compare.__wrapped__(
+            task=qa_spec, context=qa_context
+        )  # type: ignore[attr-defined]
         review = json.loads(review_json)
         assert review["verdict"] == "some_pass"
         assert review["recommended"] == "good"

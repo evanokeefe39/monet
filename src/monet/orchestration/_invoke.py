@@ -22,7 +22,12 @@ from opentelemetry import trace
 from monet.config import AuthConfig, OrchestrationConfig, QueueConfig
 from monet.core.auth import task_hmac
 from monet.exceptions import PushDispatchTerminal
-from monet.queue import TASK_RECORD_SCHEMA_VERSION, QueueMaintenance, TaskStatus
+from monet.queue import (
+    TASK_RECORD_SCHEMA_VERSION,
+    ProgressStore,
+    QueueMaintenance,
+    TaskStatus,
+)
 
 if TYPE_CHECKING:
     from monet.config import PoolConfig
@@ -33,6 +38,12 @@ if TYPE_CHECKING:
 _log = logging.getLogger("monet.orchestration")
 
 _RESERVED_FIELDS = {"task", "context", "command", "trace_id", "run_id", "skills"}
+
+# Lifecycle status conventions — colon prefix distinguishes from freeform
+# agent-authored statuses (e.g. "searching with Exa").
+AGENT_STARTED_STATUS = "agent:started"
+AGENT_COMPLETED_STATUS = "agent:completed"
+AGENT_FAILED_STATUS = "agent:failed"
 
 # Push dispatch retry configuration. Monkeypatch in tests to skip real sleeps.
 _PUSH_MAX_ATTEMPTS: int = 3
@@ -66,6 +77,13 @@ async def close_dispatch_client() -> None:
     if _dispatch_client is not None:
         await _dispatch_client.aclose()
         _dispatch_client = None
+
+
+def _emit_lifecycle(data: dict[str, Any]) -> None:
+    """Emit a lifecycle progress event into the current LangGraph stream."""
+    from monet import emit_progress
+
+    emit_progress(data)
 
 
 def configure_queue(queue: TaskQueue | None) -> None:
@@ -206,6 +224,8 @@ async def invoke_agent(
         task_id,
         resolved_run_id,
     )
+    _lifecycle = {"agent": agent_id, "command": command, "run_id": resolved_run_id}
+    _emit_lifecycle({"status": AGENT_STARTED_STATUS, **_lifecycle})
     with tracer.start_as_current_span(
         f"agent.{agent_id}.{command}",
         attributes={
@@ -228,8 +248,6 @@ async def invoke_agent(
                 # fall through to wait_completion which resolves it immediately.
                 span.set_attribute("agent.pool.type", "push")
                 span.set_attribute("agent.dispatch_failed", True)
-        # Forward worker-side progress into the current LangGraph stream
-        # via emit_progress. Runs concurrently with wait_completion.
         progress_task = asyncio.create_task(
             _forward_progress(_task_queue, task_id, resolved_run_id)
         )
@@ -247,6 +265,21 @@ async def invoke_agent(
                 len(result.signals),
                 task_id,
             )
+            if result.success:
+                _emit_lifecycle({"status": AGENT_COMPLETED_STATUS, **_lifecycle})
+            else:
+                reasons = []
+                for s in result.signals:
+                    r = s.get("reason", "")
+                    if r:
+                        reasons.append(r)
+                _emit_lifecycle(
+                    {
+                        "status": AGENT_FAILED_STATUS,
+                        **_lifecycle,
+                        "reasons": "; ".join(reasons),
+                    }
+                )
             return result
         finally:
             progress_task.cancel()
@@ -439,12 +472,18 @@ async def _forward_progress(queue: TaskQueue, task_id: str, run_id: str) -> None
 
     Injects ``run_id`` so clients can attribute progress lines to the
     correct run even when multiple turns are in-flight on the same thread.
+    Also persists each event to the progress stream keyed by ``run_id``
+    so ``get_progress_history(run_id)`` can retrieve them later.
     """
-    from monet.core.stubs import emit_progress
+    from monet import emit_progress
 
+    persist = isinstance(queue, ProgressStore)
     try:
         async for event in queue.subscribe_progress(task_id):
-            emit_progress({**event, "run_id": run_id})
+            enriched = {**event, "run_id": run_id}
+            emit_progress(enriched)
+            if persist:
+                await queue.publish_progress(run_id, enriched)
     except NotImplementedError:
         pass
     except asyncio.CancelledError:

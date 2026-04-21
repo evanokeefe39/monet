@@ -1,4 +1,4 @@
-"""Reference agents — importing this module registers all five via @agent.
+"""Reference agents — importing this module registers all six via @agent.
 
 The decorator IS the registration. No factory functions, no startup ceremony.
 Models are constructed lazily on first invocation via init_chat_model() so
@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from monet.core.registry import default_registry
 
-from . import planner, publisher, qa, researcher, writer
+from . import evaluator, planner, publisher, qa, researcher, writer
 
 
 def register_reference_agents() -> int:
-    """Ensure the five reference agents are present in ``default_registry``.
+    """Ensure the six reference agents are present in ``default_registry``.
 
     Idempotent. Returns the number of (re-)registered agents. Useful when
     test scopes have rolled back the module-import registrations — a plain
@@ -28,7 +28,7 @@ def register_reference_agents() -> int:
     so the side-effect does not re-run.
     """
     count = 0
-    for mod in (planner, publisher, qa, researcher, writer):
+    for mod in (evaluator, planner, publisher, qa, researcher, writer):
         for attr in vars(mod).values():
             agent_id = getattr(attr, "_agent_id", None)
             command = getattr(attr, "_command", None)

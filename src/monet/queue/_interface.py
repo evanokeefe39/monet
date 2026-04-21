@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     "TASK_RECORD_SCHEMA_VERSION",
     "AwaitAlreadyConsumedError",
+    "ProgressStore",
     "QueueMaintenance",
     "TaskQueue",
     "TaskRecord",
@@ -193,4 +194,28 @@ class QueueMaintenance(Protocol):
 
     async def list_in_flight_push_dispatches(self) -> list[dict[str, Any]]:
         """List all in-flight push dispatch records for boot recovery."""
+        ...
+
+
+@runtime_checkable
+class ProgressStore(Protocol):
+    """Optional capability: persistent progress retrieval.
+
+    Backends that persist progress events (e.g. Redis Streams) implement
+    this to enable historical replay. Checked via ``isinstance`` at the
+    server layer. Follows the :class:`QueueMaintenance` precedent.
+    """
+
+    async def get_progress_history(
+        self, run_id: str, *, count: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return stored progress events for a run, oldest-first.
+
+        Returns best-effort history — may have gaps due to trimming or
+        write failures. Not a complete audit trail.
+        """
+        ...
+
+    async def expire_progress(self, run_id: str, ttl: int) -> None:
+        """Set a TTL on the progress stream for a completed run."""
         ...

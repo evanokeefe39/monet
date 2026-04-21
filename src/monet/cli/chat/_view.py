@@ -11,15 +11,17 @@ if TYPE_CHECKING:
     from monet.client._events import AgentProgress
 
 _URL_RE = re.compile(r"https?://\S+")
+_AGENT_TAG_RE = re.compile(r"^\[[\w-]+:[\w-]+\]")
 
 #: Default per-role styles for transcript tag highlighting.
 DEFAULT_TAG_STYLES: dict[str, str] = {
-    "[user]": "bold #00c8da",
-    "[assistant]": "bold #46b2e4",
-    "[info]": "bold #0095a1",
-    "[progress]": "bold #c47445",
-    "[error]": "bold #d04936",
-    "[hint]": "dim italic #7a7a85",
+    "[user]": "bold #c6583c",
+    "[assistant]": "bold #007065",
+    "[info]": "bold #004c79",
+    "[error]": "bold #ae463d",
+    "│": "dim italic #aaaaaa",
+    "error: ": "bold #ae463d",
+    "[hint]": "dim italic #00365f",
 }
 
 #: Mapping from ``/colors <role>`` argument to the matching transcript tag.
@@ -27,13 +29,15 @@ ROLE_TAGS: dict[str, str] = {
     "user": "[user]",
     "assistant": "[assistant]",
     "info": "[info]",
-    "progress": "[progress]",
+    "progress": "│",
     "error": "[error]",
 }
 
 
 def _linkify(text: Text, content: str, offset: int = 0) -> None:
     """Add clickable link spans for every URL found in *content*."""
+    if "://" not in content:
+        return
     for m in _URL_RE.finditer(content):
         text.stylize(f"link {m.group()}", offset + m.start(), offset + m.end())
 
@@ -52,12 +56,31 @@ def styled_line(line: str, tag_styles: dict[str, str]) -> Text:
             text.append(rest)
             _linkify(text, rest, offset=len(tag))
             return text
+    m = _AGENT_TAG_RE.match(line)
+    if m:
+        tag = m.group()
+        rest = line[len(tag) :]
+        text = Text(overflow="fold", no_wrap=False)
+        text.append(tag, style="bold #7c67a6")
+        text.append(rest)
+        _linkify(text, rest, offset=len(tag))
+        return text
     text = Text(line, overflow="fold", no_wrap=False)
     _linkify(text, line)
     return text
 
 
-def format_progress_line(progress: AgentProgress) -> str:
-    """Render an :class:`AgentProgress` as a ``[progress]`` transcript line."""
+def format_agent_header(agent_key: str) -> str:
+    """Return the header line for the first event of an agent."""
+    return f"[{agent_key}]"
+
+
+def format_progress_line(progress: AgentProgress) -> str | None:
+    """Return a transcript line, or None to suppress (agent:started/completed)."""
     status = progress.status or "..."
-    return f"[progress] {progress.agent_id}: {status}"
+    if status in {"agent:started", "agent:completed"}:
+        return None
+    if status in {"agent:failed", "agent:error"}:
+        reason = progress.reasons or status
+        return f"error: {reason}"
+    return f"│ {status}"

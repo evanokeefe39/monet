@@ -17,8 +17,9 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from monet.cli.chat._constants import MAX_INTERRUPT_ROUNDS
 from monet.cli.chat._hitl import format_form_prompt, parse_text_reply
-from monet.cli.chat._view import format_progress_line
+from monet.cli.chat._view import format_agent_header, format_progress_line
 from monet.client._events import AgentProgress
 
 if TYPE_CHECKING:
@@ -164,12 +165,26 @@ async def drain_stream(
     log = logging.getLogger("monet.cli.chat")
 
     streamed = False
+    _agent_labels: dict[str, str] = {}
+    _agent_headers: set[str] = set()
     async for chunk in stream:
         if isinstance(chunk, AgentProgress):
-            # Progress events are intermediate signal — render them
-            # but don't suppress the assistant-fallback below if no
-            # actual reply lands.
-            writer(format_progress_line(chunk))
+            aid = chunk.agent_id
+            if chunk.command and (
+                aid not in _agent_labels or ":" not in _agent_labels[aid]
+            ):
+                _agent_labels[aid] = f"{aid}:{chunk.command}"
+            elif aid not in _agent_labels:
+                _agent_labels[aid] = aid
+            label = _agent_labels[aid]
+            if label not in _agent_headers:
+                writer(format_agent_header(label))
+                _agent_headers.add(label)
+            if chunk.status in {"agent:failed", "agent:error"}:
+                _agent_headers.discard(label)
+            line = format_progress_line(chunk)
+            if line is not None:
+                writer(line)
             log.info(
                 "%s progress agent=%s status=%s",
                 source,
@@ -225,14 +240,14 @@ async def run_turn(
     had_output = await drain_stream(
         first_stream, writer, source="initial", client=client, thread_id=thread_id
     )
-    while True:
+    for _round in range(MAX_INTERRUPT_ROUNDS):
         pending = await get_interrupt(thread_id)
         if not pending:
             if not had_output:
                 writer("[error] run ended without output — check rate limits or config")
                 log.warning("turn ended with no output and no interrupt")
             return
-        had_output = True  # interrupt form counts as output
+        had_output = True
         log.info("interrupt pending tag=%s", pending.get("tag"))
         form = pending.get("values") or {}
         if not isinstance(form, dict) or not form.get("fields"):
@@ -248,12 +263,6 @@ async def run_turn(
             unmount_widgets=unmount_widgets,
         )
         if decision is None:
-            # Both the widget and text channels re-prompt on invalid
-            # input, so ``None`` means the user explicitly abandoned
-            # the turn or the coordinator was cancelled. Do not
-            # synthesise a resume payload — the synth would have to
-            # assume a specific graph's resume-schema vocabulary, and
-            # the chat TUI stays graph-agnostic.
             writer("[info] interrupt abandoned — turn ended without resume")
             log.warning("interrupt coordinator returned None; no resume sent")
             return
@@ -262,3 +271,9 @@ async def run_turn(
         had_output = await drain_stream(
             stream, writer, source="resume", client=client, thread_id=thread_id
         )
+    else:
+        writer(
+            f"[error] too many interrupt rounds ({MAX_INTERRUPT_ROUNDS})"
+            " — aborting turn"
+        )
+        log.error("run_turn hit MAX_INTERRUPT_ROUNDS=%d", MAX_INTERRUPT_ROUNDS)

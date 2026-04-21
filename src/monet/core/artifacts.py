@@ -158,6 +158,16 @@ class ArtifactStoreHandle:
         )
         return result
 
+    async def count_per_thread(self, thread_ids: list[str]) -> dict[str, int]:
+        """Return artifact count keyed by thread_id for the given IDs."""
+        if _artifact_backend is None:
+            return {}
+        counter = getattr(_artifact_backend, "count_per_thread", None)
+        if counter is None:
+            return {}
+        result: dict[str, int] = await counter(thread_ids)
+        return result
+
 
 _handle_instance = ArtifactStoreHandle()
 

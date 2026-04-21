@@ -25,16 +25,14 @@ class AutoGrowTextArea(TextArea):
 
     DEFAULT_CSS = """
     AutoGrowTextArea {
-        dock: bottom;
-        height: 3;
-        max-height: 8;
-        border: solid $primary;
+        width: 1fr;
+        height: 100%;
+        border: none;
         padding: 0 1;
-        margin-bottom: 1;
         background: black;
     }
     AutoGrowTextArea:focus {
-        border: solid $accent;
+        border: none;
     }
     """
 
@@ -54,6 +52,8 @@ class AutoGrowTextArea(TextArea):
             self.insert("\n")
 
     def _on_text_area_changed(self, event: TextArea.Changed) -> None:
-        line_count = self.document.line_count
-        target = max(self.MIN_HEIGHT, min(line_count + 1, self.MAX_HEIGHT))
-        self.styles.height = target
+        # TextArea with soft_wrap handles multi-line display via CSS overflow.
+        # This handler is intentionally a no-op — Textual's TextArea widget
+        # already provides visual multi-line wrapping without explicit height
+        # management, so the per-keystroke line_count check is unnecessary.
+        pass

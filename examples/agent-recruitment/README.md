@@ -5,7 +5,7 @@ management** — all three driven by monet's default planner composing
 capability agents, with no custom graphs.
 
 The example ships two new capability agents (`code_executor`,
-`data_analyst`), reuses the core `qa(eval)` comparator command, and
+`data_analyst`), reuses the core `evaluator(compare)` comparator command, and
 registers one `after_agent` hook (`record_run_summary`) that makes
 invocation telemetry queryable through the artifact store.
 
@@ -19,7 +19,7 @@ researcher(deep)               writes candidate_brief
         │
 code_executor(eval_all)        runs each candidate in a subprocess sandbox
         │                       writes trial_scorecard
-qa(eval)                       baseline + comparative ranking
+evaluator(compare)                       baseline + comparative ranking
         │                       writes comparative_review
 data_analyst(score_agents)     scores the roster over the window
         │                       writes roster_scorecard
@@ -32,7 +32,7 @@ Reference topic (paste into `/plan` or `--topic`):
 > patterns and write a candidate brief; (2) evaluate every candidate in
 > that brief against `fixtures/harness.json` with
 > `code_executor(eval_all)` and compare the results against
-> `fixtures/baseline.json` via `qa(eval)` to pick a recommended
+> `fixtures/baseline.json` via `evaluator(compare)` to pick a recommended
 > candidate; (3) in parallel, score every agent currently in the roster
 > over the last 7 days using `data_analyst(score_agents)` and flag
 > underperformers with replacement recommendations drawn from the
@@ -50,7 +50,7 @@ examples/agent-recruitment/
 ├── .monet/docker-compose.yml    # canonical ports 5432 / 6379 / 2026
 ├── fixtures/
 │   ├── harness.json             # shared fixture + assertions
-│   └── baseline.json            # qa(eval) thresholds + criteria
+│   └── baseline.json            # evaluator(compare) thresholds + criteria
 └── src/recruitment/
     ├── agents/
     │   ├── code_executor.py     # run / eval_all

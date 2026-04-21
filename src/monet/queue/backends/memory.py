@@ -33,6 +33,7 @@ _TERMINAL_STATUSES = (TaskStatus.COMPLETED, TaskStatus.FAILED)
 _SUBSCRIBER_QUEUE_MAX = 64
 
 _DEFAULT_COMPLETION_TTL = 600.0
+_DEFAULT_PROGRESS_MAXLEN = 1000
 _MAX_PRUNED_IDS = 10_000
 
 
@@ -57,6 +58,7 @@ class InMemoryTaskQueue:
         self,
         max_pending: int = 0,
         completion_ttl_seconds: float = _DEFAULT_COMPLETION_TTL,
+        progress_maxlen: int = _DEFAULT_PROGRESS_MAXLEN,
     ) -> None:
         self._tasks: dict[str, TaskRecord] = {}
         self._pool_queues: dict[str, asyncio.Queue[str]] = defaultdict(asyncio.Queue)
@@ -66,6 +68,8 @@ class InMemoryTaskQueue:
             defaultdict(set)
         )
         self._completion_ttl_seconds = completion_ttl_seconds
+        self._progress_maxlen = progress_maxlen
+        self._progress_history: dict[str, list[dict[str, Any]]] = defaultdict(list)
         # Maps task_id → monotonic timestamp when the task reached a terminal state.
         self._completion_times: dict[str, float] = {}
         # Task IDs pruned after TTL expiry — distinguishes "expired" from "unknown".
@@ -215,6 +219,7 @@ class InMemoryTaskQueue:
         for tid in expired:
             self._tasks.pop(tid, None)
             self._completions.pop(tid, None)
+            self._progress_history.pop(tid, None)
             del self._completion_times[tid]
             self._pruned_ids.add(tid)
         if len(self._pruned_ids) > _MAX_PRUNED_IDS:
@@ -225,7 +230,11 @@ class InMemoryTaskQueue:
     # --- Progress streaming ---
 
     async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
-        """Fan out an event to all subscribers. Drops on full queue."""
+        """Persist and fan out a progress event. Drops on full queue."""
+        history = self._progress_history[task_id]
+        history.append({"v": "1", "ts": time.monotonic_ns(), **event})
+        if len(history) > self._progress_maxlen:
+            self._progress_history[task_id] = history[-self._progress_maxlen :]
         for sub_q in self._progress_subscribers.get(task_id, set()):
             with contextlib.suppress(asyncio.QueueFull):
                 sub_q.put_nowait(event)
@@ -254,6 +263,17 @@ class InMemoryTaskQueue:
             self._progress_subscribers[task_id].discard(sub_q)
             if not self._progress_subscribers[task_id]:
                 self._progress_subscribers.pop(task_id, None)
+
+    # --- ProgressStore protocol ---
+
+    async def get_progress_history(
+        self, run_id: str, *, count: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return a snapshot copy of stored progress events."""
+        return list(self._progress_history.get(run_id, []))[:count]
+
+    async def expire_progress(self, run_id: str, ttl: int) -> None:
+        """No-op for in-memory backend — eviction handled by prune cycle."""
 
     # --- Private helper for orchestration.wait_completion ---
 

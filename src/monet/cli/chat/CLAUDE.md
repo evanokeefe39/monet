@@ -1,35 +1,47 @@
-# Chat TUI Requirements
+# monet.cli.chat — Textual TUI
 
-## Layout constraints
+## Layout (non-negotiable)
 
-The chat TUI uses a fixed vertical layout. These rules are non-negotiable.
-
-### Welcome screen
-- Must be visually centered both horizontally and vertically using `align: center middle` on the overlay container.
-- Do NOT use Textual `Center`/`Middle` container widgets — use CSS `align` on the `WelcomeOverlay` itself.
-- The `#welcome-card` uses `text-align: center`.
-- Rich Text objects cannot use Textual CSS variables (`$primary`, `$accent`). Use hex color literals from the active palette.
-
-### Prompt area (bottom stack)
-From bottom of screen upward:
+Fixed vertical stack, bottom → top:
 1. `StatusBar` — `dock: bottom`, height 1
-2. `AutoGrowTextArea` (prompt) — `dock: bottom`, min-height 3, max-height 8
-3. `#slash-suggest` (OptionList) — `layer: overlay`, `dock: bottom`, only visible when typing a `/` prefix. Must float ABOVE the prompt without displacing other widgets. Uses `margin-bottom` to clear the prompt+status area.
+2. `AutoGrowTextArea` — `dock: bottom`, min-height 3, max-height 8
+3. `#slash-suggest` (OptionList) — `layer: overlay`, `dock: bottom`. Floats ABOVE prompt via `margin-bottom`. Never pushes prompt downward.
+4. `Transcript` — `height: 1fr`, fills remaining space. `WelcomeOverlay` inside on `overlay` layer.
 
-The slash-suggest dropdown must NEVER appear below the prompt or push the prompt downward. It is an overlay that grows upward from just above the prompt.
+Welcome screen: `align: center middle` on `WelcomeOverlay` container. Do NOT use Textual `Center`/`Middle` widgets. `#welcome-card` uses `text-align: center`.
 
-### Transcript
-- `Transcript` fills remaining vertical space (`height: 1fr`).
-- `WelcomeOverlay` lives inside Transcript on the `overlay` layer.
+Rich Text objects cannot use Textual CSS variables (`$primary`, `$accent`). Use hex literals from active palette.
 
 ## Color palettes
 
-All colors derive from `color-palettes.txt` at project root. Six themes are defined in `_themes.py`:
-- `monet-dark` (default) — palette 1: teal/blue/coral
-- `monet-retro` — palette 2: crimson/teal
-- `monet-vivid` — palette 3: bright cyan/scarlet
-- `monet-forest` — palette 8: deep forest/navy
-- `monet-ember` — palette 9: terracotta/ocean
-- `monet-light` — fallback light mode
+All colors from `color-palettes.txt` at project root. Themes in `_themes.py`:
 
-Tag styles in `_view.py` use hex literals, not Textual CSS variables. When changing colors, pick from `color-palettes.txt` palettes.
+| Theme | Palette | Colors |
+|-------|---------|--------|
+| `monet-dark` (default) | 1 | teal/blue/coral |
+| `monet-retro` | 2 | crimson/teal |
+| `monet-vivid` | 3 | bright cyan/scarlet |
+| `monet-forest` | 8 | deep forest/navy |
+| `monet-ember` | 9 | terracotta/ocean |
+| `monet-light` | — | light mode fallback |
+
+Tag styles in `_view.py` use hex literals. When changing colors, pick from `color-palettes.txt`.
+
+## Key files
+
+| File | Owns |
+|------|------|
+| `_app.py` | Textual `App` subclass, mounts layout |
+| `_view.py` | Transcript widget, tag rendering |
+| `_prompt.py` | `AutoGrowTextArea`, slash-suggest logic |
+| `_status_bar.py` | `StatusBar` widget |
+| `_screens.py` | Welcome overlay |
+| `_turn.py` | Turn model — user/assistant message pair |
+| `_transcript.py` | Transcript state |
+| `_commands.py` | Slash-command dispatch |
+| `_cli.py` | Click entry point |
+| `_constants.py` | Theme names, key bindings |
+
+## HITL
+
+HITL interrupts render as transcript text. Next user submission resumes the run. No separate HITL widget — inline in transcript flow.

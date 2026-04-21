@@ -1,4 +1,4 @@
-"""Tests for the ``qa(eval)`` baseline + comparative ranking command.
+"""Tests for the ``evaluator(compare)`` baseline + comparative ranking command.
 
 Drives the agent through the real ``invoke_agent`` + queue + registry
 path (via the autouse ``_queue_worker`` fixture in ``conftest.py``) so
@@ -22,15 +22,15 @@ from monet.orchestration import invoke_agent
 
 
 @pytest.fixture(autouse=True)
-def _qa_scope() -> Any:
-    """Reload qa inside a scoped registry so the decorator registrations
+def _evaluator_scope() -> Any:
+    """Reload evaluator inside a scoped registry so the decorator registrations
     auto-revert after each test — prevents global pollution that would
     collide with declarative-config tests downstream.
     """
     with default_registry.registry_scope():
-        import monet.agents.qa as qa_module
+        import monet.agents.evaluator as evaluator_module
 
-        importlib.reload(qa_module)
+        importlib.reload(evaluator_module)
         yield
 
 
@@ -64,20 +64,20 @@ def _baseline_spec() -> str:
     )
 
 
-async def _invoke_qa_eval(reports: list[dict[str, Any]]) -> Any:
-    """Install a scorecard + invoke qa(eval) via the real queue path."""
+async def _invoke_evaluator(reports: list[dict[str, Any]]) -> Any:
+    """Install a scorecard + invoke evaluator(compare) via the real queue path."""
     pointer = await _install_scorecard(reports)
     context = [{"type": "upstream_result", "artifacts": [pointer]}]
     return await invoke_agent(
-        "qa",
-        command="eval",
+        "evaluator",
+        command="compare",
         task=_baseline_spec(),
         context=context,
     )
 
 
-async def test_qa_eval_all_pass() -> None:
-    result = await _invoke_qa_eval(
+async def test_evaluator_all_pass() -> None:
+    result = await _invoke_evaluator(
         [
             {
                 "candidate_id": "a",
@@ -97,13 +97,12 @@ async def test_qa_eval_all_pass() -> None:
     review = json.loads(result.output)  # type: ignore[arg-type]
     assert review["verdict"] == "all_pass"
     assert review["recommended"] == "b"
-    # All-pass emits no routing signals.
     assert not result.has_signal(SignalType.PARTIAL_RESULT)
     assert not result.has_signal(SignalType.ESCALATION_REQUIRED)
 
 
-async def test_qa_eval_some_pass_emits_partial_result() -> None:
-    result = await _invoke_qa_eval(
+async def test_evaluator_some_pass_emits_partial_result() -> None:
+    result = await _invoke_evaluator(
         [
             {
                 "candidate_id": "good",
@@ -129,8 +128,8 @@ async def test_qa_eval_some_pass_emits_partial_result() -> None:
     assert partial["metadata"]["total"] == 2
 
 
-async def test_qa_eval_none_pass_emits_escalation_required() -> None:
-    result = await _invoke_qa_eval(
+async def test_evaluator_none_pass_emits_escalation_required() -> None:
+    result = await _invoke_evaluator(
         [
             {
                 "candidate_id": "x",
@@ -146,8 +145,6 @@ async def test_qa_eval_none_pass_emits_escalation_required() -> None:
             },
         ]
     )
-    # No recommendation → ESCALATION_REQUIRED is a routing-blocking signal,
-    # so invoke_agent flags success=False for the call.
     review = json.loads(result.output)  # type: ignore[arg-type]
     assert review["verdict"] == "none_pass"
     assert review["recommended"] is None
@@ -156,9 +153,9 @@ async def test_qa_eval_none_pass_emits_escalation_required() -> None:
     assert escalation["metadata"]["total"] == 2
 
 
-async def test_qa_eval_writes_comparative_review_artifact() -> None:
+async def test_evaluator_writes_comparative_review_artifact() -> None:
     """The agent persists a ``comparative_review``-tagged artifact."""
-    result = await _invoke_qa_eval(
+    result = await _invoke_evaluator(
         [
             {
                 "candidate_id": "a",
@@ -169,9 +166,7 @@ async def test_qa_eval_writes_comparative_review_artifact() -> None:
         ]
     )
     assert result.success is True
-    # The decorator captures the artifact pointer into AgentResult.artifacts;
-    # query_recent confirms the tag landed on the stored metadata too.
     assert any(a.get("key") == "comparative_review" for a in result.artifacts)
-    rows = await get_artifacts().query_recent(tag="qa_eval")
+    rows = await get_artifacts().query_recent(tag="evaluator_compare")
     assert len(rows) == 1
     assert rows[0]["content_type"] == "application/json"

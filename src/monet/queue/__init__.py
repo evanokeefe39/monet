@@ -11,6 +11,7 @@ from typing import Any
 from ._interface import (
     TASK_RECORD_SCHEMA_VERSION,
     AwaitAlreadyConsumedError,
+    ProgressStore,
     QueueMaintenance,
     TaskQueue,
     TaskRecord,
@@ -21,6 +22,7 @@ __all__ = [
     "TASK_RECORD_SCHEMA_VERSION",
     "AwaitAlreadyConsumedError",
     "InMemoryTaskQueue",
+    "ProgressStore",
     "QueueMaintenance",
     "TaskQueue",
     "TaskRecord",
