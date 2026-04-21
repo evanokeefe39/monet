@@ -58,7 +58,7 @@ def _get_react_agent(model_string: str) -> Any:
         )
 
         model = _get_model(model_string)
-        tavily = TavilySearch(max_results=10)
+        tavily = TavilySearch(max_results=5)
         _react_agent_cache[model_string] = create_react_agent(model, [tavily])
     return _react_agent_cache[model_string]
 
@@ -72,7 +72,7 @@ def _format_exa_results(results: Any) -> str:
         lines.append(f"## {title}")
         lines.append(f"Source: {url}")
         if text:
-            lines.append(text[:2000])
+            lines.append(text[:1000])
         lines.append("")
     return "\n".join(lines)
 
@@ -90,7 +90,7 @@ def _last_ai_message(messages: list[Any]) -> str:
 
 
 def _model_string() -> str:
-    return agent_model("researcher", "groq:llama-3.1-8b-instant")
+    return agent_model("researcher", "google_genai:gemini-flash-latest")
 
 
 #: Output token cap applied when the researcher synthesises its final
@@ -112,7 +112,7 @@ async def _search(
     context: list[dict[str, Any]],
     model_string: str,
     *,
-    max_results: int = 10,
+    max_results: int = 5,
 ) -> str:
     """Run web search via Exa or Tavily and synthesise results.
 
@@ -150,7 +150,9 @@ async def _search(
             )
             findings = _format_exa_results(search_results)
 
-            emit_progress({"status": "synthesising findings", "agent": "researcher"})
+            model_short = model_string.split(":")[-1]
+            status = f"thinking[{model_short}]..."
+            emit_progress({"status": status, "agent": "researcher"})
             prompt = _env.get_template("deep_synth.j2").render(
                 task=task,
                 findings=findings,

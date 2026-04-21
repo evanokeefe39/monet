@@ -49,13 +49,32 @@ result = await invoke_agent("researcher", command="deep", task="quantum computin
 
 The dispatch flow:
 
-1. Check capability manifest — if agent not declared, return `CAPABILITY_UNAVAILABLE` signal instantly
-2. Look up pool from manifest
+1. Emit `agent:started` lifecycle progress event
+2. Look up pool from local registry or capability index
 3. Enqueue task to the pool's queue
-4. Poll for result (with configurable timeout via `MONET_AGENT_TIMEOUT`)
-5. On timeout, cancel the task to prevent wasted execution
+4. Forward worker-side progress events into the LangGraph stream
+5. Wait for result (with configurable timeout via `MONET_AGENT_TIMEOUT`)
+6. Emit `agent:completed` or `agent:failed` lifecycle progress event
+7. Return `AgentResult`
 
 Transport (local call, HTTP, cloud forwarding) is the worker's concern, not the orchestrator's. The queue abstracts it.
+
+## Progress stream convention
+
+Every `invoke_agent` call automatically emits lifecycle events into the LangGraph stream. These bracket agent-authored progress:
+
+```
+researcher:deep — agent:started       ← lifecycle (from invoke_agent)
+researcher:deep — searching with Exa  ← agent-authored (from emit_progress inside agent)
+researcher:deep — synthesising        ← agent-authored
+researcher:deep — agent:completed     ← lifecycle (from invoke_agent)
+```
+
+Lifecycle status strings use a colon prefix (`agent:started`, `agent:completed`, `agent:failed`) to distinguish them from freeform agent statuses. The convention is universal — any graph that calls `invoke_agent` gets lifecycle framing automatically.
+
+Client-side, lifecycle and agent-authored progress both arrive as `AgentProgress` events with `agent_id`, `command`, `status`, and `run_id` fields. Clients can filter on the `agent:` prefix to separate lifecycle from content.
+
+See the [Custom Graphs guide](custom-graphs.md) for patterns on building graphs with progress streams.
 
 ## Task queue
 

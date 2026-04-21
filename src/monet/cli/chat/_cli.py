@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,24 +26,30 @@ from monet.cli._namegen import random_chat_name
 from monet.cli._setup import check_env
 from monet.config import MONET_API_KEY, MONET_SERVER_URL
 
-_DEFAULT_LOG_PATH = Path.cwd() / ".cli-logs" / "chat.log"
+_DEFAULT_LOG_DIR = Path.cwd() / ".cli-logs"
 
 
-def _configure_chat_logging(path: Path, verbose: bool = False) -> Path:
-    """Route Python logging to *path* so the TUI has persistent observability.
+def _log_filename(thread_id: str) -> str:
+    """Build ``<ISO-timestamp>_<thread_id>.log`` name for this session."""
+    ts = datetime.now(UTC).strftime("%Y%m%d")
+    tid = thread_id[:12] if thread_id else "new"
+    return f"{ts}_{tid}.log"
 
-    Textual swallows stdout/stderr while the app is running, so anything
-    written through ``logging`` would otherwise vanish. A file handler
-    preserves tracebacks from the client, server-side retries, and any
-    other module that logs. Existing handlers are removed so we don't
-    double-log once the TUI takes over the terminal.
 
-    When *verbose* is True, the root logger is set to DEBUG and raw SSE
-    events are written to ``~/.monet/chat-debug.log`` for diagnostics.
+def _configure_chat_logging(
+    log_dir: Path,
+    thread_id: str,
+) -> Path:
+    """Route Python logging to a per-thread file under *log_dir*.
+
+    Only called when ``--verbose`` is active. Textual swallows
+    stdout/stderr while the app is running, so a file handler is the
+    only way to preserve tracebacks and diagnostics.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / _log_filename(thread_id)
     handler = logging.FileHandler(path, encoding="utf-8")
-    handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    handler.setLevel(logging.DEBUG)
     handler.setFormatter(
         logging.Formatter(
             "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
@@ -53,23 +60,30 @@ def _configure_chat_logging(path: Path, verbose: bool = False) -> Path:
     for existing in list(root.handlers):
         root.removeHandler(existing)
     root.addHandler(handler)
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+    root.setLevel(logging.DEBUG)
 
-    # Set up raw SSE debug log when verbose is enabled.
-    if verbose:
-        debug_log = Path.home() / ".monet" / "chat-debug.log"
-        debug_log.parent.mkdir(parents=True, exist_ok=True)
-        sse_handler = logging.FileHandler(debug_log, encoding="utf-8")
-        sse_handler.setLevel(logging.DEBUG)
-        sse_handler.setFormatter(
-            logging.Formatter("%(asctime)s SSE: %(message)s", datefmt="%H:%M:%S")
-        )
-        sse_logger = logging.getLogger("monet.cli.chat.sse")
-        sse_logger.setLevel(logging.DEBUG)
-        sse_logger.addHandler(sse_handler)
-        sse_logger.propagate = False
+    debug_log = Path.home() / ".monet" / "chat-debug.log"
+    debug_log.parent.mkdir(parents=True, exist_ok=True)
+    sse_handler = logging.FileHandler(debug_log, encoding="utf-8")
+    sse_handler.setLevel(logging.DEBUG)
+    sse_handler.setFormatter(
+        logging.Formatter("%(asctime)s SSE: %(message)s", datefmt="%H:%M:%S")
+    )
+    sse_logger = logging.getLogger("monet.cli.chat.sse")
+    sse_logger.setLevel(logging.DEBUG)
+    sse_logger.addHandler(sse_handler)
+    sse_logger.propagate = False
 
     return path
+
+
+def _suppress_logging() -> None:
+    """Silence all Python logging when not in verbose mode."""
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        root.removeHandler(existing)
+    root.addHandler(logging.NullHandler())
+    root.setLevel(logging.CRITICAL)
 
 
 @click.command()
@@ -99,22 +113,11 @@ def _configure_chat_logging(path: Path, verbose: bool = False) -> Path:
     ),
 )
 @click.option(
-    "--log-file",
-    "log_file",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help=(
-        "Write chat-side logs here. Defaults to ./.cli-logs/chat.log. "
-        "Textual swallows stdout while the TUI runs, so this file is the "
-        "only way to see chat-side errors."
-    ),
-)
-@click.option(
     "--verbose",
     "-v",
     is_flag=True,
     help=(
-        "Enable DEBUG-level logging and write raw SSE"
+        "Write per-thread debug logs to .cli-logs/ and raw SSE"
         " events to ~/.monet/chat-debug.log."
     ),
 )
@@ -126,16 +129,12 @@ def chat(
     resume_id: str | None,
     session_name: str | None,
     graph_override: str | None,
-    log_file: Path | None,
     verbose: bool,
 ) -> None:
     """Interactive multi-turn conversation with the monet platform."""
     check_env()
-    resolved_log = _configure_chat_logging(
-        log_file or _DEFAULT_LOG_PATH, verbose=verbose
-    )
-    if not list_sessions:
-        click.secho(f"chat logs → {resolved_log}", dim=True, err=True)
+    if not verbose:
+        _suppress_logging()
     try:
         asyncio.run(
             _chat_main(
@@ -146,7 +145,6 @@ def chat(
                 resume_id,
                 session_name,
                 graph_override,
-                resolved_log,
                 verbose,
             )
         )
@@ -174,7 +172,6 @@ async def _chat_main(
     resume_id: str | None,
     session_name: str | None,
     graph_override: str | None,
-    log_path: Path,
     verbose: bool,
 ) -> None:
     from monet.cli._run import _preflight_server
@@ -244,6 +241,12 @@ async def _chat_main(
         force_new=force_new,
     )
 
+    log_path: Path | None = None
+    if verbose:
+        log_path = _configure_chat_logging(_DEFAULT_LOG_DIR, thread_id)
+        if not list_sessions:
+            click.secho(f"chat logs → {log_path}", dim=True, err=True)
+
     slash_commands: list[str] = []
     try:
         slash_commands = await client.slash_commands()
@@ -267,6 +270,13 @@ async def _chat_main(
         style=load_user_chat_style(),
     )
     await app.run_async()
+    final_tid = app.thread_id
+    if final_tid:
+        click.secho(
+            f"resume with: monet chat --resume {final_tid}",
+            dim=True,
+            err=True,
+        )
     if app._crash_error is not None:
         err = app._crash_error
         click.secho(
@@ -274,7 +284,14 @@ async def _chat_main(
             err=True,
             fg="red",
         )
-        click.secho(f"See full traceback in {log_path}.", err=True, dim=True)
+        if log_path:
+            click.secho(f"See full traceback in {log_path}.", err=True, dim=True)
+        else:
+            click.secho(
+                "Re-run with --verbose to capture full traceback.",
+                err=True,
+                dim=True,
+            )
         raise SystemExit(1)
 
 

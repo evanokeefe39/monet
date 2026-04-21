@@ -65,6 +65,16 @@ class WaveResult(TypedDict):
     success: bool
 ```
 
+## Lifecycle constants
+
+```python
+AGENT_STARTED_STATUS = "agent:started"
+AGENT_COMPLETED_STATUS = "agent:completed"
+AGENT_FAILED_STATUS = "agent:failed"
+```
+
+Reserved progress status strings emitted by `invoke_agent`. The colon prefix distinguishes lifecycle events from freeform agent-authored statuses. Clients can filter on the `agent:` prefix to separate lifecycle from content progress.
+
 ## Functions
 
 ### `invoke_agent`
@@ -82,7 +92,7 @@ async def invoke_agent(
 ) -> AgentResult
 ```
 
-Queue-based agent dispatch. Checks the capability manifest before enqueue — returns `CAPABILITY_UNAVAILABLE` signal instantly if the agent is not declared. Looks up pool from manifest, enqueues to the pool's queue, and polls for result. Cancels the task on timeout.
+Queue-based agent dispatch. Emits `agent:started` before dispatch and `agent:completed` or `agent:failed` after. Looks up pool from local registry or capability index, enqueues to the pool's queue, and waits for result. Worker-side progress events are forwarded into the LangGraph stream.
 
 Environment variables:
 

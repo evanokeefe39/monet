@@ -54,7 +54,7 @@ async def test_forward_progress_injects_run_id(queue: InMemoryTaskQueue) -> None
     )
 
     captured: list[dict[str, Any]] = []
-    with patch("monet.core.stubs.emit_progress", side_effect=captured.append):
+    with patch("monet.emit_progress", side_effect=captured.append):
         # Start _forward_progress BEFORE publishing so it subscribes first.
         fwd = asyncio.create_task(_forward_progress(queue, task_id, run_id))
         await asyncio.sleep(0)  # yield so fwd starts
@@ -111,7 +111,7 @@ async def test_forward_progress_preserves_existing_fields(
         }
     )
 
-    with patch("monet.core.stubs.emit_progress", side_effect=captured.append):
+    with patch("monet.emit_progress", side_effect=captured.append):
         fwd = asyncio.create_task(_forward_progress(queue, task_id, run_id))
         await asyncio.sleep(0)
 
@@ -135,58 +135,37 @@ async def test_forward_progress_preserves_existing_fields(
     assert ev["run_id"] == run_id
 
 
-async def test_agent_node_includes_run_id_in_emit_progress() -> None:
-    """agent_node must include run_id in failure emit_progress calls."""
-    from monet.orchestration.execution_graph import (
-        AGENT_FAILED_EVENT_STATUS,
-        agent_node,
+async def test_invoke_agent_emits_lifecycle_events() -> None:
+    """invoke_agent must emit agent:started and agent:completed/failed.
+
+    Uses the autouse queue+worker from conftest.  A test agent registered
+    via ``@agent`` returns a failing result so we can assert both lifecycle
+    bookends.
+    """
+    from monet.orchestration._invoke import (
+        AGENT_FAILED_STATUS,
+        AGENT_STARTED_STATUS,
+        invoke_agent,
     )
 
     captured: list[dict[str, Any]] = []
 
-    with (
-        patch(
-            "monet.orchestration.execution_graph.emit_progress",
-            side_effect=captured.append,
-        ),
-        patch("monet.orchestration.execution_graph.invoke_agent") as mock_invoke,
+    with patch(
+        "monet.orchestration._invoke._emit_lifecycle",
+        side_effect=captured.append,
     ):
-        from monet.signals import SignalType
-        from monet.types import AgentResult, Signal
-
-        mock_invoke.return_value = AgentResult(
-            success=False,
-            output="",
-            signals=(
-                Signal(
-                    type=SignalType.SEMANTIC_ERROR,
-                    reason="test fail",
-                    metadata=None,
-                ),
-            ),
-            trace_id="",
-            run_id="run-node",
+        result = await invoke_agent(
+            "test-lifecycle", command="fast", task="lifecycle test"
         )
 
-        from monet.orchestration.execution_graph import NodeItem
-
-        item = NodeItem(
-            node_id="n1",
-            agent_id="writer",
-            command="fast",
-            work_brief_pointer={"artifact_id": "art-1", "url": ""},
-            upstream_results=[],
-            trace_id="",
-            run_id="run-node",
-            trace_carrier={},
-            thread_id="",
-        )
-        await agent_node(item)
-
-    assert len(captured) == 1
-    ev = captured[0]
-    assert ev["status"] == AGENT_FAILED_EVENT_STATUS
-    assert ev["run_id"] == "run-node"
+    # Agent doesn't exist → dispatch_failed signal → lifecycle: started + failed
+    assert not result.success
+    assert len(captured) == 2
+    assert captured[0]["status"] == AGENT_STARTED_STATUS
+    assert captured[0]["agent"] == "test-lifecycle"
+    assert captured[0]["command"] == "fast"
+    assert captured[1]["status"] == AGENT_FAILED_STATUS
+    assert captured[1]["agent"] == "test-lifecycle"
 
 
 async def test_stream_chat_uses_run_id_from_event() -> None:

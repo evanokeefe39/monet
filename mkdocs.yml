@@ -46,6 +46,7 @@ nav:
   - Getting Started: getting-started.md
   - Guides:
     - Defining Agents: guides/agents.md
+    - Custom Graphs: guides/custom-graphs.md
     - Artifact Store: guides/artifacts.md
     - Orchestration: guides/orchestration.md
     - Distribution Mode: guides/distribution.md

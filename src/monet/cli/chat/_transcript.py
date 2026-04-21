@@ -8,7 +8,7 @@ Wraps a RichLog and handles three content types:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rich.markdown import Markdown
 from textual.containers import Vertical
@@ -59,23 +59,48 @@ class Transcript(Widget):
         self._tag_styles = tag_styles or {}
         self._lines: list[str] = []
         self._hitl_widget: Widget | None = None
+        self._log: RichLog | None = None
+        self._welcome_hidden: bool = False
+        self._scroll_deferred: bool = False
+        self._pending_scroll: bool = False
+
+    def on_mount(self) -> None:
+        self._log = self.query_one("#_log", RichLog)
 
     def compose(self) -> ComposeResult:
         yield WelcomeOverlay(id="welcome")
         yield RichLog(id="_log", wrap=True, markup=False, highlight=False)
         yield Vertical(id="_hitl-area")
 
-    def append(self, line: str, *, markdown: bool = False) -> None:
+    def append(self, line: str, *, markdown: bool = False, scroll: bool = True) -> None:
         """Append a line to the transcript."""
         self._lines.append(line)
         self._hide_welcome()
-        log = self.query_one("#_log", RichLog)
+        log = self._log
+        if log is None:
+            return
         if markdown:
             content = line.removeprefix("[assistant] ")
             log.write(Markdown(content))
         else:
             log.write(styled_line(line, self._tag_styles))
-        log.scroll_end(animate=False)
+        if scroll:
+            if self._scroll_deferred:
+                self._pending_scroll = True
+            else:
+                log.scroll_end(animate=False)
+
+    def defer_scroll(self) -> None:
+        """Defer scrolling until flush_scroll is called."""
+        self._scroll_deferred = True
+        self._pending_scroll = False
+
+    def flush_scroll(self) -> None:
+        """Flush any pending scroll and resume per-call scrolling."""
+        self._scroll_deferred = False
+        if self._pending_scroll and self._log:
+            self._pending_scroll = False
+            self._log.scroll_end(animate=False)
 
     def on_transcript_append(self, msg: TranscriptAppend) -> None:
         """Handle TranscriptAppend messages from workers."""
@@ -100,9 +125,31 @@ class Transcript(Widget):
         self._lines = []
         self.query_one("#_log", RichLog).clear()
 
+    def load_history(self, messages: list[dict[str, Any]]) -> None:
+        for msg in messages:
+            role = str(msg.get("role") or "user")
+            content = str(msg.get("content") or "")
+            line = f"[{role}] {content}"
+            self._lines.append(line)
+            if self._log is not None:
+                if role == "assistant":
+                    self._log.write(Markdown(content))
+                else:
+                    self._log.write(styled_line(line, self._tag_styles))
+        self._welcome_hidden = True
+        if self._log is not None:
+            self._log.scroll_end(animate=False)
+
     def get_text(self) -> str:
         """Plain text copy of all transcript lines."""
         return "\n".join(self._lines)
+
+    def get_last_assistant(self) -> str:
+        """Return content of the last [assistant] message, or empty string."""
+        for line in reversed(self._lines):
+            if line.startswith("[assistant]"):
+                return line.removeprefix("[assistant] ")
+        return ""
 
     def show_welcome(self) -> None:
         """Show the welcome overlay."""
@@ -110,12 +157,23 @@ class Transcript(Widget):
 
     def _hide_welcome(self) -> None:
         """Hide welcome overlay on first content."""
+        if self._welcome_hidden:
+            return
         try:
             w = self.query_one("#welcome", WelcomeOverlay)
             if w.has_class("visible"):
                 w.hide()
+                self._welcome_hidden = True
         except Exception:
             pass
+
+    def get_tag_style(self, tag: str) -> str:
+        """Return the current style for *tag*, or empty string."""
+        return self._tag_styles.get(tag, "")
+
+    def set_tag_style(self, tag: str, style: str) -> None:
+        """Set the style for *tag*."""
+        self._tag_styles[tag] = style
 
     def update_tag_styles(self, styles: dict[str, str]) -> None:
         """Update role tag colour overrides."""

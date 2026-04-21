@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from monet import get_artifacts
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
-from monet.queue import TaskQueue
+from monet.queue import ProgressStore, TaskQueue
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._capabilities import Capability, CapabilityIndex
 from monet.server._deployment import DeploymentStore
@@ -272,6 +272,25 @@ async def post_progress(
 
 
 @router.get(
+    "/runs/{run_id}/progress",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_run_progress(
+    run_id: str,
+    queue: Queue,
+    count: int = Query(default=1000, ge=1, le=10000),
+) -> dict[str, Any]:
+    """Retrieve persisted progress events for a run.
+
+    Returns 501 when the queue backend does not support progress history.
+    """
+    if not isinstance(queue, ProgressStore):
+        raise HTTPException(501, "Backend does not support progress history")
+    events = await queue.get_progress_history(run_id, count=count)
+    return {"run_id": run_id, "events": events}
+
+
+@router.get(
     "/deployments",
     dependencies=[Depends(require_api_key)],
 )
@@ -355,6 +374,26 @@ class ArtifactListResponse(BaseModel):
 
     artifacts: list[ArtifactListItem]
     next_cursor: str | None = None
+
+
+@router.get("/artifacts/counts", dependencies=[Depends(require_api_key)])
+async def count_artifacts_per_thread(
+    thread_ids: str = Query(..., description="Comma-separated thread IDs"),
+) -> dict[str, int]:
+    """Return artifact counts grouped by thread_id in one query."""
+    ids = [t.strip() for t in thread_ids.split(",") if t.strip()]
+    if not ids:
+        return {}
+    store = get_artifacts()
+    try:
+        counter = getattr(store, "count_per_thread", None)
+        if counter is None:
+            return {}
+        result: dict[str, int] = await counter(ids)
+        return result
+    except Exception as exc:
+        _log.exception("artifact count failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/artifacts", dependencies=[Depends(require_api_key)])

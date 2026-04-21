@@ -14,6 +14,7 @@ TUI_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/rename", "rename current thread"),
     ("/copy", "copy transcript to clipboard"),
     ("/colors", "show or change the palette"),
+    ("/shortcuts", "keyboard shortcuts"),
     ("/help", "list TUI commands"),
     ("/quit", "leave the REPL"),
     ("/exit", "leave the REPL"),
@@ -38,8 +39,24 @@ WELCOME_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/quit", "quit"),
 )
 
+# ── Performance tuning ────────────────���──────────────────────────
+
+#: Debounce delay for slash-suggest dropdown rebuild (seconds).
+SLASH_SUGGEST_DEBOUNCE = 0.05
+
+#: Spinner animation tick interval (seconds). Only active during runs.
+SPINNER_INTERVAL = 0.4
+
+#: Max slash-suggest entries shown in dropdown.
+SLASH_SUGGEST_MAX_OPTIONS = 20
+
+#: Max HITL interrupt rounds before aborting a turn.
+MAX_INTERRUPT_ROUNDS = 50
+
+# ── Refresh / timeout ────────────────────────────────────────────
+
 #: How often the status bar refreshes counts.
-INDICATOR_REFRESH_SECONDS = 5.0
+INDICATOR_REFRESH_SECONDS = 15.0
 
 #: Seconds the confirm-exit hint stays active.
 EXIT_CONFIRM_TIMEOUT = 5.0

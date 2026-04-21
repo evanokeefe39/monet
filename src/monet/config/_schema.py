@@ -402,8 +402,8 @@ class OrchestrationConfig(BaseModel):
 
 
 _DEFAULT_CHAT_GRAPH = "monet.orchestration.chat_graph:build_chat_graph"
-_DEFAULT_CHAT_RESPOND_MODEL = "groq:llama-3.1-8b-instant"
-_DEFAULT_CHAT_TRIAGE_MODEL = "groq:llama-3.1-8b-instant"
+_DEFAULT_CHAT_RESPOND_MODEL = "groq:llama-3.3-70b-versatile"
+_DEFAULT_CHAT_TRIAGE_MODEL = "groq:llama-3.3-70b-versatile"
 
 
 class ChatConfig(BaseModel):

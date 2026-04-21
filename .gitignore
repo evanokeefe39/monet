@@ -2,6 +2,9 @@
 .graphify/
 graphify-out/
 
+# CLI debug logs (--verbose)
+.cli-logs/
+
 # Python
 __pycache__/
 *.py[cod]

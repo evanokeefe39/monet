@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from monet.client._errors import ServerError
-from monet.client._events import AgentProgress, ChatSummary
+from monet.client._events import AgentProgress, ChatSummary, ThreadRun
 from monet.client._wire import (
     MONET_CHAT_NAME_KEY,
     MONET_GRAPH_KEY,
@@ -62,6 +62,7 @@ def _build_agent_progress(run_id: str, data: dict[str, Any]) -> AgentProgress | 
         run_id=run_id,
         agent_id=agent,
         status=data.get("status", ""),
+        command=data.get("command", ""),
         reasons=data.get("reasons", ""),
     )
 
@@ -147,13 +148,15 @@ class ChatClient:
         ):
             if mode == "error":
                 raise ServerError(None, str(data))
-            if mode == "custom" and isinstance(data, dict):
-                rid = data.get("run_id", "")
-                if not rid:
-                    _log.debug("progress event missing run_id: %s", data)
-                progress = _build_agent_progress(rid, data)
-                if progress is not None:
-                    yield progress
+            if mode == "custom":
+                _log.debug("custom event type=%s data=%r", type(data).__name__, data)
+                if isinstance(data, dict):
+                    rid = data.get("run_id", "")
+                    if not rid:
+                        _log.debug("progress event missing run_id: %s", data)
+                    progress = _build_agent_progress(rid, data)
+                    if progress is not None:
+                        yield progress
                 continue
             if mode == "updates" and isinstance(data, dict):
                 patches: list[Any] = []
@@ -224,6 +227,45 @@ class ChatClient:
         thread = await self._client.threads.get(thread_id)
         meta = thread.get("metadata") or {}
         return str(meta.get(MONET_CHAT_NAME_KEY, ""))
+
+    async def list_thread_runs(
+        self, thread_id: str, *, limit: int = 50
+    ) -> list[ThreadRun]:
+        """List LangGraph runs for *thread_id* with interrupt→resume links.
+
+        Sorts by created_at ascending. When a run has status ``interrupted``,
+        the next non-interrupted run is linked via ``resumed_by``.
+        """
+        raw = await self._client.runs.list(thread_id, limit=limit)
+        raw.sort(key=lambda r: str(r["created_at"]))
+        runs: list[ThreadRun] = []
+        pending_interrupted: str = ""
+        for r in raw:
+            rid = str(r["run_id"])
+            status = str(r["status"])
+            created = str(r["created_at"])
+            if pending_interrupted and status != "interrupted":
+                runs = [
+                    ThreadRun(
+                        run_id=p.run_id,
+                        status=p.status,
+                        created_at=p.created_at,
+                        resumed_by=rid
+                        if p.run_id == pending_interrupted
+                        else p.resumed_by,
+                    )
+                    for p in runs
+                ]
+                pending_interrupted = ""
+            if status == "interrupted":
+                pending_interrupted = rid
+            runs.append(ThreadRun(run_id=rid, status=status, created_at=created))
+        return runs
+
+    async def count_thread_runs(self, thread_id: str) -> int:
+        """Return the number of LangGraph runs on *thread_id*."""
+        raw = await self._client.runs.list(thread_id, limit=100)
+        return len(raw)
 
     async def get_most_recent_chat(self) -> str | None:
         """Return the thread_id of the most recently active chat."""

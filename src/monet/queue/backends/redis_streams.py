@@ -1,15 +1,16 @@
 """Redis Streams task queue — production reference implementation.
 
-Transport-neutral ``TaskQueue`` impl backed by Redis Streams + Pub/Sub
-and result TTL strings. Works against any Redis-protocol provider
-(self-hosted, Railway, Upstash TCP, ElastiCache, Memorystore) via the
-``REDIS_URI`` env var.
+Transport-neutral ``TaskQueue`` impl backed by Redis Streams and result
+TTL strings. Works against any Redis-protocol provider (self-hosted,
+Railway, Upstash TCP, ElastiCache, Memorystore) via ``REDIS_URI``.
 
 Key shapes:
 
 - ``work:{pool}`` stream — dispatch queue, one consumer group per pool.
 - ``result:{task_id}`` string — completion payload, TTL-bound.
-- ``progress:{task_id}`` pub/sub channel — ephemeral progress relay.
+- ``phist:{task_id}`` stream — persisted progress events (XADD/XRANGE).
+  Live subscribers use XREAD BLOCK; historical retrieval via XRANGE.
+  MAXLEN-trimmed (default 1000, approximate). EXPIRE set at completion.
 - ``result-ready:{task_id}`` pub/sub channel — completion notification.
 - ``taskidx:{task_id}`` hash — ``{stream_id, pool}`` bookkeeping for
   XACK at complete/fail time.
@@ -61,6 +62,8 @@ _log = logging.getLogger("monet.queue.redis_streams")
 _DEFAULT_LEASE_TTL_SECONDS = 300
 _DEFAULT_POOL_SIZE = 20
 _DEFAULT_RESULT_TTL_MULTIPLIER = 2
+_DEFAULT_PROGRESS_STREAM_MAXLEN = 1000
+_DEFAULT_PROGRESS_TTL_SECONDS = 604800  # 7 days
 
 
 def _work_key(pool: str) -> str:
@@ -75,8 +78,8 @@ def _ready_channel(task_id: str) -> str:
     return f"result-ready:{task_id}"
 
 
-def _progress_channel(task_id: str) -> str:
-    return f"progress:{task_id}"
+def _progress_stream(task_id: str) -> str:
+    return f"phist:{task_id}"
 
 
 def _index_key(task_id: str) -> str:
@@ -98,11 +101,15 @@ class RedisStreamsTaskQueue:
         work_stream_maxlen: int | None = None,
         pool_size: int = _DEFAULT_POOL_SIZE,
         lease_ttl_seconds: int = _DEFAULT_LEASE_TTL_SECONDS,
+        progress_stream_maxlen: int = _DEFAULT_PROGRESS_STREAM_MAXLEN,
+        progress_ttl_seconds: int = _DEFAULT_PROGRESS_TTL_SECONDS,
     ) -> None:
         self._uri = redis_uri
         self._maxlen = work_stream_maxlen
         self._pool_size = pool_size
         self._lease_ttl = lease_ttl_seconds
+        self._progress_stream_maxlen = progress_stream_maxlen
+        self._progress_ttl = progress_ttl_seconds
         self._client: redis_asyncio.Redis | None = None
         self._known_pools: set[str] = set()
         self._consumer_prefix = f"sweeper-{socket.gethostname()}"
@@ -315,6 +322,9 @@ class RedisStreamsTaskQueue:
         # Publish outside the transaction; a dropped publish is
         # recovered by wait_completion's re-GET on the next wake.
         await client.publish(_ready_channel(task_id), "")
+        # Set TTL on progress stream now that task is complete.
+        with contextlib.suppress(Exception):
+            await client.expire(_progress_stream(task_id), self._progress_ttl)  # type: ignore[misc]
 
     async def fail(self, task_id: str, error: str) -> None:
         """Record a failure AgentResult (re-uses ``complete``)."""
@@ -341,7 +351,7 @@ class RedisStreamsTaskQueue:
     # --- Progress streaming ---------------------------------------------
 
     async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
-        """PUBLISH a JSON-encoded progress event. Best-effort."""
+        """XADD a progress event to the task's stream. Best-effort."""
         try:
             payload = json.dumps(event)
         except (TypeError, ValueError):
@@ -355,35 +365,73 @@ class RedisStreamsTaskQueue:
             return
         try:
             client = await self._ensure_client()
-            await client.publish(_progress_channel(task_id), payload)
+            await asyncio.wait_for(
+                client.xadd(
+                    _progress_stream(task_id),
+                    {
+                        "v": "1",
+                        "agent_id": event.get("agent", ""),
+                        "status": event.get("status", ""),
+                        "command": event.get("command", ""),
+                        "payload": payload,
+                    },
+                    maxlen=self._progress_stream_maxlen,
+                    approximate=True,
+                ),
+                timeout=2.0,
+            )
         except Exception:
-            _log.debug("Progress publish failed for task %s", task_id, exc_info=True)
+            _log.debug("Progress XADD failed for task %s", task_id, exc_info=True)
 
     async def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
-        """Yield progress events until the caller cancels the iterator."""
+        """Yield live progress events via XREAD BLOCK until cancelled."""
         client = await self._ensure_client()
-        pubsub = client.pubsub()
-        await pubsub.subscribe(_progress_channel(task_id))
+        last_id = "$"
         try:
             while True:
-                msg_obj = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
+                result = await client.xread(
+                    {_progress_stream(task_id): last_id},
+                    block=1000,
+                    count=50,
                 )
-                if msg_obj is None:
+                if not result:
                     continue
-                data = msg_obj.get("data")
-                if not isinstance(data, str):
-                    continue
+                for _stream_name, entries in result:
+                    for entry_id, fields in entries:
+                        last_id = entry_id
+                        raw = fields.get("payload") or fields.get(b"payload")
+                        if raw:
+                            try:
+                                yield json.loads(raw)
+                            except (json.JSONDecodeError, TypeError):
+                                _log.debug("Corrupt progress payload, skipping")
+        except asyncio.CancelledError:
+            return
+
+    # --- ProgressStore protocol --------------------------------------------
+
+    async def get_progress_history(
+        self, run_id: str, *, count: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return stored progress events via XRANGE on phist:{run_id}."""
+        client = await self._ensure_client()
+        entries = await client.xrange(_progress_stream(run_id), count=count)
+        results: list[dict[str, Any]] = []
+        for entry_id, fields in entries:
+            raw = fields.get("payload") or fields.get(b"payload")
+            if raw:
                 try:
-                    yield json.loads(data)
+                    event = json.loads(raw)
+                    event["_stream_id"] = entry_id
+                    results.append(event)
                 except (json.JSONDecodeError, TypeError):
-                    _log.debug("Corrupt progress payload, skipping")
                     continue
-        finally:
-            with contextlib.suppress(Exception):
-                await pubsub.unsubscribe(_progress_channel(task_id))
-            with contextlib.suppress(Exception):
-                await pubsub.aclose()  # type: ignore[no-untyped-call]
+        return results
+
+    async def expire_progress(self, run_id: str, ttl: int) -> None:
+        """Set EXPIRE on the progress stream for a completed run."""
+        client = await self._ensure_client()
+        await client.expire(_progress_stream(run_id), ttl)  # type: ignore[misc]
 
     # --- Push dispatch tracking (restart recovery) -----------------------
 

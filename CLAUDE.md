@@ -43,7 +43,7 @@ Dev: pytest, pytest-asyncio, hypothesis, httpx, ruff, mypy, mkdocs-material, pre
 - Pre-commit hooks enforce ruff and mypy before each commit
 
 ## Testing
-
+- Be frugal with testing, full runs only when it makes sense or pre commit.
 - All tests in `tests/` via pytest, async mode auto
 - Test files named `test_*.py`
 - Every public function needs a test

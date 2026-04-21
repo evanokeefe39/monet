@@ -46,7 +46,7 @@ def test_agent_progress_has_reasons_field() -> None:
     event = AgentProgress(
         run_id="r1",
         agent_id="researcher",
-        status="agent failed",
+        status="agent:failed",
         reasons="ImportError: no module named exa_py",
     )
     assert event.reasons == "ImportError: no module named exa_py"
@@ -66,7 +66,7 @@ def test_build_agent_progress_extracts_reasons() -> None:
         "run-1",
         {
             "agent": "researcher",
-            "status": "agent failed",
+            "status": "agent:failed",
             "reasons": "key missing",
             "signal_types": ["SEMANTIC_ERROR"],
         },
@@ -74,7 +74,7 @@ def test_build_agent_progress_extracts_reasons() -> None:
     assert event is not None
     assert event.run_id == "run-1"
     assert event.agent_id == "researcher"
-    assert event.status == "agent failed"
+    assert event.status == "agent:failed"
     assert event.reasons == "key missing"
 
 
@@ -103,13 +103,13 @@ def test_render_agent_progress_shows_reasons(
         AgentProgress(
             run_id="r1",
             agent_id="researcher",
-            status="agent failed",
+            status="agent:failed",
             reasons="ImportError: no module named exa_py",
         )
     )
     captured = capsys.readouterr()
     assert "[researcher]" in captured.out
-    assert "agent failed" in captured.out
+    assert "agent:failed" in captured.out
     assert "ImportError: no module named exa_py" in captured.out
 
 

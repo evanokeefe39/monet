@@ -201,6 +201,7 @@ class RunState(TypedDict, total=False):
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None
     plan_approved: bool | None
+    planning_artifacts: list[dict[str, Any]]
     wave_results: Annotated[list[dict[str, Any]], _append_reducer]
     wave_reflections: Annotated[list[dict[str, Any]], _append_reducer]
     abort_reason: str | None
@@ -222,6 +223,7 @@ class PlanningState(TypedDict, total=False):
     task: str
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None  # RoutingSkeleton.model_dump()
+    planning_artifacts: list[dict[str, Any]]
     planner_error: str | None
     planning_context: Annotated[list[dict[str, Any]], _append_reducer]
     human_feedback: str | None

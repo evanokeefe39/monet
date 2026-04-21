@@ -116,3 +116,8 @@ class ArtifactService:
             since=since,
             limit=limit,
         )
+
+    async def count_per_thread(self, thread_ids: list[str]) -> dict[str, int]:
+        """Return artifact count keyed by thread_id."""
+        await self._ensure_initialised()
+        return await self._index.count_per_thread(thread_ids)

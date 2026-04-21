@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -23,30 +22,9 @@ from monet.cli.chat._hitl_form import (
 from monet.cli.chat._messages import PromptSubmitted
 from monet.cli.chat._prompt import AutoGrowTextArea
 from monet.types import InterruptEnvelope
+from tests.chat.conftest import APPROVAL_FORM, make_fake_client
 
-_APPROVAL_FORM: dict[str, Any] = {
-    "prompt": "Approve plan?",
-    "fields": [
-        {
-            "name": "action",
-            "type": "radio",
-            "label": "Decision",
-            "options": [
-                {"value": "approve", "label": "Approve"},
-                {"value": "revise", "label": "Revise with feedback"},
-                {"value": "reject", "label": "Reject"},
-            ],
-            "default": "approve",
-        },
-        {
-            "name": "feedback",
-            "type": "textarea",
-            "label": "Feedback (required for revise)",
-            "default": "",
-            "required": False,
-        },
-    ],
-}
+_APPROVAL_FORM = APPROVAL_FORM
 
 # Structurally identical to the approval form but with a completely
 # different vocabulary — no "approve"/"reject"/"revise" or "action"/
@@ -76,22 +54,7 @@ _CUSTOM_VOCAB_FORM: dict[str, Any] = {
 }
 
 
-def _fake_client() -> Any:
-    client = MagicMock()
-    chat = MagicMock()
-
-    async def _send(*_args: Any, **_kwargs: Any):
-        if False:
-            yield ""
-
-    chat.send_message = _send
-    chat._chat_graph_id = "chat"
-    chat.get_chat_interrupt = AsyncMock(return_value=None)
-    client.chat = chat
-    client.slash_commands = AsyncMock(return_value=[])
-    client.list_capabilities = AsyncMock(return_value=[])
-    client.list_artifacts = AsyncMock(return_value=[])
-    return client
+_fake_client = make_fake_client
 
 
 def test_envelope_supports_widgets_approval() -> None:

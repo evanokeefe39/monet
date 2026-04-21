@@ -1,27 +1,35 @@
 """Orchestration layer — LangGraph StateGraph integration.
 
-State schemas (PlanningState, ExecutionState, WaveItem, WaveResult) are
-re-exported here as public surface because client code that wires the
-graphs directly needs to construct initial state dicts. These schemas
-are locked by the graph builder implementations — changing them is a
-breaking change to the public API.
+Public surface for custom graph authors:
+
+- ``invoke_agent`` — the single extension point for agent invocation
+- State schemas — locked by graph builder implementations
+- Graph builders — composable subgraphs for planning, execution, chat
+- Lifecycle constants — ``AGENT_*_STATUS`` for progress stream convention
+- Queue config — ``configure_queue``, ``get_queue``
+
+Server-bootstrap internals (``push_with_retry``, ``close_dispatch_client``,
+etc.) are importable but not part of ``__all__``.
 """
 
 from ._invoke import (
     _PUSH_MAX_ATTEMPTS as PUSH_MAX_ATTEMPTS,
 )
 from ._invoke import (
-    _push_with_retry as push_with_retry,
-)
-from ._invoke import (
-    _write_dispatch_failed as write_dispatch_failed,
-)
-from ._invoke import (
+    AGENT_COMPLETED_STATUS,
+    AGENT_FAILED_STATUS,
+    AGENT_STARTED_STATUS,
     close_dispatch_client,
     configure_capability_index,
     configure_queue,
     get_queue,
     invoke_agent,
+)
+from ._invoke import (
+    _push_with_retry as push_with_retry,
+)
+from ._invoke import (
+    _write_dispatch_failed as write_dispatch_failed,
 )
 from ._state import (
     ExecutionState,
@@ -33,12 +41,17 @@ from ._state import (
 )
 from .chat import ChatState, build_chat_graph
 from .default_graph import build_default_graph
-from .execution_graph import AGENT_FAILED_EVENT_STATUS, build_execution_subgraph
+from .execution_graph import build_execution_subgraph
 from .planning_graph import build_planning_subgraph
 
 __all__ = [
-    "AGENT_FAILED_EVENT_STATUS",
+    # Lifecycle convention
+    "AGENT_COMPLETED_STATUS",
+    "AGENT_FAILED_STATUS",
+    "AGENT_STARTED_STATUS",
+    # Queue + dispatch config
     "PUSH_MAX_ATTEMPTS",
+    # State schemas
     "ChatState",
     "ExecutionState",
     "PlanningState",
@@ -46,6 +59,7 @@ __all__ = [
     "SignalsSummary",
     "WaveItem",
     "WaveResult",
+    # Graph builders
     "build_chat_graph",
     "build_default_graph",
     "build_execution_subgraph",

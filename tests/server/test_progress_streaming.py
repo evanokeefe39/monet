@@ -175,7 +175,7 @@ async def test_forward_progress_suppresses_not_implemented() -> None:
             raise NotImplementedError("nope")
 
     # Should complete without raising.
-    await _forward_progress(NotImplQueue(), "t-1")  # type: ignore[arg-type]
+    await _forward_progress(NotImplQueue(), "t-1", "run-1")  # type: ignore[arg-type]
 
 
 # --- Worker drain flushes on cancellation ---

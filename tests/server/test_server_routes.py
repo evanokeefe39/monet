@@ -256,6 +256,105 @@ async def test_fail_task(
     assert fail_resp.json()["status"] == "ok"
 
 
+# --- Progress history endpoint ---------------------------------------------
+
+
+async def test_get_run_progress_returns_events(
+    app: Any,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/v1/runs/{run_id}/progress returns persisted events."""
+    monkeypatch.setenv("MONET_API_KEY", API_KEY)
+    queue = app.state.queue
+    run_id = "test-run-1"
+
+    await queue.publish_progress(run_id, {"agent": "writer", "status": "running"})
+    await queue.publish_progress(run_id, {"agent": "writer", "status": "done"})
+
+    resp = await client.get(
+        f"/api/v1/runs/{run_id}/progress",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["run_id"] == run_id
+    assert len(data["events"]) == 2
+    assert data["events"][0]["agent"] == "writer"
+
+
+async def test_get_run_progress_empty_for_unknown_run(
+    app: Any,
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/v1/runs/{run_id}/progress returns empty list for unknown run."""
+    monkeypatch.setenv("MONET_API_KEY", API_KEY)
+    resp = await client.get(
+        "/api/v1/runs/nonexistent/progress",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["events"] == []
+
+
+async def test_get_run_progress_501_without_progress_store(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/v1/runs/{run_id}/progress returns 501 for non-ProgressStore backends."""
+
+    monkeypatch.setenv("MONET_API_KEY", API_KEY)
+
+    class BareQueue:
+        """Queue that does not implement ProgressStore."""
+
+        async def enqueue(self, task: Any) -> str:
+            return ""
+
+        async def claim(self, pool: str, consumer_id: str, block_ms: int) -> None:
+            return None
+
+        async def complete(self, task_id: str, result: Any) -> None:
+            pass
+
+        async def fail(self, task_id: str, error: str) -> None:
+            pass
+
+        async def publish_progress(self, task_id: str, event: Any) -> None:
+            pass
+
+        def subscribe_progress(self, task_id: str) -> Any:
+            raise NotImplementedError
+
+        async def await_completion(self, task_id: str, timeout: float) -> Any:
+            raise TimeoutError
+
+        async def ping(self) -> bool:
+            return True
+
+        @property
+        def backend_name(self) -> str:
+            return "bare"
+
+        async def close(self) -> None:
+            pass
+
+    from monet.server import create_app
+
+    bare_app = create_app(queue=BareQueue())  # type: ignore[arg-type]
+    async with bare_app.router.lifespan_context(bare_app):
+        transport = ASGITransport(app=bare_app)
+        async with AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as bare_client:
+            resp = await bare_client.get(
+                "/api/v1/runs/any/progress",
+                headers=_auth_headers(),
+            )
+            assert resp.status_code == 501
+
+
 # --- WorkBrief DAG render -------------------------------------------------
 
 

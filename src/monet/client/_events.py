@@ -122,6 +122,7 @@ class AgentProgress:
     run_id: str
     agent_id: str
     status: str
+    command: str = ""
     reasons: str = ""
 
 
@@ -250,3 +251,16 @@ class ChatSummary:
     message_count: int
     created_at: str = ""
     updated_at: str = ""
+
+
+@dataclass(frozen=True)
+class ThreadRun:
+    """A single LangGraph run within a thread.
+
+    ``resumed_by`` links an interrupted run to the run that resumed it.
+    """
+
+    run_id: str
+    status: str
+    created_at: str = ""
+    resumed_by: str = ""

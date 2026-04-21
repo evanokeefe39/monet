@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from monet.client._errors import (
@@ -102,10 +103,18 @@ def _extract_interrupt_payload(state: Any) -> dict[str, Any]:
     return {}
 
 
+@dataclass
+class ArtifactSummary:
+    artifact_id: str
+    summary: str
+    kind: str
+
+
 __all__ = [
     "AgentProgress",
     "AlreadyResolved",
     "AmbiguousInterrupt",
+    "ArtifactSummary",
     "Capability",
     "ChatClient",
     "ChatSummary",
@@ -145,6 +154,7 @@ def _build_agent_progress(run_id: str, data: dict[str, Any]) -> AgentProgress | 
         run_id=run_id,
         agent_id=agent,
         status=data.get("status", ""),
+        command=data.get("command", ""),
         reasons=data.get("reasons", ""),
     )
 
@@ -418,6 +428,53 @@ class MonetClient:
             return []
         return [cast("Capability", item) for item in data if isinstance(item, dict)]
 
+    async def list_artifacts(
+        self, *, thread_id: str, limit: int = 50
+    ) -> list[ArtifactSummary]:
+        """List artifacts for a thread, newest-first."""
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + "/api/v1/artifacts"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url, headers=headers, params={"thread_id": thread_id, "limit": limit}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        items = data.get("artifacts", []) if isinstance(data, dict) else []
+        return [
+            ArtifactSummary(
+                artifact_id=item.get("artifact_id", ""),
+                summary=item.get("summary", ""),
+                kind=item.get("content_type", ""),
+            )
+            for item in items
+            if isinstance(item, dict)
+        ]
+
+    async def count_artifacts_per_thread(self, thread_ids: list[str]) -> dict[str, int]:
+        """Return artifact counts keyed by thread_id — one server round trip."""
+        if not thread_ids:
+            return {}
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + "/api/v1/artifacts/counts"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url,
+                headers=headers,
+                params={"thread_ids": ",".join(thread_ids)},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return {k: int(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
     async def slash_commands(self) -> list[str]:
         """Return the client-visible slash-command vocabulary.
 
@@ -437,6 +494,28 @@ class MonetClient:
                 out.append(cmd)
                 seen.add(cmd)
         return out
+
+    async def get_progress_history(self, run_id: str) -> list[AgentProgress]:
+        """Retrieve persisted progress events for a run."""
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + f"/api/v1/runs/{run_id}/progress"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        events = data.get("events", []) if isinstance(data, dict) else []
+        results: list[AgentProgress] = []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            progress = _build_agent_progress(run_id, ev)
+            if progress is not None:
+                results.append(progress)
+        return results
 
     async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
         """List recent runs with status and completed stages.

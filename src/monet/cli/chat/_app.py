@@ -14,16 +14,17 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import OptionList
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from monet.cli._namegen import random_chat_name
 from monet.cli.chat._commands import CommandContext, dispatch_slash
 from monet.cli.chat._constants import (
-    EXIT_CONFIRM_TIMEOUT,
     INDICATOR_REFRESH_SECONDS,
+    SLASH_SUGGEST_DEBOUNCE,
+    SLASH_SUGGEST_MAX_OPTIONS,
     TUI_COMMANDS,
 )
 from monet.cli.chat._hitl_form import (
@@ -48,7 +49,7 @@ from monet.cli.chat._screens import (
     ThreadsScreen,
 )
 from monet.cli.chat._slash import RegistrySuggester
-from monet.cli.chat._status_bar import FocusMode, StatusBar
+from monet.cli.chat._status_bar import StatusBar
 from monet.cli.chat._themes import MONET_EMBER, MONET_THEMES
 from monet.cli.chat._transcript import Transcript
 from monet.cli.chat._turn import (
@@ -59,6 +60,9 @@ from monet.cli.chat._turn import (
 from monet.cli.chat._view import DEFAULT_TAG_STYLES
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.timer import Timer
     from textual.worker import Worker
 
     from monet.client import MonetClient
@@ -90,24 +94,34 @@ class ChatApp(App[None]):
         display: none;
     }
     #slash-suggest.visible { display: block; }
+    #prompt-area {
+        dock: bottom;
+        height: 3;
+        max-height: 8;
+        margin-bottom: 1;
+        border: solid $surface;
+        background: black;
+        padding: 0;
+    }
+    #prompt-area:focus-within {
+        border: solid $accent;
+    }
+    #prompt-glyph {
+        width: 2;
+        height: 1;
+        padding: 0;
+        color: $accent;
+        background: black;
+    }
     """
 
     COMMANDS: ClassVar[set[Any]] = set()
     BINDINGS: ClassVar = [
-        Binding("ctrl+q", "quit", "Quit", show=False),
-        Binding("ctrl+c", "confirm_quit", "Quit", show=False, priority=True),
-        Binding("ctrl+x", "cancel_run", "Cancel", show=False),
-        Binding("ctrl+space", "focus_prompt", "Prompt", show=False),
-        Binding("ctrl+tab", "cycle_focus", "Cycle", show=False),
-        Binding("ctrl+1", "open_threads", "Threads", show=False),
-        Binding("ctrl+2", "open_agents", "Agents", show=False),
-        Binding("ctrl+3", "open_artifacts", "Artifacts", show=False),
-        Binding("ctrl+4", "open_runs", "Runs", show=False),
-        Binding("ctrl+p", "open_menu", "Menu", show=False, priority=True),
-        Binding("ctrl+k", "open_shortcuts", "Shortcuts", show=False),
-        Binding("down", "focus_suggest", "Suggestions", show=False),
-        Binding("escape", "hide_suggest", "Close", show=False),
-        Binding("tab", "accept_suggestion", "Complete", show=False, priority=True),
+        Binding("ctrl+q", "quit", show=False),
+        Binding("ctrl+x", "cancel_run", show=False),
+        Binding("tab", "tab_action", show=False, priority=True),
+        Binding("shift+tab", "shift_tab_action", show=False, priority=True),
+        Binding("escape", "escape_action", show=False),
     ]
 
     busy: reactive[bool] = reactive(False)
@@ -132,11 +146,18 @@ class ChatApp(App[None]):
         self._initial_history = list(history or [])
         self._interrupts = InterruptCoordinator()
         self._turn_worker: Worker[None] | None = None
-        self._exit_arm_handle: asyncio.TimerHandle | None = None
-        self._focus_mode: FocusMode = FocusMode.INPUT
+        self._thread_progress: dict[str, list[str]] = {}
+        self._nav_state: str = "prompt"
         self._tag_styles: dict[str, str] = dict(DEFAULT_TAG_STYLES)
         self._welcome_shown = False
         self._crash_error: BaseException | None = None
+        self._slash_timer: Timer | None = None
+        self._last_slash_prefix: str = ""
+        self._last_nav_override: str = ""
+        self._cached_slash_suggest: OptionList | None = None
+        self._cached_prompt: AutoGrowTextArea | None = None
+        self._cached_transcript: Transcript | None = None
+        self._cached_status_bar: StatusBar | None = None
 
     def _combined_slash_commands(self) -> list[str]:
         out: list[str] = [cmd for cmd, _ in TUI_COMMANDS]
@@ -153,12 +174,19 @@ class ChatApp(App[None]):
         with Vertical(id="main-body"):
             yield Transcript(tag_styles=self._tag_styles, id="transcript")
             yield OptionList(id="slash-suggest")
-            yield AutoGrowTextArea(id="prompt")
+            with Horizontal(id="prompt-area"):
+                yield Static("> ", id="prompt-glyph")
+                yield AutoGrowTextArea(id="prompt")
             yield StatusBar(id="status-bar")
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def on_mount(self) -> None:
+        self._cached_slash_suggest = self.query_one("#slash-suggest", OptionList)
+        self._cached_prompt = self.query_one("#prompt", AutoGrowTextArea)
+        self._cached_transcript = self.query_one("#transcript", Transcript)
+        self._cached_status_bar = self.query_one("#status-bar", StatusBar)
+
         for theme in MONET_THEMES:
             with contextlib.suppress(Exception):
                 self.register_theme(theme)
@@ -171,7 +199,7 @@ class ChatApp(App[None]):
             else "monet chat · (new)"
         )
 
-        transcript = self.query_one("#transcript", Transcript)
+        transcript = self._transcript
         for msg in self._initial_history:
             role = str(msg.get("role") or "user")
             content = str(msg.get("content") or "")
@@ -180,59 +208,61 @@ class ChatApp(App[None]):
         if not self._initial_history:
             self.call_after_refresh(self._show_welcome)
         else:
-            self.query_one("#prompt", AutoGrowTextArea).focus()
+            self._cached_prompt.focus()
 
         self.run_worker(self._refresh_slash_commands(), exclusive=False)
         self.set_interval(INDICATOR_REFRESH_SECONDS, self._refresh_indicator)
         if self._initial_thread_id:
+            self.run_worker(self._load_thread_name(), exclusive=False)
             self.run_worker(self._recover_pending_interrupt(), exclusive=False)
 
     def _show_welcome(self) -> None:
         self._welcome_shown = True
         try:
-            transcript = self.query_one("#transcript", Transcript)
-            transcript.show_welcome()
-            self.query_one("#status-bar", StatusBar).display = False
+            self._transcript.show_welcome()
+            self._status_bar.display = False
+            self.query_one("#prompt-area").display = False
         except Exception:
             pass
 
     # ── Reactive watchers ────────────────────────────────────────────
 
     def watch_busy(self, busy: bool) -> None:
-        status = self.query_one("#status-bar", StatusBar)
+        sb = self._status_bar
         if busy:
-            status.update_segments(
+            sb.update_segments(
                 active_run=self.thread_id[:8] if self.thread_id else "..."
             )
         else:
-            status.update_segments(active_run="")
+            sb.update_segments(active_run="")
+
+    def watch_thread_id(self, tid: str) -> None:
+        """Called by Textual reactive when thread_id changes."""
+        if tid:
+            self._refresh_indicator()
 
     # ── Message handlers ─────────────────────────────────────────────
 
     def dismiss_welcome(self) -> None:
         """Called by WelcomeOverlay when any key is pressed."""
         self._welcome_shown = False
-        self.query_one("#status-bar", StatusBar).display = True
-        self.query_one("#prompt", AutoGrowTextArea).focus()
+        self._status_bar.display = True
+        self.query_one("#prompt-area").display = True
+        self._cached_prompt.focus() if self._cached_prompt else None
 
     def on_prompt_submitted(self, event: PromptSubmitted) -> None:
+        if self._welcome_shown:
+            return
+        suggest = self._cached_slash_suggest
+        prompt = self._cached_prompt
+        if self._suggest_visible() and suggest is not None:
+            opt = suggest.get_option_at_index(suggest.highlighted or 0)
+            if opt and opt.id and prompt is not None:
+                prompt.text = str(opt.id) + " "
+            suggest.remove_class("visible")
+            return
         text = event.text.strip()
         if not text:
-            return
-        if text in {"/quit", "/exit"}:
-            self.exit()
-            return
-        if text == "/threads":
-            self.action_open_threads()
-            return
-        if text == "/agents":
-            self.action_open_agents()
-            return
-        if text == "/artifacts":
-            self.action_open_artifacts()
-            return
-        if text == "/runs":
-            self.action_open_runs()
             return
         if self._interrupts.is_pending():
             self._transcript.append(f"[user] {text}")
@@ -264,21 +294,51 @@ class ChatApp(App[None]):
     def on_text_area_changed(self, event: AutoGrowTextArea.Changed) -> None:
         if event.text_area.id != "prompt":
             return
-        self._refresh_slash_suggest(event.text_area.text)
+        suggest = self._cached_slash_suggest
+        stripped = event.text_area.text.strip()
+        if not stripped.startswith("/") or " " in stripped:
+            if self._slash_timer is not None:
+                self._slash_timer.stop()
+                self._slash_timer = None
+            if suggest is not None:
+                suggest.remove_class("visible")
+            self._last_slash_prefix = ""
+            self._update_nav_hint()
+            return
+        if self._slash_timer is not None:
+            self._slash_timer.stop()
+        self._slash_timer = self.set_timer(
+            SLASH_SUGGEST_DEBOUNCE, self._do_slash_suggest
+        )
+
+    def _do_slash_suggest(self) -> None:
+        self._slash_timer = None
+        prompt = self._cached_prompt
+        if prompt is not None:
+            self._refresh_slash_suggest(prompt.text)
 
     def _refresh_slash_suggest(self, value: str) -> None:
-        suggest = self.query_one("#slash-suggest", OptionList)
+        suggest = self._cached_slash_suggest
+        if suggest is None:
+            return
         stripped = value.strip()
+        if stripped == self._last_slash_prefix:
+            return
+        self._last_slash_prefix = stripped
         if not stripped.startswith("/") or " " in stripped:
             suggest.remove_class("visible")
+            if self._nav_state == "suggest":
+                self._set_nav("prompt")
             return
         matches = [cmd for cmd in self.slash_commands if cmd.startswith(stripped)]
         suggest.clear_options()
         if not matches:
             suggest.remove_class("visible")
+            if self._nav_state == "suggest":
+                self._set_nav("prompt")
             return
-        width = max(len(cmd) for cmd in matches[:20])
-        for cmd in matches[:20]:
+        width = max(len(cmd) for cmd in matches[:SLASH_SUGGEST_MAX_OPTIONS])
+        for cmd in matches[:SLASH_SUGGEST_MAX_OPTIONS]:
             label = Text(no_wrap=True, overflow="ellipsis")
             label.append(f"{cmd:<{width}}", style="bold")
             desc = self.slash_descriptions.get(cmd, "")
@@ -287,27 +347,65 @@ class ChatApp(App[None]):
             suggest.add_option(Option(label, id=cmd))
         suggest.add_class("visible")
         suggest.highlighted = 0
+        self._set_nav("suggest")
 
     def action_focus_suggest(self) -> None:
-        suggest = self.query_one("#slash-suggest", OptionList)
+        suggest = self._cached_slash_suggest
+        if suggest is None:
+            return
         if "visible" in suggest.classes and suggest.option_count > 0:
             suggest.focus()
 
     def action_hide_suggest(self) -> None:
-        suggest = self.query_one("#slash-suggest", OptionList)
-        suggest.remove_class("visible")
-        self.query_one("#prompt", AutoGrowTextArea).focus()
+        suggest = self._cached_slash_suggest
+        if suggest is not None:
+            suggest.remove_class("visible")
+        if self._cached_prompt is not None:
+            self._cached_prompt.focus()
+        self._set_nav("prompt")
 
-    async def action_accept_suggestion(self) -> None:
-        prompt = self.query_one("#prompt", AutoGrowTextArea)
-        if not prompt.has_focus:
-            self.screen.focus_next()
+    def _suggest_visible(self) -> bool:
+        suggest = self._cached_slash_suggest
+        if suggest is None:
+            return False
+        return "visible" in suggest.classes and suggest.option_count > 0
+
+    def _set_nav(self, state: str) -> None:
+        self._nav_state = state
+        self._update_nav_hint()
+
+    def action_tab_action(self) -> None:
+        if self._nav_state == "suggest":
+            suggest = self._cached_slash_suggest
+            prompt = self._cached_prompt
+            if suggest is not None and prompt is not None and suggest.option_count > 0:
+                idx = suggest.highlighted or 0
+                suggest.highlighted = (idx + 1) % suggest.option_count
+                opt = suggest.get_option_at_index(suggest.highlighted)
+                if opt and opt.id:
+                    prompt.text = str(opt.id) + " "
             return
-        suggestion = await self._suggester.get_suggestion(prompt.text)
-        if not suggestion or suggestion == prompt.text:
-            self.screen.focus_next()
+        self.screen.focus_next()
+
+    def action_shift_tab_action(self) -> None:
+        if self._nav_state == "suggest":
+            suggest = self._cached_slash_suggest
+            prompt = self._cached_prompt
+            if suggest is not None and prompt is not None and suggest.option_count > 0:
+                idx = suggest.highlighted or 0
+                suggest.highlighted = (idx - 1) % suggest.option_count
+                opt = suggest.get_option_at_index(suggest.highlighted)
+                if opt and opt.id:
+                    prompt.text = str(opt.id) + " "
             return
-        prompt.text = suggestion
+        self.screen.focus_previous()
+
+    def action_escape_action(self) -> None:
+        if self._nav_state == "suggest":
+            self.action_hide_suggest()
+        elif self._nav_state in {"hitl", "transcript"}:
+            self._set_nav("prompt")
+            (self._cached_prompt or self.query_one("#prompt", AutoGrowTextArea)).focus()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id != "slash-suggest":
@@ -315,49 +413,15 @@ class ChatApp(App[None]):
         chosen = str(event.option.id or "")
         if not chosen:
             return
-        prompt = self.query_one("#prompt", AutoGrowTextArea)
-        prompt.text = chosen + " "
-        self.query_one("#slash-suggest", OptionList).remove_class("visible")
-        prompt.focus()
+        prompt = self._cached_prompt
+        if prompt is not None:
+            prompt.text = chosen + " "
+            prompt.focus()
+        suggest = self._cached_slash_suggest
+        if suggest is not None:
+            suggest.remove_class("visible")
 
     # ── Actions ──────────────────────────────────────────────────────
-
-    def action_focus_prompt(self) -> None:
-        self.query_one("#prompt", AutoGrowTextArea).focus()
-        self._focus_mode = FocusMode.INPUT
-        self._status_bar.set_focus(FocusMode.INPUT)
-
-    def action_cycle_focus(self) -> None:
-        if self._focus_mode == FocusMode.INPUT:
-            self._focus_mode = FocusMode.TRANSCRIPT
-            self.query_one("#transcript", Transcript).query_one("#_log").focus()
-        else:
-            self._focus_mode = FocusMode.INPUT
-            self.query_one("#prompt", AutoGrowTextArea).focus()
-        self._status_bar.set_focus(self._focus_mode)
-
-    def action_confirm_quit(self) -> None:
-        if self._exit_arm_handle is not None:
-            self._cancel_exit_arm()
-            self.exit()
-            return
-        self._status_bar.set_override(
-            f"press ctrl+c again within {int(EXIT_CONFIRM_TIMEOUT)}s to exit"
-        )
-        loop = asyncio.get_running_loop()
-        self._exit_arm_handle = loop.call_later(
-            EXIT_CONFIRM_TIMEOUT, self._reset_exit_arm
-        )
-
-    def _reset_exit_arm(self) -> None:
-        self._exit_arm_handle = None
-        self._status_bar.clear_override()
-
-    def _cancel_exit_arm(self) -> None:
-        if self._exit_arm_handle is not None:
-            self._exit_arm_handle.cancel()
-            self._exit_arm_handle = None
-        self._status_bar.clear_override()
 
     def action_cancel_run(self) -> None:
         if self._turn_worker is not None:
@@ -384,12 +448,7 @@ class ChatApp(App[None]):
         if not self.thread_id:
             self._transcript.append("[info] no active thread for artifacts")
             return
-
-        def _on_pick(result: str | None) -> None:
-            if result:
-                self._copy_artifact_url(result)
-
-        self.push_screen(ArtifactsScreen(self._client, self.thread_id), _on_pick)
+        self.push_screen(ArtifactsScreen(self._client, self.thread_id), lambda _: None)
 
     def action_open_runs(self) -> None:
         self.push_screen(RunsScreen(self._client, self.thread_id), lambda _: None)
@@ -397,23 +456,43 @@ class ChatApp(App[None]):
     def action_open_shortcuts(self) -> None:
         self.push_screen(ShortcutsScreen())
 
-    def action_open_menu(self) -> None:
-        self.push_screen(ShortcutsScreen())
-
     # ── Properties ───────────────────────────────────────────────────
 
     @property
     def _transcript(self) -> Transcript:
+        if self._cached_transcript is not None:
+            return self._cached_transcript
         return self.query_one("#transcript", Transcript)
 
     @property
     def _status_bar(self) -> StatusBar:
+        if self._cached_status_bar is not None:
+            return self._cached_status_bar
         return self.query_one("#status-bar", StatusBar)
+
+    # ── Nav hints ────────────────────────────────────────────────────
+
+    def _update_nav_hint(self) -> None:
+        hints = {
+            "prompt": "",
+            "suggest": "tab/shift+tab cycle · enter accept · esc close",
+            "hitl": "tab/shift+tab navigate · enter submit · esc back",
+            "transcript": "↑↓ scroll · tab prompt",
+        }
+        target = hints.get(self._nav_state, "")
+        if target == self._last_nav_override:
+            return
+        self._last_nav_override = target
+        sb = self._status_bar
+        if target:
+            sb.set_override(target)
+        else:
+            sb.clear_override()
 
     # ── Public hooks ─────────────────────────────────────────────────
 
     def prefill_input(self, text: str) -> None:
-        prompt = self.query_one("#prompt", AutoGrowTextArea)
+        prompt = self._cached_prompt or self.query_one("#prompt", AutoGrowTextArea)
         prompt.text = text
         prompt.focus()
 
@@ -427,10 +506,11 @@ class ChatApp(App[None]):
         if await dispatch_slash(cmd_ctx, text):
             return
 
-        self.busy = True
-        transcript.append("[info] thinking...")
+        transcript.append("[info] running workflow...")
+        transcript.defer_scroll()
         try:
             thread_id = await self._ensure_thread_id()
+            self.busy = True
             stream = self._client.chat.send_message(thread_id, text)
             await run_turn(
                 client=self._client,
@@ -452,18 +532,48 @@ class ChatApp(App[None]):
         finally:
             self.busy = False
             self._turn_worker = None
+            transcript.flush_scroll()
 
     def _writer(self, line: str) -> None:
+        if line.startswith(("│", "[")) and self.thread_id:
+            from monet.cli.chat._view import _AGENT_TAG_RE
+
+            if line.startswith("│") or _AGENT_TAG_RE.match(line):
+                self._thread_progress.setdefault(self.thread_id, []).append(line)
+        self._log_to_thread(line)
         markdown = line.startswith("[assistant]")
-        self._transcript.append(line, markdown=markdown)
+        scroll = not line.startswith("│")
+        if scroll and markdown:
+            self._transcript.append(line, markdown=markdown, scroll=False)
+        else:
+            self._transcript.append(line, markdown=markdown, scroll=scroll)
+
+    def _log_to_thread(self, line: str) -> None:
+        if not self.thread_id:
+            return
+        from pathlib import Path
+
+        path = Path.cwd() / ".cli-logs" / "threads" / f"{self.thread_id}.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
 
     def _focus_prompt(self) -> None:
-        self.query_one("#prompt", AutoGrowTextArea).focus()
-        self._focus_mode = FocusMode.INPUT
-        self._status_bar.set_focus(FocusMode.INPUT)
+        (self._cached_prompt or self.query_one("#prompt", AutoGrowTextArea)).focus()
+        self._set_nav("prompt")
+
+    async def _load_thread_name(self) -> None:
+        """Fetch and display the thread name for a resumed session."""
+        try:
+            name = await self._client.chat.get_chat_name(self.thread_id)
+        except Exception:
+            return
+        if name:
+            self.title = f"monet chat · {name}"
+            self._status_bar.update_segments(thread_name=name)
 
     async def _ensure_thread_id(self) -> str:
         if self.thread_id:
@@ -492,14 +602,13 @@ class ChatApp(App[None]):
             _log.exception("mount hitl widgets failed")
             return False
         self._hitl_envelope = envelope
-        if envelope.prompt:
-            self._transcript.append(f"[info] {envelope.prompt}")
-        self._transcript.append("[info] select an option, or type a reply")
+        self._set_nav("hitl")
         return True
 
     def _unmount_hitl_widgets(self) -> None:
         self._hitl_envelope = None
         self._transcript.unmount_hitl()
+        self._set_nav("prompt")
 
     def _on_hitl_payload(self, payload: dict[str, Any] | None) -> None:
         if payload is None:
@@ -551,6 +660,8 @@ class ChatApp(App[None]):
 
         await _cmd_switch(cmd_ctx, target)
         self.thread_id = target
+        for line in self._thread_progress.get(target, []):
+            self._transcript.append(line)
         self.run_worker(self._recover_pending_interrupt(), exclusive=False)
 
     # ── Background tasks ─────────────────────────────────────────────
@@ -580,13 +691,32 @@ class ChatApp(App[None]):
         self.run_worker(self._refresh_indicator_async(), exclusive=False)
 
     async def _refresh_indicator_async(self) -> None:
-        agents = 0
-        try:
-            caps = await self._client.list_capabilities()
-            agents = len(caps)
-        except Exception:
-            pass
-        self._status_bar.update_segments(agents=agents)
+        async def _get_agents() -> int:
+            try:
+                return len(await self._client.list_capabilities())
+            except Exception:
+                return 0
+
+        async def _get_artifacts() -> int:
+            if not self.thread_id:
+                return 0
+            try:
+                return len(await self._client.list_artifacts(thread_id=self.thread_id))
+            except Exception:
+                return 0
+
+        async def _get_runs() -> int:
+            if not self.thread_id:
+                return 0
+            try:
+                return await self._client.chat.count_thread_runs(self.thread_id)
+            except Exception:
+                return 0
+
+        agents, artifacts, runs = await asyncio.gather(
+            _get_agents(), _get_artifacts(), _get_runs()
+        )
+        self._status_bar.update_segments(agents=agents, artifacts=artifacts, runs=runs)
 
     # ── Helpers ──────────────────────────────────────────────────────
 
@@ -600,6 +730,13 @@ class ChatApp(App[None]):
             _log.warning("copy failed: %s", exc)
 
     def _make_command_context(self) -> CommandContext:
+        screen_actions: dict[str, Callable[[], None]] = {
+            "threads": self.action_open_threads,
+            "agents": self.action_open_agents,
+            "artifacts": self.action_open_artifacts,
+            "runs": self.action_open_runs,
+            "shortcuts": self.action_open_shortcuts,
+        }
         return CommandContext(
             client=self._client,
             transcript=self._transcript,
@@ -610,6 +747,9 @@ class ChatApp(App[None]):
             set_title=self._set_title,
             update_status=self._status_bar.update_segments,
             show_welcome=self._show_welcome,
+            copy_to_clipboard=self.copy_to_clipboard,
+            exit_app=self.exit,
+            push_screen=lambda name: screen_actions.get(name, lambda: None)(),
         )
 
     def _set_thread_id(self, tid: str) -> None:

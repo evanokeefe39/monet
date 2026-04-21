@@ -22,7 +22,7 @@ def _get_model(model_string: str) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("publisher", "groq:llama-3.1-8b-instant")
+    return agent_model("publisher", "groq:llama-3.3-70b-versatile")
 
 
 publisher = agent("publisher")
@@ -33,7 +33,8 @@ async def publisher_publish(
     task: str, context: list[dict[str, Any]] | None = None
 ) -> str:
     """Format upstream content as publication-ready markdown."""
-    emit_progress({"status": "publishing", "agent": "publisher"})
+    model_short = _model_string().split(":")[-1]
+    emit_progress({"status": f"thinking[{model_short}]...", "agent": "publisher"})
     context = await resolve_context(context or [])
 
     prompt = _env.get_template("publish.j2").render(task=task, context=context)

@@ -23,7 +23,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 from pydantic import ValidationError
 
-from monet import emit_progress
 from monet.core.tracing import (
     EXECUTION_ROOT_SPAN_NAME,
     attached_trace,
@@ -35,15 +34,11 @@ from monet.types import ArtifactPointer  # noqa: TC001 — runtime type for Type
 
 from ._forms import build_execution_interrupt_form
 from ._invoke import invoke_agent
-from ._planner_outcome import format_signal_reasons
 from ._signal_router import EXECUTION_ROUTER
 from ._state import ExecutionState, RoutingSkeleton, SignalsSummary
 
 if TYPE_CHECKING:
     from monet.core.hooks import GraphHookRegistry
-
-
-AGENT_FAILED_EVENT_STATUS = "agent failed"
 
 
 class NodeItem(TypedDict, total=False):
@@ -237,19 +232,6 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
 
     signals_data = [dict(s) for s in result.signals]
     artifacts_data = [dict(a) for a in result.artifacts]
-
-    if not result.success:
-        failure_reasons = "; ".join(format_signal_reasons(signals_data))
-        emit_progress(
-            {
-                "status": AGENT_FAILED_EVENT_STATUS,
-                "agent": item["agent_id"],
-                "command": item["command"],
-                "reasons": failure_reasons,
-                "signal_types": [s.get("type") for s in signals_data],
-                "run_id": item.get("run_id", ""),
-            }
-        )
 
     entry: dict[str, Any] = {
         "node_id": item["node_id"],

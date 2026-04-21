@@ -49,7 +49,7 @@ def _get_model(model_string: str, *, temperature: float = 0.0) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("planner", "groq:llama-3.1-8b-instant")
+    return agent_model("planner", "groq:llama-3.3-70b-versatile")
 
 
 _PLANNER_EXCLUDE: tuple[str, ...] = ("planner",)
@@ -112,7 +112,8 @@ async def planner_fast(task: str, context: list[dict[str, Any]] | None = None) -
     instance (primarily in tests where ``_get_model`` is mocked).
     """
     log = get_run_logger()
-    emit_progress({"status": "triaging", "agent": "planner"})
+    model_short = _model_string().split(":")[-1]
+    emit_progress({"status": f"thinking[{model_short}]...", "agent": "planner"})
     log.info("planner/fast triaging: %s", task[:80])
 
     roster = [
@@ -153,7 +154,8 @@ async def planner_plan(
     invocation time; neither output dict is read for content beyond the
     discriminator + pointer.
     """
-    emit_progress({"status": "planning", "agent": "planner"})
+    model_short = _model_string().split(":")[-1]
+    emit_progress({"status": f"thinking[{model_short}]...", "agent": "planner"})
 
     feedback = ""
     clarification_answers: list[dict[str, Any]] = []

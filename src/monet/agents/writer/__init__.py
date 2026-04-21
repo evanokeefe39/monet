@@ -22,7 +22,7 @@ def _get_model(model_string: str) -> Any:
 
 
 def _model_string() -> str:
-    return agent_model("writer", "groq:llama-3.1-8b-instant")
+    return agent_model("writer", "groq:llama-3.3-70b-versatile")
 
 
 writer = agent("writer")
@@ -31,7 +31,8 @@ writer = agent("writer")
 @writer(command="deep")
 async def writer_deep(task: str, context: list[dict[str, Any]] | None = None) -> str:
     """Generate polished long-form content from a brief and prior research."""
-    emit_progress({"status": "writing", "agent": "writer"})
+    model_short = _model_string().split(":")[-1]
+    emit_progress({"status": f"thinking[{model_short}]...", "agent": "writer"})
     context = await resolve_context(context or [])
 
     prompt = _env.get_template("deep.j2").render(task=task, context=context)

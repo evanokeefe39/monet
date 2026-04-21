@@ -147,11 +147,13 @@ async def _invoke_planner(
         "human_feedback": None,
         "followup_answers": None,
     }
+    artifacts = [dict(a) for a in result.artifacts]
     outcome = classify_planner_result(result)
     if isinstance(outcome, PlanOutcome):
         return {
             "work_brief_pointer": outcome.work_brief_pointer,
             "routing_skeleton": outcome.routing_skeleton,
+            "planning_artifacts": artifacts,
             "planner_error": None,
             "pending_questions": None,
             **cleared,
@@ -160,6 +162,7 @@ async def _invoke_planner(
         return {
             "work_brief_pointer": None,
             "routing_skeleton": None,
+            "planning_artifacts": [],
             "planner_error": None,
             "pending_questions": outcome.questions,
             **cleared,
@@ -168,6 +171,7 @@ async def _invoke_planner(
     return {
         "work_brief_pointer": None,
         "routing_skeleton": None,
+        "planning_artifacts": [],
         "planner_error": outcome.reason,
         "pending_questions": None,
         **cleared,

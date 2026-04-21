@@ -186,8 +186,9 @@ from monet.client import (
 | Field | Type | Description |
 |---|---|---|
 | `agent_id` | `str` | Agent reporting progress |
-| `status` | `str` | Progress status |
-| `reasons` | `str` | Optional explanation |
+| `status` | `str` | Progress status — lifecycle (`agent:started`, `agent:completed`, `agent:failed`) or freeform |
+| `command` | `str` | Agent command (e.g. `"fast"`, `"deep"`) |
+| `reasons` | `str` | Failure explanation (populated on `agent:failed`) |
 
 ### `SignalEmitted`
 

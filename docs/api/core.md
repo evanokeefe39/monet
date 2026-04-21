@@ -138,6 +138,14 @@ def emit_progress(data: dict[str, Any]) -> None
 
 Writes a progress event into the LangGraph stream writer. No-op outside a LangGraph execution context.
 
+Convention: include `agent` and `status` keys. `invoke_agent` automatically emits lifecycle events (`agent:started`, `agent:completed`, `agent:failed`) — agent-authored progress appears between them:
+
+```python
+emit_progress({"status": "searching with Exa", "agent": "researcher"})
+```
+
+Client-side, these arrive as `AgentProgress` events. See the [progress stream convention](../guides/orchestration.md#progress-stream-convention) for details.
+
 ### `emit_signal`
 
 ```python
