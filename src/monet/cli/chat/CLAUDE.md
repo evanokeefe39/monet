@@ -10,22 +10,17 @@ Fixed vertical stack, bottom → top:
 
 Welcome screen: `align: center middle` on `WelcomeOverlay` container. Do NOT use Textual `Center`/`Middle` widgets. `#welcome-card` uses `text-align: center`.
 
-Rich Text objects cannot use Textual CSS variables (`$primary`, `$accent`). Use hex literals from active palette.
+Rich Text objects cannot use Textual CSS variables (`$primary`, `$accent`). Use hex from `MONET_EMBER` via module-level constants in `_view.py`.
 
-## Color palettes
+## Color architecture
 
-All colors from `color-palettes.txt` at project root. Themes in `_themes.py`:
+Active theme: `MONET_EMBER` (palette 9, terracotta/ocean). All themes defined in `_themes.py`, registered on mount.
 
-| Theme | Palette | Colors |
-|-------|---------|--------|
-| `monet-dark` (default) | 1 | teal/blue/coral |
-| `monet-retro` | 2 | crimson/teal |
-| `monet-vivid` | 3 | bright cyan/scarlet |
-| `monet-forest` | 8 | deep forest/navy |
-| `monet-ember` | 9 | terracotta/ocean |
-| `monet-light` | — | light mode fallback |
+Two color paths:
+1. **Textual CSS** (`DEFAULT_CSS` blocks): use `$primary`, `$accent`, `$surface` etc. Theme-responsive.
+2. **Rich Text** (`styled_line`, status bar, welcome, screens): use named module-level constants sourced from `MONET_EMBER` in `_view.py` (`_PRIMARY`, `_ACCENT`, `_ERROR`, `_SECONDARY`, `_MUTED`). Other consumers import from `MONET_EMBER.variables` directly.
 
-Tag styles in `_view.py` use hex literals. When changing colors, pick from `color-palettes.txt`.
+When changing colors, pick from `color-palettes.txt`. All hex in Rich Text paths must trace back to `_themes.py`.
 
 ## Key files
 

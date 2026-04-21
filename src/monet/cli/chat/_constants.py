@@ -13,7 +13,6 @@ TUI_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/runs", "list recent pipeline runs"),
     ("/rename", "rename current thread"),
     ("/copy", "copy transcript to clipboard"),
-    ("/colors", "show or change the palette"),
     ("/shortcuts", "keyboard shortcuts"),
     ("/help", "list TUI commands"),
     ("/quit", "leave the REPL"),

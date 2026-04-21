@@ -7,7 +7,6 @@ All business logic delegated to widgets and command modules.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -57,7 +56,6 @@ from monet.cli.chat._turn import (
     empty_stream,
     run_turn,
 )
-from monet.cli.chat._view import DEFAULT_TAG_STYLES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,36 +66,35 @@ if TYPE_CHECKING:
     from monet.client import MonetClient
 
 _log = logging.getLogger("monet.cli.chat")
-_V = MONET_EMBER.variables
 
-_PROMPT_ACCENT = _V["teal-600"]
+_MAX_PROGRESS_LINES = 500
 
 
 class ChatApp(App[None]):
     """Monet chat TUI — thin dispatcher over self-contained widgets."""
 
-    CSS = f"""
-    Screen {{ background: black; overflow: hidden; }}
-    * {{
+    CSS = """
+    Screen { background: black; overflow: hidden; }
+    * {
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 0;
         scrollbar-background: black;
         scrollbar-color: $accent 60%;
         scrollbar-color-hover: $accent;
-    }}
-    #main-body {{ height: 100%; layers: base overlay; }}
-    #slash-suggest {{
+    }
+    #main-body { height: 100%; layers: base overlay; }
+    #slash-suggest {
         layer: overlay;
         dock: bottom;
         height: auto;
         max-height: 8;
         margin-bottom: 5;
-        border: solid {_PROMPT_ACCENT};
+        border: solid $primary;
         background: black;
         display: none;
-    }}
-    #slash-suggest.visible {{ display: block; }}
-    #prompt-area {{
+    }
+    #slash-suggest.visible { display: block; }
+    #prompt-area {
         dock: bottom;
         height: 3;
         max-height: 8;
@@ -105,17 +102,17 @@ class ChatApp(App[None]):
         border: solid $surface;
         background: black;
         padding: 0;
-    }}
-    #prompt-area:focus-within {{
-        border: solid {_PROMPT_ACCENT};
-    }}
-    #prompt-glyph {{
+    }
+    #prompt-area:focus-within {
+        border: solid $primary;
+    }
+    #prompt-glyph {
         width: 2;
         height: 1;
         padding: 0;
-        color: {_PROMPT_ACCENT};
+        color: $primary;
         background: black;
-    }}
+    }
     """
 
     COMMANDS: ClassVar[set[Any]] = set()
@@ -137,7 +134,6 @@ class ChatApp(App[None]):
         thread_id: str,
         slash_commands: list[str] | None = None,
         history: list[dict[str, Any]] | None = None,
-        style: Any = None,
     ) -> None:
         super().__init__()
         self._client: MonetClient = client
@@ -151,7 +147,6 @@ class ChatApp(App[None]):
         self._turn_worker: Worker[None] | None = None
         self._thread_progress: dict[str, list[str]] = {}
         self._nav_state: str = "prompt"
-        self._tag_styles: dict[str, str] = dict(DEFAULT_TAG_STYLES)
         self._welcome_shown = False
         self._crash_error: BaseException | None = None
         self._slash_timer: Timer | None = None
@@ -175,7 +170,7 @@ class ChatApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="main-body"):
-            yield Transcript(tag_styles=self._tag_styles, id="transcript")
+            yield Transcript(id="transcript")
             yield OptionList(id="slash-suggest")
             with Horizontal(id="prompt-area"):
                 yield Static("> ", id="prompt-glyph")
@@ -191,8 +186,10 @@ class ChatApp(App[None]):
         self._cached_status_bar = self.query_one("#status-bar", StatusBar)
 
         for theme in MONET_THEMES:
-            with contextlib.suppress(Exception):
+            try:
                 self.register_theme(theme)
+            except Exception:
+                _log.debug("theme registration failed: %s", theme.name, exc_info=True)
         self.theme = MONET_EMBER.name
 
         self.thread_id = self._initial_thread_id
@@ -226,7 +223,7 @@ class ChatApp(App[None]):
             self._status_bar.display = False
             self.query_one("#prompt-area").display = False
         except Exception:
-            pass
+            _log.debug("show welcome failed", exc_info=True)
 
     # ── Reactive watchers ────────────────────────────────────────────
 
@@ -542,7 +539,10 @@ class ChatApp(App[None]):
             from monet.cli.chat._view import _AGENT_TAG_RE
 
             if line.startswith("│") or _AGENT_TAG_RE.match(line):
-                self._thread_progress.setdefault(self.thread_id, []).append(line)
+                lines = self._thread_progress.setdefault(self.thread_id, [])
+                lines.append(line)
+                if len(lines) > _MAX_PROGRESS_LINES:
+                    self._thread_progress[self.thread_id] = lines[-_MAX_PROGRESS_LINES:]
         self._log_to_thread(line)
         markdown = line.startswith("[assistant]")
         scroll = not line.startswith("│")
