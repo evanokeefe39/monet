@@ -8,15 +8,26 @@ the text is sent to the server as a chat message.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from monet.cli.chat._transcript import Transcript
     from monet.client import MonetClient
 
 _log = logging.getLogger("monet.cli.chat")
+
+
+@runtime_checkable
+class AppActions(Protocol):
+    """Callback surface the App exposes to slash commands."""
+
+    def get_thread_id(self) -> str: ...
+    def set_thread_id(self, tid: str) -> None: ...
+    def set_title(self, title: str) -> None: ...
+    def update_status(self, **kwargs: Any) -> None: ...
+    def copy_to_clipboard(self, text: str) -> None: ...
+    def exit_app(self) -> None: ...
+    def push_screen_by_name(self, name: str) -> None: ...
 
 
 class CommandContext:
@@ -29,27 +40,13 @@ class CommandContext:
         transcript: Transcript,
         thread_id: str,
         server_slash_commands: list[str],
-        get_thread_id: Callable[[], str],
-        set_thread_id: Callable[[str], None],
-        set_title: Callable[[str], None],
-        update_status: Callable[..., None],
-        show_welcome: Callable[[], None],
-        copy_to_clipboard: Callable[[str], None],
-        exit_app: Callable[[], None],
-        push_screen: Callable[[str], None],
+        app: AppActions,
     ) -> None:
         self.client = client
         self.transcript = transcript
         self.thread_id = thread_id
         self.server_slash_commands = server_slash_commands
-        self._get_thread_id = get_thread_id
-        self._set_thread_id = set_thread_id
-        self._set_title = set_title
-        self._update_status = update_status
-        self._show_welcome = show_welcome
-        self._copy_to_clipboard = copy_to_clipboard
-        self._exit_app = exit_app
-        self._push_screen = push_screen
+        self.app = app
 
 
 async def dispatch_slash(ctx: CommandContext, text: str) -> bool:
@@ -58,10 +55,10 @@ async def dispatch_slash(ctx: CommandContext, text: str) -> bool:
     arg = rest.strip()
 
     if head in {"/quit", "/exit"}:
-        ctx._exit_app()
+        ctx.app.exit_app()
         return True
     if head in {"/threads", "/agents", "/artifacts", "/runs"}:
-        ctx._push_screen(head.lstrip("/"))
+        ctx.app.push_screen_by_name(head.lstrip("/"))
         return True
     if head in {"/new", "/clear"}:
         await _cmd_new(ctx)
@@ -79,7 +76,7 @@ async def dispatch_slash(ctx: CommandContext, text: str) -> bool:
         _cmd_copy(ctx, arg)
         return True
     if head == "/shortcuts":
-        ctx._push_screen("shortcuts")
+        ctx.app.push_screen_by_name("shortcuts")
         return True
     if head == "/help":
         _cmd_help(ctx)
@@ -96,9 +93,9 @@ async def _cmd_new(ctx: CommandContext) -> None:
     except Exception as exc:
         ctx.transcript.append(f"[error] /new failed: {exc}")
         return
-    ctx._set_thread_id(new_id)
-    ctx._set_title(f"monet chat · {name}")
-    ctx._update_status(thread_name=name)
+    ctx.app.set_thread_id(new_id)
+    ctx.app.set_title(f"monet chat · {name}")
+    ctx.app.update_status(thread_name=name)
     ctx.transcript.clear()
     ctx.transcript.append(f"[info] new thread · {name} · {new_id[:8]}")
 
@@ -112,9 +109,9 @@ async def _cmd_switch(ctx: CommandContext, target: str) -> None:
     except Exception as exc:
         ctx.transcript.append(f"[error] /switch failed: {exc}")
         return
-    ctx._set_thread_id(target)
-    ctx._set_title(f"monet chat · {target}")
-    ctx._update_status(thread_name="")
+    ctx.app.set_thread_id(target)
+    ctx.app.set_title(f"monet chat · {target}")
+    ctx.app.update_status(thread_name="")
     ctx.transcript.clear()
     ctx.transcript.append(f"[info] switched to {target}")
     for msg in history:
@@ -126,7 +123,7 @@ async def _cmd_switch(ctx: CommandContext, target: str) -> None:
 
 
 async def _cmd_rename(ctx: CommandContext, name: str) -> None:
-    thread_id = ctx._get_thread_id()
+    thread_id = ctx.app.get_thread_id()
     if not thread_id:
         ctx.transcript.append("[error] no active thread to rename")
         return
@@ -136,7 +133,7 @@ async def _cmd_rename(ctx: CommandContext, name: str) -> None:
         ctx.transcript.append(f"[error] rename failed: {exc}")
         return
     ctx.transcript.append(f"[info] thread renamed to {name}")
-    ctx._update_status(thread_name=name)
+    ctx.app.update_status(thread_name=name)
 
 
 def _cmd_copy(ctx: CommandContext, arg: str = "") -> None:
@@ -149,7 +146,7 @@ def _cmd_copy(ctx: CommandContext, arg: str = "") -> None:
     if not text:
         ctx.transcript.append("[info] transcript is empty")
         return
-    ctx._copy_to_clipboard(text)
+    ctx.app.copy_to_clipboard(text)
     ctx.transcript.append(f"[info] copied {len(text.splitlines())} line(s)")
 
 
