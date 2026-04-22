@@ -140,6 +140,21 @@ Out of scope: schedule editors, calendar UIs, retry semantics beyond standard ru
 - **`monet queue stats` / `monet queue reclaim` CLI** — trigger: first operator page for reclaim storm.
 - **Backup / restore for stream contents** — trigger: customer needs run replay across Redis failover.
 
+### TUI migration — Textual → OpenTUI
+
+Current `monet chat` TUI built on Python Textual. Migrate to OpenTUI (Rust-backed terminal UI) for rendering performance and richer widget ecosystem.
+
+Scope:
+- **Phase 1 — evaluation**: prototype chat transcript + input widget in OpenTUI, benchmark render latency vs Textual on long transcripts and rapid streaming.
+- **Phase 2 — core port**: reimplement chat app (`src/monet/cli/chat/`) against OpenTUI primitives. Preserve existing keybindings and slash-command surface. HITL interrupt rendering unchanged from user perspective.
+- **Phase 3 — widget upgrades**: adopt OpenTUI native widgets where Textual required custom implementations (markdown rendering, split panes, rich tables). Drop custom widget code as native equivalents land.
+
+Trigger: OpenTUI reaches stable release with Python bindings and documented widget API. Until then, Textual remains production TUI.
+
+Dependencies: OpenTUI Python bindings must support async event loops (asyncio integration). Chat graph protocol contract (`docs/guides/custom-graphs.md`) unchanged — migration is pure presentation layer.
+
+Out of scope: changes to chat graph, client protocol, or server-side rendering. No Go rewrite — OpenTUI's Rust core with Python bindings keeps single-language SDK.
+
 ### Lower priority / triggered
 
 - **Sandbox integration (Modal / E2B)** — `examples/agent-recruitment/src/recruitment/sandbox.py` is subprocess-based (not a security boundary). Ship `modal_sandbox.py` / `e2b_sandbox.py` implementing same signature. Trigger: first user running recruitment pipeline against untrusted candidates.
