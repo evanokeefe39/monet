@@ -57,12 +57,18 @@ async def specialist_node(state: ChatState, config: RunnableConfig) -> dict[str,
     thread_id = (
         configurable.get("thread_id") if isinstance(configurable, dict) else None
     )
+    # Source run_id from LangGraph config so progress events stored under
+    # the LangGraph run_id are retrievable via get_thread_progress on reopen.
+    lg_run_id = (
+        str(configurable.get("run_id") or "") if isinstance(configurable, dict) else ""
+    )
     try:
         result = await invoke_agent(
             agent_id,
             command=mode,
             task=task,
             context=_build_context(messages),
+            run_id=lg_run_id or None,
             thread_id=thread_id if isinstance(thread_id, str) else None,
         )
     except Exception as exc:

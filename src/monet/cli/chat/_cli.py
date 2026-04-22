@@ -260,11 +260,19 @@ async def _chat_main(
         except Exception as exc:
             click.secho(f"(history load failed: {exc})", dim=True, err=True)
 
+    progress = []
+    if thread_id:
+        try:
+            progress = await client.get_thread_progress(thread_id)
+        except Exception as exc:
+            click.secho(f"(progress load failed: {exc})", dim=True, err=True)
+
     app = ChatApp(
         client=client,
         thread_id=thread_id,
         slash_commands=slash_commands,
         history=history,
+        progress=progress,
     )
     await app.run_async()
     final_tid = app.thread_id

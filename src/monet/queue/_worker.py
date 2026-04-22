@@ -130,6 +130,7 @@ async def run_worker(
         task_id = record["task_id"]
         agent_id = record["agent_id"]
         command = record["command"]
+        run_id = record["context"].get("run_id", "")
 
         async with sem:
             progress_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
@@ -141,8 +142,14 @@ async def run_worker(
             )
 
             def _publisher(data: dict[str, Any]) -> None:
+                enriched = {
+                    **data,
+                    "run_id": run_id,
+                    "agent": agent_id,
+                    "command": command,
+                }
                 try:
-                    progress_q.put_nowait(data)
+                    progress_q.put_nowait(enriched)
                 except asyncio.QueueFull:
                     logger.debug("Progress queue full for task %s, dropping", task_id)
 

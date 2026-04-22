@@ -130,12 +130,73 @@ async def test_progress_evicted_with_task_prune() -> None:
     assert history == []
 
 
+async def test_secondary_key_pruned_with_task() -> None:
+    q = InMemoryTaskQueue(completion_ttl_seconds=0.0)
+    task = _make_task()
+    task_id = task["task_id"]
+    run_id = "lg-run-id-for-prune"
+
+    await q.enqueue(task)
+    await q.publish_progress(task_id, {"status": "work", "run_id": run_id})
+    await q.complete(task_id, AgentResult(success=True, output="ok"))
+
+    # Both indexes populated before prune.
+    assert len(await q.get_progress_history(run_id)) == 1
+
+    # Force prune.
+    await q.enqueue(_make_task())
+
+    assert await q.get_progress_history(task_id) == []
+    assert await q.get_progress_history(run_id) == []
+    assert run_id not in q._progress_history
+
+
+async def test_run_id_equals_task_id_no_duplicate() -> None:
+    q = InMemoryTaskQueue()
+    task_id = "same-id"
+
+    # When run_id == task_id the dual-index guard must produce only one entry.
+    await q.publish_progress(task_id, {"status": "ok", "run_id": task_id})
+
+    assert len(q._progress_history) == 1
+    assert task_id not in q._secondary_keys
+
+
 # --- expire_progress is no-op ---
 
 
 async def test_expire_progress_noop() -> None:
     q = InMemoryTaskQueue()
     await q.expire_progress("any-id", 3600)
+
+
+# --- Dual-index by run_id ---
+
+
+async def test_publish_with_run_id_dual_indexes() -> None:
+    q = InMemoryTaskQueue()
+    task_id = "task-dual"
+    run_id = "run-dual"
+
+    await q.publish_progress(task_id, {"status": "ok", "run_id": run_id})
+
+    task_history = await q.get_progress_history(task_id)
+    run_history = await q.get_progress_history(run_id)
+    assert len(task_history) == 1
+    assert len(run_history) == 1
+    assert run_history[0]["status"] == "ok"
+
+
+async def test_publish_without_run_id_single_index() -> None:
+    q = InMemoryTaskQueue()
+    task_id = "task-single"
+
+    await q.publish_progress(task_id, {"status": "ok"})
+
+    task_history = await q.get_progress_history(task_id)
+    assert len(task_history) == 1
+    # No run_id field — no second key written.
+    assert len(q._progress_history) == 1
 
 
 # --- Fan-out still works alongside persistence ---

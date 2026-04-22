@@ -291,6 +291,31 @@ async def get_run_progress(
 
 
 @router.get(
+    "/progress",
+    dependencies=[Depends(require_api_key)],
+)
+async def get_batch_progress(
+    queue: Queue,
+    run_ids: str = Query(..., description="Comma-separated run IDs"),
+    count: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Retrieve persisted progress events for multiple runs in one call.
+
+    Returns 501 when the queue backend does not support progress history.
+    Accepts at most 50 run IDs per request to prevent abuse.
+    """
+    if not isinstance(queue, ProgressStore):
+        raise HTTPException(501, "Backend does not support progress history")
+    ids = [r.strip() for r in run_ids.split(",") if r.strip()]
+    results: dict[str, list[dict[str, Any]]] = {}
+    for rid in ids[:50]:
+        events = await queue.get_progress_history(rid, count=count)
+        if events:
+            results[rid] = events
+    return {"progress": results}
+
+
+@router.get(
     "/deployments",
     dependencies=[Depends(require_api_key)],
 )

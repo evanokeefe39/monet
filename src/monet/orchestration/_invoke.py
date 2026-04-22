@@ -24,12 +24,13 @@ from monet.core.auth import task_hmac
 from monet.exceptions import PushDispatchTerminal
 from monet.queue import (
     TASK_RECORD_SCHEMA_VERSION,
-    ProgressStore,
     QueueMaintenance,
     TaskStatus,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from monet.config import PoolConfig
     from monet.queue import TaskQueue, TaskRecord
     from monet.server._capabilities import CapabilityIndex
@@ -248,8 +249,15 @@ async def invoke_agent(
                 # fall through to wait_completion which resolves it immediately.
                 span.set_attribute("agent.pool.type", "push")
                 span.set_attribute("agent.dispatch_failed", True)
+        _stream_writer: Callable[[dict[str, Any]], None] | None = None
+        try:
+            from langgraph.config import get_stream_writer
+
+            _stream_writer = get_stream_writer()
+        except (LookupError, RuntimeError):
+            pass
         progress_task = asyncio.create_task(
-            _forward_progress(_task_queue, task_id, resolved_run_id)
+            _forward_progress(_task_queue, task_id, writer=_stream_writer)
         )
         try:
             timeout = OrchestrationConfig.load().agent_timeout
@@ -467,23 +475,18 @@ async def _write_dispatch_failed(task_id: str, queue: TaskQueue, detail: str) ->
         await queue.pop_push_dispatch(task_id)
 
 
-async def _forward_progress(queue: TaskQueue, task_id: str, run_id: str) -> None:
-    """Forward queue progress events to the current LangGraph stream.
-
-    Injects ``run_id`` so clients can attribute progress lines to the
-    correct run even when multiple turns are in-flight on the same thread.
-    Also persists each event to the progress stream keyed by ``run_id``
-    so ``get_progress_history(run_id)`` can retrieve them later.
-    """
-    from monet import emit_progress
-
-    persist = isinstance(queue, ProgressStore)
+async def _forward_progress(
+    queue: TaskQueue,
+    task_id: str,
+    *,
+    writer: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    """Forward queue progress events to the LangGraph stream writer."""
+    if writer is None:
+        return
     try:
         async for event in queue.subscribe_progress(task_id):
-            enriched = {**event, "run_id": run_id}
-            emit_progress(enriched)
-            if persist:
-                await queue.publish_progress(run_id, enriched)
+            writer(event)
     except NotImplementedError:
         pass
     except asyncio.CancelledError:

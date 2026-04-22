@@ -521,6 +521,39 @@ class MonetClient:
                 results.append(progress)
         return results
 
+    async def get_batch_progress(self, run_ids: list[str]) -> list[AgentProgress]:
+        """Retrieve progress for multiple runs in one server round-trip."""
+        if not run_ids:
+            return []
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + "/api/v1/progress"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url, headers=headers, params={"run_ids": ",".join(run_ids)}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        progress_map = data.get("progress", {}) if isinstance(data, dict) else {}
+        results: list[AgentProgress] = []
+        for rid, events in progress_map.items():
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                p = _build_agent_progress(str(rid), ev)
+                if p is not None:
+                    results.append(p)
+        return results
+
+    async def get_thread_progress(self, thread_id: str) -> list[AgentProgress]:
+        """Fetch progress history for all completed runs on a thread."""
+        runs = await self.chat.list_thread_runs(thread_id)
+        run_ids = [r.run_id for r in runs if r.status != "interrupted"]
+        return await self.get_batch_progress(run_ids)
+
     async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
         """List recent runs with status and completed stages.
 

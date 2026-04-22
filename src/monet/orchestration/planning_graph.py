@@ -136,6 +136,10 @@ async def _invoke_planner(
     configurable = (config or {}).get("configurable") or {}
     tid = configurable.get("thread_id")
     thread_id: str | None = tid if isinstance(tid, str) else None
+    # Source run_id from LangGraph config so progress events and lifecycle
+    # events carry the same ID that list_thread_runs returns, enabling
+    # get_thread_progress to match stored events after thread reopen.
+    lg_run_id = str(configurable.get("run_id") or state.get("run_id", ""))
     async with attached_trace(extract_carrier_from_config(config)):
         result = await invoke_agent(
             "planner",
@@ -143,7 +147,7 @@ async def _invoke_planner(
             task=state["task"],
             context=context_entries,
             trace_id=state.get("trace_id", ""),
-            run_id=state.get("run_id", ""),
+            run_id=lg_run_id,
             thread_id=thread_id,
         )
 
