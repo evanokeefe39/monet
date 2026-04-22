@@ -227,6 +227,8 @@ class MonetClient:
         self.chat = ChatClient(
             self._client,
             chat_graph_id=self._graph_roles.get("chat", "chat"),
+            base_url=resolved_url,
+            api_key=resolved_key,
         )
 
     # ── Run lifecycle ───────────────────────────────────────────

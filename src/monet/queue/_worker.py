@@ -147,6 +147,7 @@ async def run_worker(
                     "run_id": run_id,
                     "agent": agent_id,
                     "command": command,
+                    "task_id": task_id,
                 }
                 try:
                     progress_q.put_nowait(enriched)

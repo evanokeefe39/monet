@@ -225,7 +225,12 @@ async def invoke_agent(
         task_id,
         resolved_run_id,
     )
-    _lifecycle = {"agent": agent_id, "command": command, "run_id": resolved_run_id}
+    _lifecycle = {
+        "agent": agent_id,
+        "command": command,
+        "run_id": resolved_run_id,
+        "task_id": task_id,
+    }
     _emit_lifecycle({"status": AGENT_STARTED_STATUS, **_lifecycle})
     with tracer.start_as_current_span(
         f"agent.{agent_id}.{command}",
@@ -233,6 +238,7 @@ async def invoke_agent(
             "agent.id": agent_id,
             "agent.command": command,
             "monet.run_id": resolved_run_id,
+            "monet.task_id": task_id,
         },
     ) as span:
         # Register the task with the queue so wait_completion has state
