@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from textual.worker import Worker
 
     from monet.client import MonetClient
+    from monet.client._events import AgentProgress
 
 _log = logging.getLogger("monet.cli.chat")
 
@@ -131,6 +132,7 @@ class ChatApp(SlashSuggestMixin, IndicatorMixin, App[None]):  # type: ignore[mis
         thread_id: str,
         slash_commands: list[str] | None = None,
         history: list[dict[str, Any]] | None = None,
+        progress: list[AgentProgress] | None = None,
     ) -> None:
         super().__init__()
         self._client: MonetClient = client
@@ -140,6 +142,7 @@ class ChatApp(SlashSuggestMixin, IndicatorMixin, App[None]):  # type: ignore[mis
         self.slash_descriptions: dict[str, str] = dict(TUI_COMMANDS)
         self._suggester = RegistrySuggester(self.slash_commands)
         self._initial_history = list(history or [])
+        self._initial_progress: list[AgentProgress] = list(progress or [])
         self._interrupts = InterruptCoordinator()
         self._turn_worker: Worker[None] | None = None
         self._thread_progress: dict[str, list[str]] = {}
@@ -197,12 +200,9 @@ class ChatApp(SlashSuggestMixin, IndicatorMixin, App[None]):  # type: ignore[mis
         )
 
         transcript = self._transcript
-        for msg in self._initial_history:
-            role = str(msg.get("role") or "user")
-            content = str(msg.get("content") or "")
-            transcript.append(f"[{role}] {content}", markdown=(role == "assistant"))
+        self._render_initial_history(transcript)
 
-        if not self._initial_history:
+        if not self._initial_history and not self._initial_progress:
             self.call_after_refresh(self._show_welcome)
         else:
             if self._cached_prompt is not None:
@@ -529,11 +529,72 @@ class ChatApp(SlashSuggestMixin, IndicatorMixin, App[None]):  # type: ignore[mis
 
         await _cmd_switch(cmd_ctx, target)
         self.thread_id = target
-        for line in self._thread_progress.get(target, []):
-            self._transcript.append(line)
+        cached = self._thread_progress.get(target, [])
+        if cached:
+            for line in cached:
+                self._transcript.append(line)
+        else:
+            try:
+                from monet.cli.chat._view import (
+                    format_agent_header,
+                    format_progress_line,
+                )
+
+                fetched = await self._client.get_thread_progress(target)
+                seen_agents: set[str] = set()
+                for p in fetched:
+                    agent_key = (
+                        f"{p.agent_id}:{p.command}" if p.command else p.agent_id
+                    )
+                    if agent_key not in seen_agents:
+                        seen_agents.add(agent_key)
+                        self._writer(format_agent_header(agent_key))
+                    pline = format_progress_line(p)
+                    if pline:
+                        self._writer(pline)
+            except Exception:
+                _log.debug("progress fetch failed for %s", target, exc_info=True)
         self.run_worker(self._recover_pending_interrupt(), exclusive=False)
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    def _render_initial_history(self, transcript: Transcript) -> None:
+        """Render saved messages and progress in chronological order.
+
+        Progress events happened during agent execution, before the
+        execution summary message. Inserting them before the first
+        execution-summary assistant message reproduces the live order.
+        """
+        if not self._initial_history and not self._initial_progress:
+            return
+
+        progress_rendered = False
+
+        def _flush_progress() -> None:
+            nonlocal progress_rendered
+            if progress_rendered or not self._initial_progress:
+                return
+            progress_rendered = True
+            from monet.cli.chat._view import format_agent_header, format_progress_line
+
+            seen_agents: set[str] = set()
+            for p in self._initial_progress:
+                agent_key = f"{p.agent_id}:{p.command}" if p.command else p.agent_id
+                if agent_key not in seen_agents:
+                    seen_agents.add(agent_key)
+                    transcript.append(format_agent_header(agent_key))
+                pline = format_progress_line(p)
+                if pline:
+                    transcript.append(pline)
+
+        for msg in self._initial_history:
+            role = str(msg.get("role") or "user")
+            content = str(msg.get("content") or "")
+            if role == "assistant" and "**Execution finished" in content:
+                _flush_progress()
+            transcript.append(f"[{role}] {content}", markdown=(role == "assistant"))
+
+        _flush_progress()
 
     def _copy_artifact_url(self, artifact_id: str) -> None:
         base = getattr(self._client, "_url", "") or ""

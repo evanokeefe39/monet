@@ -322,9 +322,13 @@ class RedisStreamsTaskQueue:
         # Publish outside the transaction; a dropped publish is
         # recovered by wait_completion's re-GET on the next wake.
         await client.publish(_ready_channel(task_id), "")
-        # Set TTL on progress stream now that task is complete.
+        # Set TTL on progress streams now that task is complete.
         with contextlib.suppress(Exception):
             await client.expire(_progress_stream(task_id), self._progress_ttl)  # type: ignore[misc]
+        run_id = getattr(result, "run_id", "") or ""
+        if run_id and run_id != task_id:
+            with contextlib.suppress(Exception):
+                await client.expire(_progress_stream(run_id), self._progress_ttl)  # type: ignore[misc]
 
     async def fail(self, task_id: str, error: str) -> None:
         """Record a failure AgentResult (re-uses ``complete``)."""
@@ -380,13 +384,30 @@ class RedisStreamsTaskQueue:
                 ),
                 timeout=2.0,
             )
+            run_id = event.get("run_id", "")
+            if run_id and run_id != task_id:
+                await asyncio.wait_for(
+                    client.xadd(
+                        _progress_stream(run_id),
+                        {
+                            "v": "1",
+                            "agent_id": event.get("agent", ""),
+                            "status": event.get("status", ""),
+                            "command": event.get("command", ""),
+                            "payload": payload,
+                        },
+                        maxlen=self._progress_stream_maxlen,
+                        approximate=True,
+                    ),
+                    timeout=2.0,
+                )
         except Exception:
             _log.debug("Progress XADD failed for task %s", task_id, exc_info=True)
 
     async def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
         """Yield live progress events via XREAD BLOCK until cancelled."""
         client = await self._ensure_client()
-        last_id = "$"
+        last_id = "0-0"
         try:
             while True:
                 result = await client.xread(

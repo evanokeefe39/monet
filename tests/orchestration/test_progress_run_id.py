@@ -22,7 +22,7 @@ def queue() -> InMemoryTaskQueue:
 
 
 async def test_forward_progress_injects_run_id(queue: InMemoryTaskQueue) -> None:
-    """_forward_progress must stamp run_id onto every emitted event."""
+    """_forward_progress delivers pre-enriched events (with run_id) to the writer."""
     task_id = "t-1"
     run_id = "run-abc"
 
@@ -54,22 +54,22 @@ async def test_forward_progress_injects_run_id(queue: InMemoryTaskQueue) -> None
     )
 
     captured: list[dict[str, Any]] = []
-    with patch("monet.emit_progress", side_effect=captured.append):
-        # Start _forward_progress BEFORE publishing so it subscribes first.
-        fwd = asyncio.create_task(_forward_progress(queue, task_id, run_id))
-        await asyncio.sleep(0)  # yield so fwd starts
+    # Start _forward_progress BEFORE publishing so it subscribes first.
+    fwd = asyncio.create_task(_forward_progress(queue, task_id, writer=captured.append))
+    await asyncio.sleep(0)  # yield so fwd starts
 
-        await queue.publish_progress(
-            task_id, {"status": "running", "agent": "test-agent"}
-        )
-        await queue.complete(
-            task_id,
-            AgentResult(
-                success=True, output="", signals=(), trace_id="", run_id=run_id
-            ),
-        )
-        # _forward_progress should exit naturally now that task is terminal.
-        await asyncio.wait_for(fwd, timeout=2.0)
+    # Worker enriches events before publish; simulate that here.
+    await queue.publish_progress(
+        task_id, {"status": "running", "agent": "test-agent", "run_id": run_id}
+    )
+    await queue.complete(
+        task_id,
+        AgentResult(
+            success=True, output="", signals=(), trace_id="", run_id=run_id
+        ),
+    )
+    # _forward_progress should exit naturally now that task is terminal.
+    await asyncio.wait_for(fwd, timeout=2.0)
 
     assert len(captured) >= 1
     for ev in captured:
@@ -79,7 +79,7 @@ async def test_forward_progress_injects_run_id(queue: InMemoryTaskQueue) -> None
 async def test_forward_progress_preserves_existing_fields(
     queue: InMemoryTaskQueue,
 ) -> None:
-    """_forward_progress preserves all original event fields, not just run_id."""
+    """_forward_progress passes all event fields through to the writer unchanged."""
     task_id = "t-2"
     run_id = "run-xyz"
 
@@ -111,21 +111,21 @@ async def test_forward_progress_preserves_existing_fields(
         }
     )
 
-    with patch("monet.emit_progress", side_effect=captured.append):
-        fwd = asyncio.create_task(_forward_progress(queue, task_id, run_id))
-        await asyncio.sleep(0)
+    fwd = asyncio.create_task(_forward_progress(queue, task_id, writer=captured.append))
+    await asyncio.sleep(0)
 
-        await queue.publish_progress(
-            task_id,
-            {"status": "writing", "agent": "writer", "extra": 42},
-        )
-        await queue.complete(
-            task_id,
-            AgentResult(
-                success=True, output="", signals=(), trace_id="", run_id=run_id
-            ),
-        )
-        await asyncio.wait_for(fwd, timeout=2.0)
+    # Worker enriches events before publish; simulate that here.
+    await queue.publish_progress(
+        task_id,
+        {"status": "writing", "agent": "writer", "extra": 42, "run_id": run_id},
+    )
+    await queue.complete(
+        task_id,
+        AgentResult(
+            success=True, output="", signals=(), trace_id="", run_id=run_id
+        ),
+    )
+    await asyncio.wait_for(fwd, timeout=2.0)
 
     assert len(captured) >= 1
     ev = captured[0]
@@ -133,6 +133,18 @@ async def test_forward_progress_preserves_existing_fields(
     assert ev["agent"] == "writer"
     assert ev["extra"] == 42
     assert ev["run_id"] == run_id
+
+
+async def test_forward_progress_noop_without_writer(
+    queue: InMemoryTaskQueue,
+) -> None:
+    """_forward_progress with writer=None exits immediately without touching the queue."""
+    task_id = "t-3"
+    # No enqueue — if it tried to subscribe it would block or error.
+    fwd = asyncio.create_task(_forward_progress(queue, task_id, writer=None))
+    await asyncio.wait_for(fwd, timeout=1.0)
+    # Verify nothing was subscribed.
+    assert task_id not in queue._progress_subscribers
 
 
 async def test_invoke_agent_emits_lifecycle_events() -> None:
@@ -166,6 +178,57 @@ async def test_invoke_agent_emits_lifecycle_events() -> None:
     assert captured[0]["command"] == "fast"
     assert captured[1]["status"] == AGENT_FAILED_STATUS
     assert captured[1]["agent"] == "test-lifecycle"
+
+
+async def test_progress_history_retrievable_by_langgraph_run_id(
+    queue: InMemoryTaskQueue,
+) -> None:
+    """Progress events published with a LangGraph run_id are retrievable by that id.
+
+    This is the core regression test: get_thread_progress queries by
+    LangGraph run_id (from list_thread_runs). Events must be stored under
+    that same id via publish_progress dual-index write.
+    """
+    task_id = "task-lg-rt"
+    lg_run_id = "lg-run-uuid4-style"
+
+    from monet.types import AgentResult
+
+    await queue.enqueue(
+        {
+            "schema_version": 1,
+            "task_id": task_id,
+            "agent_id": "test-agent",
+            "command": "fast",
+            "pool": "local",
+            "context": {
+                "task": "",
+                "context": [],
+                "command": "fast",
+                "trace_id": "",
+                "run_id": lg_run_id,
+                "agent_id": "test-agent",
+                "skills": [],
+            },
+            "status": "pending",
+            "result": None,
+            "created_at": "2024-01-01T00:00:00Z",
+            "claimed_at": None,
+            "completed_at": None,
+        }
+    )
+
+    await queue.publish_progress(
+        task_id, {"status": "running", "agent": "test-agent", "run_id": lg_run_id}
+    )
+    await queue.complete(
+        task_id,
+        AgentResult(success=True, output="", signals=(), trace_id="", run_id=lg_run_id),
+    )
+
+    history = await queue.get_progress_history(lg_run_id)
+    assert len(history) >= 1
+    assert all(ev.get("run_id") == lg_run_id for ev in history)
 
 
 async def test_stream_chat_uses_run_id_from_event() -> None:

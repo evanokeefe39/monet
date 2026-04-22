@@ -78,17 +78,24 @@ async def initialise_execution(
     if not pointer:
         return {"abort_reason": "No work_brief_pointer in execution state."}
 
-    # LangGraph / Aegra pass thread_id in the RunnableConfig. Propagate it
-    # into state so agent_node can hand it to invoke_agent; artifacts
-    # written by the agent then carry thread_id provenance automatically.
+    # LangGraph / Aegra pass thread_id and run_id in the RunnableConfig.
+    # Propagate both into state so agent_node can pass them to invoke_agent.
+    # run_id is sourced from LangGraph (not the client display ID) so
+    # progress events match what list_thread_runs returns on thread reopen.
     thread_id: str = ""
+    lg_run_id: str = ""
     try:
         configurable = (config or {}).get("configurable") or {}
         tid = configurable.get("thread_id")
         if isinstance(tid, str):
             thread_id = tid
+        rid = configurable.get("run_id")
+        if isinstance(rid, str):
+            lg_run_id = rid
     except Exception:
         pass
+    if not lg_run_id:
+        lg_run_id = state.get("run_id", "")
 
     # Attach upstream trace context and open the execution-graph root span.
     upstream_carrier = extract_carrier_from_config(config)
@@ -97,7 +104,7 @@ async def initialise_execution(
         with tracer.start_as_current_span(
             EXECUTION_ROOT_SPAN_NAME,
             attributes={
-                "monet.run_id": state.get("run_id", ""),
+                "monet.run_id": lg_run_id,
                 "monet.trace_id": state.get("trace_id", ""),
                 "monet.node_count": len(skeleton.nodes),
                 "monet.goal": skeleton.goal[:200],
@@ -113,6 +120,7 @@ async def initialise_execution(
         "abort_reason": None,
         "trace_carrier": carrier,
         "thread_id": thread_id,
+        "run_id": lg_run_id,
     }
 
 

@@ -74,6 +74,9 @@ class InMemoryTaskQueue:
         self._completion_times: dict[str, float] = {}
         # Task IDs pruned after TTL expiry — distinguishes "expired" from "unknown".
         self._pruned_ids: set[str] = set()
+        # Maps task_id → set of secondary keys (run_ids) written to _progress_history
+        # via dual-index. Pruned together with the primary task record.
+        self._secondary_keys: dict[str, set[str]] = {}
 
     @property
     def pending_count(self) -> int:
@@ -220,6 +223,8 @@ class InMemoryTaskQueue:
             self._tasks.pop(tid, None)
             self._completions.pop(tid, None)
             self._progress_history.pop(tid, None)
+            for sk in self._secondary_keys.pop(tid, set()):
+                self._progress_history.pop(sk, None)
             del self._completion_times[tid]
             self._pruned_ids.add(tid)
         if len(self._pruned_ids) > _MAX_PRUNED_IDS:
@@ -231,10 +236,18 @@ class InMemoryTaskQueue:
 
     async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
         """Persist and fan out a progress event. Drops on full queue."""
+        entry = {"v": "1", "ts": time.monotonic_ns(), **event}
         history = self._progress_history[task_id]
-        history.append({"v": "1", "ts": time.monotonic_ns(), **event})
+        history.append(entry)
         if len(history) > self._progress_maxlen:
             self._progress_history[task_id] = history[-self._progress_maxlen :]
+        run_id = event.get("run_id", "")
+        if run_id and run_id != task_id:
+            run_history = self._progress_history[run_id]
+            run_history.append(entry)
+            if len(run_history) > self._progress_maxlen:
+                self._progress_history[run_id] = run_history[-self._progress_maxlen :]
+            self._secondary_keys.setdefault(task_id, set()).add(run_id)
         for sub_q in self._progress_subscribers.get(task_id, set()):
             with contextlib.suppress(asyncio.QueueFull):
                 sub_q.put_nowait(event)
