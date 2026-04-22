@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from monet import get_artifacts
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
+from monet.config import ClientConfig
 from monet.queue import ProgressStore, TaskQueue
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._capabilities import Capability, CapabilityIndex
@@ -94,6 +95,21 @@ class HealthResponse(BaseModel):
     version: str = ""
     queue_backend: str = ""
     uptime_seconds: float = 0.0
+
+
+class TranscriptEntry(BaseModel):
+    """A single item in the unified chat timeline."""
+
+    type: Literal["message", "telemetry", "interrupt"]
+    timestamp: str
+    data: dict[str, Any]
+
+
+class TranscriptResponse(BaseModel):
+    """Response for ``GET /api/v1/threads/{thread_id}/transcript``."""
+
+    thread_id: str
+    entries: list[TranscriptEntry]
 
 
 # -- Router ----------------------------------------------------------------
@@ -313,6 +329,140 @@ async def get_batch_progress(
         if events:
             results[rid] = events
     return {"progress": results}
+
+
+@router.get(
+    "/threads/{thread_id}/transcript",
+    dependencies=[Depends(require_api_key)],
+    response_model=TranscriptResponse,
+)
+async def get_thread_transcript(
+    thread_id: str,
+    queue: Queue,
+) -> TranscriptResponse:
+    """Synthesize a unified, chronological timeline for a chat thread.
+
+    Interleaves historical messages from LangGraph state with high-resolution
+    progress telemetry from the queue. Uses checkpoint history to implicitly
+    correlate messages with the runs that produced them.
+    """
+    from fastapi import HTTPException
+    from langgraph_sdk import get_client as get_lg_client
+
+    # 1. Initialize LangGraph client pointing to the local server
+    cfg = ClientConfig.load()
+    client = get_lg_client(url=cfg.server_url)
+
+    # 2. Fetch history and runs in parallel
+    try:
+        # We need the full history of checkpoints to determine message provenance
+        history = await client.threads.get_history(thread_id, limit=100)
+        runs = await client.runs.list(thread_id, limit=50)
+        # Sort runs chronologically as a baseline
+        runs.sort(key=lambda r: str(r.get("created_at", "")))
+    except Exception as exc:
+        _log.error("Failed to fetch thread data for %s: %s", thread_id, exc)
+        raise HTTPException(500, f"Failed to fetch thread data: {exc}") from exc
+
+    # 3. Pull progress telemetry and build logical indices (task_id and run_id mapping)
+    # logical_calls: task_id -> list[event]
+    # run_to_tasks: run_id -> set[task_id]
+    logical_calls: dict[str, list[dict[str, Any]]] = {}
+    run_to_tasks: dict[str, set[str]] = {}
+
+    if isinstance(queue, ProgressStore):
+        for run in runs:
+            rid = str(run.get("run_id", ""))
+            if rid:
+                events = await queue.get_progress_history(rid)
+                for e in events:
+                    tid = e.get("task_id")
+                    if tid:
+                        if tid not in logical_calls:
+                            logical_calls[tid] = []
+                        logical_calls[tid].append(e)
+
+                        if rid not in run_to_tasks:
+                            run_to_tasks[rid] = set()
+                        run_to_tasks[rid].add(tid)
+
+    # 4. Synthesize the timeline
+    entries: list[TranscriptEntry] = []
+    # Walk checkpoints from oldest to newest
+    chronological_history = list(reversed(history))
+    history_cids = {str(snapshot["checkpoint_id"]) for snapshot in history}
+    checkpoint_to_runs: dict[str, list[dict[str, Any]]] = {}
+    for r in runs:
+        pcid = str(r.get("parent_checkpoint_id") or "")
+        if pcid and pcid in history_cids:
+            if pcid not in checkpoint_to_runs:
+                checkpoint_to_runs[pcid] = []
+            checkpoint_to_runs[pcid].append(r)
+
+    # Helper to emit all telemetry for a specific task exactly once
+    seen_tasks = set()
+
+    def emit_task_telemetry(task_id: str, run_ts: str):
+        if task_id in seen_tasks:
+            return
+        seen_tasks.add(task_id)
+        events = logical_calls.get(task_id, [])
+        for e in events:
+            entries.append(TranscriptEntry(
+                type="telemetry",
+                timestamp=run_ts,
+                data=e
+            ))
+
+    # A. Initial runs (from genesis or pruned history)
+    initial_runs = [
+        r for r in runs
+        if str(r.get("parent_checkpoint_id") or "") not in history_cids
+    ]
+    for run in initial_runs:
+        ts = str(run.get("created_at", ""))
+        rid = str(run["run_id"])
+        # For each run, look for task_ids in the telemetry index
+        for tid in sorted(run_to_tasks.get(rid, set())):
+            emit_task_telemetry(tid, ts)
+
+    last_msgs: list[dict[str, Any]] = []
+
+    # B. Walk the backbone of checkpoints
+    for snapshot in chronological_history:
+        cid = str(snapshot["checkpoint_id"])
+        ts = str(snapshot.get("created_at", ""))
+        vals = snapshot.get("values") or {}
+        msgs = vals.get("messages") or []
+
+        # 1. New messages
+        new_msgs = msgs[len(last_msgs):]
+        for m in new_msgs:
+            # Ensure m is a dict even if LangGraph SDK gives us objects
+            if isinstance(m, dict):
+                m_dict = m
+            elif hasattr(m, "dict") and callable(m.dict):
+                m_dict = m.dict()
+            else:
+                m_dict = dict(m)
+            entries.append(TranscriptEntry(
+                type="message",
+                timestamp=ts,
+                data=m_dict
+            ))
+        last_msgs = msgs
+
+        # 2. Sequential telemetry for runs triggered from this state
+        triggering_runs = checkpoint_to_runs.get(cid, [])
+        for run in triggering_runs:
+            run_ts = str(run.get("created_at", ""))
+            rid = str(run["run_id"])
+            # Any tasks that were active in this run?
+            tasks_for_run = sorted(run_to_tasks.get(rid, set()))
+            for tid in tasks_for_run:
+                emit_task_telemetry(tid, run_ts)
+
+    return TranscriptResponse(thread_id=thread_id, entries=entries)
 
 
 @router.get(

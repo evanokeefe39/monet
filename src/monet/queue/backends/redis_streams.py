@@ -394,6 +394,7 @@ class RedisStreamsTaskQueue:
                             "agent_id": event.get("agent", ""),
                             "status": event.get("status", ""),
                             "command": event.get("command", ""),
+                            "task_id": task_id,
                             "payload": payload,
                         },
                         maxlen=self._progress_stream_maxlen,

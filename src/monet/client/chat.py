@@ -81,9 +81,13 @@ class ChatClient:
         lg_client: LangGraphClient,
         *,
         chat_graph_id: str,
+        base_url: str = "",
+        api_key: str | None = None,
     ) -> None:
         self._client = lg_client
         self._chat_graph_id = chat_graph_id
+        self._url = base_url
+        self._api_key = api_key
 
     async def create_chat(self, *, name: str | None = None) -> str:
         """Create a new chat thread and return its thread_id."""
@@ -127,9 +131,22 @@ class ChatClient:
         self, thread_id: str, message: str
     ) -> AsyncIterator[str | AgentProgress]:
         """Send a user message and yield response tokens."""
-        async for chunk in self._stream_chat_with_input(
-            thread_id, input=chat_input(message)
-        ):
+        # Eager commitment: attempt to update state with the user message first.
+        # This creates a deterministic checkpoint that serves as the parent of the run.
+        try:
+            await self._client.threads.update_state(thread_id, chat_input(message))
+            stream_input = None
+        except Exception as exc:
+            # If the thread is brand new, it has no associated graph schema yet,
+            # so update_state fails. In this case, we fall back to the atomic
+            # 'input' pattern for the first turn to 'seed' the association.
+            if "no associated graph" in str(exc).lower():
+                _log.debug("Unbound thread detected, falling back to atomic input")
+                stream_input = chat_input(message)
+            else:
+                raise
+
+        async for chunk in self._stream_chat_with_input(thread_id, input=stream_input):
             yield chunk
 
     async def _stream_chat_with_input(
@@ -278,3 +295,17 @@ class ChatClient:
         if not threads:
             return None
         return str(threads[0]["thread_id"])
+
+    async def get_thread_transcript(self, thread_id: str) -> list[dict[str, Any]]:
+        """Fetch the unified, chronological transcript for a chat thread."""
+        import httpx
+
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        url = self._url.rstrip("/") + f"/api/v1/threads/{thread_id}/transcript"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        return list(data.get("entries", []))

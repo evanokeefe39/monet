@@ -253,26 +253,18 @@ async def _chat_main(
     except Exception as exc:
         click.secho(f"(agent discovery failed: {exc})", dim=True, err=True)
 
-    history: list[dict[str, object]] = []
+    transcript: list[dict[str, Any]] = []
     if thread_id:
         try:
-            history = list(await client.chat.get_chat_history(thread_id))
+            transcript = await client.chat.get_thread_transcript(thread_id)
         except Exception as exc:
-            click.secho(f"(history load failed: {exc})", dim=True, err=True)
-
-    progress = []
-    if thread_id:
-        try:
-            progress = await client.get_thread_progress(thread_id)
-        except Exception as exc:
-            click.secho(f"(progress load failed: {exc})", dim=True, err=True)
+            click.secho(f"(transcript load failed: {exc})", dim=True, err=True)
 
     app = ChatApp(
         client=client,
         thread_id=thread_id,
         slash_commands=slash_commands,
-        history=history,
-        progress=progress,
+        transcript=transcript,
     )
     await app.run_async()
     final_tid = app.thread_id
