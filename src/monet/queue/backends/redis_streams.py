@@ -89,6 +89,14 @@ def _index_key(task_id: str) -> str:
     return f"taskidx:{task_id}"
 
 
+def _lease_key(task_id: str) -> str:
+    return f"task:{task_id}:lease"
+
+
+def _cancel_key(task_id: str) -> str:
+    return f"task:{task_id}:cancelled"
+
+
 class RedisStreamsTaskQueue:
     """Task queue backed by Redis Streams + Pub/Sub.
 
@@ -493,6 +501,29 @@ class RedisStreamsTaskQueue:
     async def reclaim_expired(self) -> list[str]:
         """Protocol-compliant reclaim. Delegates to reclaim_expired_internal."""
         return await self.reclaim_expired_internal()
+
+    async def renew_lease(self, task_id: str) -> None:
+        """HSET the lease heartbeat timestamp. No-op on unknown task_ids."""
+        import time
+
+        client = await self._ensure_client()
+        try:
+            await client.hset(  # type: ignore[misc]
+                _lease_key(task_id),
+                "heartbeat",
+                str(int(time.time())),
+            )
+            await client.expire(_lease_key(task_id), self._lease_ttl * 2)  # type: ignore[misc]
+        except Exception:
+            _log.debug("renew_lease failed for task %s", task_id, exc_info=True)
+
+    async def cancel(self, task_id: str) -> None:
+        """SETNX the cancelled flag. Expires with the lease TTL."""
+        client = await self._ensure_client()
+        try:
+            await client.set(_cancel_key(task_id), "1", ex=self._lease_ttl * 2)  # type: ignore[misc]
+        except Exception:
+            _log.debug("cancel failed for task %s", task_id, exc_info=True)
 
     # --- Sweeper (crash recovery via XPENDING / XCLAIM) ------------------
 

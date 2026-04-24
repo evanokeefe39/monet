@@ -29,6 +29,7 @@ Each schema exposes:
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path  # noqa: TC003 — pydantic needs this at runtime
 from typing import Any, Literal
 
@@ -54,6 +55,7 @@ from ._env import (
     MONET_CHAT_TRIAGE_MODEL,
     MONET_DATA_PLANE_URL,
     MONET_DISTRIBUTED,
+    MONET_PROGRESS_BACKEND,
     MONET_QUEUE_BACKEND,
     MONET_QUEUE_COMPLETION_TTL,
     MONET_QUEUE_LEASE_TTL,
@@ -90,6 +92,9 @@ __all__ = [
     "ClientConfig",
     "ObservabilityConfig",
     "OrchestrationConfig",
+    "PlanesConfig",
+    "ProgressBackend",
+    "ProgressConfig",
     "QueueBackend",
     "QueueConfig",
     "ServerConfig",
@@ -641,6 +646,80 @@ class WorkerConfig(BaseModel):
             "shutdown_timeout": self.shutdown_timeout,
             "heartbeat_interval": self.heartbeat_interval,
             "required_llm_keys": list(self.required_llm_keys),
+        }
+
+
+# --- Planes ---------------------------------------------------------------
+
+_PROGRESS_BACKENDS = ("postgres", "sqlite")
+
+
+class ProgressBackend(StrEnum):
+    """Supported progress event store backends."""
+
+    POSTGRES = "postgres"
+    SQLITE = "sqlite"
+
+
+class ProgressConfig(BaseModel):
+    """Progress event store backend + credentials.
+
+    ``dsn`` is required for the postgres backend and ignored for sqlite.
+    For sqlite, the path comes from ``MONET_PROGRESS_DB``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: ProgressBackend
+    dsn: str | None = None
+
+    @classmethod
+    def load(cls) -> ProgressConfig | None:
+        """Return config if ``MONET_PROGRESS_BACKEND`` is set, else ``None``."""
+        raw = read_enum(MONET_PROGRESS_BACKEND, _PROGRESS_BACKENDS)
+        if raw is None:
+            return None
+        planes = read_toml_section("planes")
+        progress_section = planes.get("progress", {})
+        backend = ProgressBackend(raw)
+        dsn = read_str(REDIS_URI) if backend == ProgressBackend.POSTGRES else None
+        if backend == ProgressBackend.POSTGRES and dsn is None:
+            dsn = progress_section.get("dsn")
+        return cls(backend=backend, dsn=dsn)
+
+    def validate_for_boot(self) -> None:
+        if self.backend == ProgressBackend.POSTGRES and not self.dsn:
+            raise ConfigError(
+                "planes.progress.dsn",
+                None,
+                "a Postgres DSN (required when progress backend is postgres)",
+            )
+
+
+class PlanesConfig(BaseModel):
+    """Split-plane deployment configuration.
+
+    Loaded from the optional ``[planes]`` section in ``monet.toml``.
+    All fields have defaults so the section can be absent entirely for
+    S1/S2/S3 unified deployments.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    data_url: str | None = None
+    progress: ProgressConfig | None = None
+
+    @classmethod
+    def load(cls) -> PlanesConfig:
+        planes = read_toml_section("planes")
+        data_url = read_str(MONET_DATA_PLANE_URL) or (planes.get("data_url") or None)
+        progress = ProgressConfig.load()
+        return cls(data_url=data_url, progress=progress)
+
+    def redacted_summary(self) -> dict[str, Any]:
+        return {
+            "data_url": self.data_url,
+            "progress_backend": (self.progress.backend if self.progress else _UNSET),
         }
 
 

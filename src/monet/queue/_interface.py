@@ -175,6 +175,24 @@ class QueueMaintenance(Protocol):
         """Reclaim tasks whose lease has expired. Returns reclaimed task_ids."""
         ...
 
+    async def renew_lease(self, task_id: str) -> None:
+        """Renew the lease for a claimed task.
+
+        Called by the worker heartbeat loop. Implementations record the
+        current timestamp so the reclaim sweeper does not evict active
+        tasks. No-op on unknown task_ids (task may have already completed).
+        """
+        ...
+
+    async def cancel(self, task_id: str) -> None:
+        """Mark a task as cancelled.
+
+        Workers check this flag before each tool boundary. The flag
+        persists until the task reaches a terminal state so late-arriving
+        cancel signals are handled correctly.
+        """
+        ...
+
 
 @runtime_checkable
 class ProgressStore(Protocol):

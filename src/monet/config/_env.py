@@ -132,6 +132,7 @@ MONET_CHAT_TRIAGE_MODEL: Final[str] = "MONET_CHAT_TRIAGE_MODEL"
 MONET_PROGRESS_DB: Final[str] = "MONET_PROGRESS_DB"
 MONET_PROGRESS_MAX_EVENTS: Final[str] = "MONET_PROGRESS_MAX_EVENTS"
 MONET_PROGRESS_TTL_DAYS: Final[str] = "MONET_PROGRESS_TTL_DAYS"
+MONET_PROGRESS_BACKEND: Final[str] = "MONET_PROGRESS_BACKEND"
 
 #: Every fixed ``MONET_*`` name registered above. The test isolation
 #: fixture delenv's each of these between tests; the env-vars docs
@@ -164,6 +165,7 @@ MONET_ENV_VARS: Final[tuple[str, ...]] = (
     MONET_PROGRESS_DB,
     MONET_PROGRESS_MAX_EVENTS,
     MONET_PROGRESS_TTL_DAYS,
+    MONET_PROGRESS_BACKEND,
 )
 
 
