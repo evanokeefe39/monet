@@ -155,6 +155,22 @@ async def run_worker(
             drain_task = asyncio.create_task(
                 _drain_progress(progress_q, shutdown, task_id)
             )
+            # Heartbeat loop: renew lease periodically on backends that track it.
+            from monet.queue._interface import QueueMaintenance
+
+            heartbeat_task: asyncio.Task[None] | None = None
+            if isinstance(queue, QueueMaintenance):
+                heartbeat_interval = max(queue.lease_ttl_seconds / 3, 5.0)
+
+                async def _heartbeat(tid: str = task_id) -> None:
+                    while True:
+                        await asyncio.sleep(heartbeat_interval)
+                        try:
+                            await queue.renew_lease(tid)
+                        except Exception:
+                            logger.debug("renew_lease failed for task %s", tid)
+
+                heartbeat_task = asyncio.create_task(_heartbeat())
 
             def _publisher(data: dict[str, Any]) -> None:
                 # Ensure thread_id and run_id are serializable strings
@@ -257,6 +273,10 @@ async def run_worker(
                 _current_task_id.reset(task_id_token)
                 if not drain_task.done():
                     await _flush_drain()
+                if heartbeat_task is not None and not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat_task
 
     if consumer_id is None:
         consumer_id = f"worker-{uuid.uuid4().hex[:8]}"

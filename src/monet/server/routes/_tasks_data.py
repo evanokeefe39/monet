@@ -15,7 +15,7 @@ from monet._ports import MAX_INLINE_PAYLOAD_BYTES
 from monet.queue import ProgressStore
 from monet.queue._progress import ProgressReader, ProgressWriter
 from monet.server._auth import require_api_key, require_task_auth
-from monet.server.routes._common import Queue  # noqa: TC001
+from monet.server.routes._common import Queue, attach_trace_context
 
 _log = logging.getLogger("monet.server.routes.tasks_data")
 
@@ -42,7 +42,7 @@ OptReader = Annotated[ProgressReader | None, Depends(_get_progress_reader)]
 @router.post(
     "/tasks/{task_id}/progress",
     status_code=202,
-    dependencies=[Depends(require_task_auth)],
+    dependencies=[Depends(require_task_auth), Depends(attach_trace_context)],
 )
 async def post_progress(
     task_id: str,
@@ -123,7 +123,7 @@ class RecordEventRequest(BaseModel):
 @router.post(
     "/runs/{run_id}/events",
     status_code=202,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key), Depends(attach_trace_context)],
 )
 async def record_run_event(
     run_id: str,

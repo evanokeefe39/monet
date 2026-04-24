@@ -20,7 +20,7 @@ class CloudRunDispatchBackend:
 
     async def submit(self, task: ClaimedTask, server_url: str, api_key: str) -> None:
         try:
-            from google.cloud.run_v2 import (  # type: ignore[import-not-found]
+            from google.cloud.run_v2 import (  # type: ignore[import-untyped,import-not-found]
                 JobsAsyncClient,
                 RunJobRequest,
             )

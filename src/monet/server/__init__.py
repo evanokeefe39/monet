@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 from monet.config._schema import ChatConfig
 
 __all__ = [
+    "_create_control_plane",
+    "_create_data_plane",
     "create_app",
     "create_control_app",
     "create_data_app",
@@ -210,6 +212,75 @@ def create_control_app(
     control_router.include_router(_invocations.router)
     app.include_router(control_router)
     return app
+
+
+def _create_control_plane() -> FastAPI:
+    """0-arg factory for ``monet server --plane control``.
+
+    Reads config from env/toml and returns a control-plane-only FastAPI app.
+    Suitable for use as a Uvicorn ``factory=True`` entry point.
+    """
+    from monet.config._schema import QueueConfig
+    from monet.orchestration import configure_capability_index
+    from monet.server._capabilities import CapabilityIndex
+
+    queue_cfg = QueueConfig.load()
+    queue_cfg.validate_for_boot()
+
+    _capability_index = CapabilityIndex()
+    configure_capability_index(_capability_index)
+
+    if queue_cfg.backend == "redis":
+        from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
+
+        return create_control_app(
+            RedisStreamsTaskQueue(
+                redis_uri=queue_cfg.redis_uri or "",
+                pool_size=queue_cfg.redis_pool_size,
+                lease_ttl_seconds=queue_cfg.lease_ttl_seconds,
+            ),
+            _capability_index,
+        )
+
+    from monet.queue.backends.memory import InMemoryTaskQueue
+
+    return create_control_app(
+        InMemoryTaskQueue(completion_ttl_seconds=queue_cfg.completion_ttl_seconds),
+        _capability_index,
+    )
+
+
+def _create_data_plane() -> FastAPI:
+    """0-arg factory for ``monet server --plane data``.
+
+    Reads config from env/toml and returns a data-plane-only FastAPI app.
+    Requires ``MONET_PROGRESS_BACKEND`` to be set.
+    """
+    from monet.config._schema import PlanesConfig
+
+    planes = PlanesConfig.load()
+    if planes.progress is None:
+        from monet.config._env import ConfigError
+
+        raise ConfigError(
+            "MONET_PROGRESS_BACKEND",
+            None,
+            "postgres or sqlite (required for data-plane deployment)",
+        )
+    planes.progress.validate_for_boot()
+
+    if planes.progress.backend.value == "postgres":
+        from monet.queue.backends.postgres_progress import PostgresProgressBackend
+
+        pg = PostgresProgressBackend(dsn=planes.progress.dsn or "")
+        return create_data_app(writer=pg, reader=pg)
+
+    from monet.config._env import MONET_PROGRESS_DB, read_str
+    from monet.queue.backends.sqlite_progress import SqliteProgressBackend
+
+    db_path = read_str(MONET_PROGRESS_DB) or ":memory:"
+    sl = SqliteProgressBackend(db_path=db_path)
+    return create_data_app(writer=sl, reader=sl)
 
 
 def create_data_app(

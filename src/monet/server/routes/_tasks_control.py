@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from monet.queue._progress import EventType, ProgressEvent, ProgressWriter
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._event_router import EventPolicy, classify_event
-from monet.server.routes._common import CapIndex, Queue  # noqa: TC001
+from monet.server.routes._common import CapIndex, Queue, attach_trace_context
 from monet.types import AgentResult, Signal, build_artifact_pointer
 
 _log = logging.getLogger("monet.server.routes.tasks_control")
@@ -101,7 +101,7 @@ async def claim_from_pool(
 
 @router.post(
     "/tasks/{task_id}/complete",
-    dependencies=[Depends(require_task_auth)],
+    dependencies=[Depends(require_task_auth), Depends(attach_trace_context)],
 )
 async def complete_task(
     task_id: str,
@@ -144,7 +144,7 @@ async def complete_task(
 
 @router.post(
     "/tasks/{task_id}/fail",
-    dependencies=[Depends(require_task_auth)],
+    dependencies=[Depends(require_task_auth), Depends(attach_trace_context)],
 )
 async def fail_task(
     task_id: str,
