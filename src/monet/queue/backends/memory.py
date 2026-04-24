@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -81,6 +82,11 @@ class InMemoryTaskQueue:
         # via dual-index. Pruned together with the primary task record.
         self._secondary_keys: dict[str, set[str]] = {}
         self._telemetry_store = telemetry_store
+        # Lease tracking: task_id → monotonic timestamp of last renew_lease call.
+        self._leases: dict[str, float] = {}
+        # Set of cancelled task_ids. Checked by callers at tool boundaries.
+        self._cancelled: set[str] = set()
+        self._lease_lock = threading.Lock()
 
     @property
     def pending_count(self) -> int:
@@ -145,6 +151,8 @@ class InMemoryTaskQueue:
 
         record["status"] = TaskStatus.CLAIMED
         record["claimed_at"] = datetime.now(UTC).isoformat()
+        with self._lease_lock:
+            self._leases[task_id] = time.monotonic()
         _log.info(
             "queue.claim pool=%s agent=%s command=%s task=%s",
             pool,
@@ -167,6 +175,9 @@ class InMemoryTaskQueue:
         record["result"] = result
         record["completed_at"] = datetime.now(UTC).isoformat()
         self._completion_times[task_id] = time.monotonic()
+        with self._lease_lock:
+            self._leases.pop(task_id, None)
+            self._cancelled.discard(task_id)
         self._completions[task_id].set()
         _log.info(
             "queue.complete task=%s agent=%s command=%s success=%s",
@@ -201,6 +212,9 @@ class InMemoryTaskQueue:
         )
         record["completed_at"] = datetime.now(UTC).isoformat()
         self._completion_times[task_id] = time.monotonic()
+        with self._lease_lock:
+            self._leases.pop(task_id, None)
+            self._cancelled.discard(task_id)
         self._completions[task_id].set()
         _log.warning(
             "queue.fail task=%s agent=%s command=%s error=%s",
@@ -209,6 +223,23 @@ class InMemoryTaskQueue:
             record["command"],
             error,
         )
+
+    async def renew_lease(self, task_id: str) -> None:
+        """Update last-heartbeat timestamp for an in-flight task."""
+        with self._lease_lock:
+            if task_id in self._leases:
+                self._leases[task_id] = time.monotonic()
+
+    async def cancel(self, task_id: str) -> None:
+        """Flag a task for cancellation. Worker checks this at tool boundaries."""
+        with self._lease_lock:
+            if task_id in self._tasks:
+                self._cancelled.add(task_id)
+
+    def is_cancelled(self, task_id: str) -> bool:
+        """Return True if the task has been cancelled."""
+        with self._lease_lock:
+            return task_id in self._cancelled
 
     def _prune_expired_completions(self) -> None:
         """Remove completed-task records that have exceeded the TTL.

@@ -55,6 +55,11 @@ class ArtifactService:
 
         Auto-pulls run context for agent_id/run_id/trace_id if available.
         Context is optional — write() can be called outside the decorator.
+
+        When ``key`` kwarg is provided and run_id is available from context,
+        the artifact is stored at ``{run_id}--{key}`` — a stable, collision-free
+        id that lets callers reference the artifact by logical name rather
+        than opaque UUID. Without run_id context, a UUID is used as usual.
         """
         await self._ensure_initialised()
         # Get run context if available — not required
@@ -73,7 +78,12 @@ class ArtifactService:
         except (LookupError, RuntimeError):
             pass
 
-        artifact_id = str(uuid.uuid4())
+        key: str | None = str(kwargs["key"]) if "key" in kwargs else None
+        # Derive a stable, run-scoped artifact_id when a semantic key is
+        # provided. This namespaces storage to prevent key collision across
+        # concurrent runs and allows lookups by logical name.
+        artifact_id = f"{run_id}--{key}" if key and run_id else str(uuid.uuid4())
+
         metadata = ArtifactMetadata(
             artifact_id=artifact_id,
             content_type=content_type,
@@ -90,6 +100,8 @@ class ArtifactService:
             created_at=datetime.now(tz=UTC).isoformat(),
         )
         pointer = await self._storage.write(content, metadata)
+        if key:
+            pointer["key"] = key
         await self._index.put(metadata)
         return pointer
 

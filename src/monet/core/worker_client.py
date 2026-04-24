@@ -15,6 +15,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from opentelemetry import propagate as _propagate
 
 from monet.core._retry import retry_with_backoff
 
@@ -23,9 +24,17 @@ if TYPE_CHECKING:
     from monet.server._capabilities import Capability
     from monet.types import AgentResult
 
-__all__ = ["RemoteQueue", "WorkerClient"]
+__all__ = ["RemoteQueue", "WorkerClient", "_trace_headers"]
 
 _log = logging.getLogger("monet.core.worker_client")
+
+
+def _trace_headers() -> dict[str, str]:
+    """Capture current OTel context as W3C HTTP propagation headers."""
+    carrier: dict[str, str] = {}
+    _propagate.inject(carrier)
+    return carrier
+
 
 _TIMEOUT = 30.0
 
@@ -183,10 +192,12 @@ class WorkerClient:
         Retries on transient failures — losing a task result is worse
         than a brief delay.
         """
+        headers = _trace_headers()
 
         async def _do() -> None:
             resp = await self._client.post(
                 f"/tasks/{task_id}/complete",
+                headers=headers,
                 json={
                     "success": result.success,
                     "output": result.output,
@@ -212,10 +223,12 @@ class WorkerClient:
         Retries on transient failures — losing error reporting hides
         real problems from operators.
         """
+        headers = _trace_headers()
 
         async def _do() -> None:
             resp = await self._client.post(
                 f"/tasks/{task_id}/fail",
+                headers=headers,
                 json={"error": error},
             )
             resp.raise_for_status()
@@ -262,9 +275,10 @@ class RemoteQueue:
 
     async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
         """POST a progress event to the server's progress endpoint."""
+        headers = _trace_headers()
         try:
             resp = await self._client._client.post(
-                f"/tasks/{task_id}/progress", json=event
+                f"/tasks/{task_id}/progress", headers=headers, json=event
             )
             resp.raise_for_status()
         except Exception:
