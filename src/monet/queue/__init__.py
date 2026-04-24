@@ -17,12 +17,22 @@ from ._interface import (
     TaskRecord,
     TaskStatus,
 )
+from ._progress import (
+    EventType,
+    ProgressEvent,
+    ProgressReader,
+    ProgressWriter,
+)
 
 __all__ = [
     "TASK_RECORD_SCHEMA_VERSION",
     "AwaitAlreadyConsumedError",
+    "EventType",
     "InMemoryTaskQueue",
+    "ProgressEvent",
+    "ProgressReader",
     "ProgressStore",
+    "ProgressWriter",
     "QueueMaintenance",
     "TaskQueue",
     "TaskRecord",
