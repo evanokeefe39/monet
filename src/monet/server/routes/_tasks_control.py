@@ -1,22 +1,49 @@
-"""Task claiming, completion, and progress tracking routes."""
+"""Control-plane task routes: claim, complete, fail."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+import time
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from monet._ports import MAX_INLINE_PAYLOAD_BYTES
-from monet.queue import ProgressStore
+from monet.queue._progress import EventType, ProgressEvent, ProgressWriter
 from monet.server._auth import require_api_key, require_task_auth
+from monet.server._event_router import EventPolicy, classify_event
 from monet.server.routes._common import CapIndex, Queue  # noqa: TC001
 from monet.types import AgentResult, Signal, build_artifact_pointer
 
-_log = logging.getLogger("monet.server.routes.tasks")
+_log = logging.getLogger("monet.server.routes.tasks_control")
 
 router = APIRouter()
+
+
+def _get_progress_writer(request: Request) -> ProgressWriter | None:
+    return getattr(request.app.state, "progress_writer", None)  # type: ignore[no-any-return]
+
+
+OptWriter = Annotated[ProgressWriter | None, Depends(_get_progress_writer)]
+
+
+async def _route_event(
+    writer: ProgressWriter | None,
+    event: ProgressEvent,
+) -> None:
+    """Record event according to its routing policy. Best-effort — never raises."""
+    if writer is None:
+        return
+    policy = classify_event(event)
+    if policy in (EventPolicy.DUAL_ROUTED, EventPolicy.SILENT_AUDIT):
+        try:
+            await writer.record(event["run_id"], event)
+        except Exception:
+            _log.exception(
+                "progress_writer.record failed for task=%s event_type=%s",
+                event["task_id"],
+                event["event_type"],
+            )
 
 
 class TaskCompleteRequest(BaseModel):
@@ -28,12 +55,15 @@ class TaskCompleteRequest(BaseModel):
     signals: list[dict[str, Any]] = []
     trace_id: str = ""
     run_id: str = ""
+    agent_id: str = ""
 
 
 class TaskFailRequest(BaseModel):
     """Body for ``POST /api/v1/tasks/{task_id}/fail``."""
 
     error: str
+    run_id: str = ""
+    agent_id: str = ""
 
 
 class PoolClaimRequest(BaseModel):
@@ -77,6 +107,7 @@ async def complete_task(
     task_id: str,
     body: TaskCompleteRequest,
     queue: Queue,
+    writer: OptWriter,
 ) -> dict[str, str]:
     """Post a successful result for a claimed task."""
     result = AgentResult(
@@ -95,6 +126,19 @@ async def complete_task(
         run_id=body.run_id,
     )
     await queue.complete(task_id, result)
+
+    event: ProgressEvent = {
+        "event_id": 0,
+        "run_id": body.run_id,
+        "task_id": task_id,
+        "agent_id": body.agent_id,
+        "event_type": EventType.AGENT_COMPLETED,
+        "timestamp_ms": int(time.time() * 1000),
+    }
+    if body.trace_id:
+        event["trace_id"] = body.trace_id
+    await _route_event(writer, event)
+
     return {"status": "ok"}
 
 
@@ -106,72 +150,20 @@ async def fail_task(
     task_id: str,
     body: TaskFailRequest,
     queue: Queue,
+    writer: OptWriter,
 ) -> dict[str, str]:
     """Post a failure for a claimed task."""
     await queue.fail(task_id, body.error)
+
+    event: ProgressEvent = {
+        "event_id": 0,
+        "run_id": body.run_id,
+        "task_id": task_id,
+        "agent_id": body.agent_id,
+        "event_type": EventType.AGENT_FAILED,
+        "timestamp_ms": int(time.time() * 1000),
+        "payload": {"error": body.error},
+    }
+    await _route_event(writer, event)
+
     return {"status": "ok"}
-
-
-@router.post(
-    "/tasks/{task_id}/progress",
-    status_code=202,
-    dependencies=[Depends(require_task_auth)],
-)
-async def post_progress(
-    task_id: str,
-    body: dict[str, Any],
-    queue: Queue,
-    request: Request,
-) -> dict[str, str]:
-    """Fire-and-forget progress event from a remote worker."""
-    content_length = request.headers.get("content-length")
-    if content_length is not None:
-        try:
-            size = int(content_length)
-        except ValueError as exc:
-            raise HTTPException(400, "Invalid Content-Length") from exc
-        if size > MAX_INLINE_PAYLOAD_BYTES:
-            raise HTTPException(
-                413,
-                f"Progress payload {size} bytes exceeds "
-                f"MAX_INLINE_PAYLOAD_BYTES={MAX_INLINE_PAYLOAD_BYTES}",
-            )
-    await queue.publish_progress(task_id, body)
-    return {"status": "accepted"}
-
-
-@router.get(
-    "/runs/{run_id}/progress",
-    dependencies=[Depends(require_api_key)],
-)
-async def get_run_progress(
-    run_id: str,
-    queue: Queue,
-    count: int = Query(default=1000, ge=1, le=10000),
-) -> dict[str, Any]:
-    """Retrieve persisted progress events for a run."""
-    if not isinstance(queue, ProgressStore):
-        raise HTTPException(501, "Backend does not support progress history")
-    events = await queue.get_progress_history(run_id, count=count)
-    return {"run_id": run_id, "events": events}
-
-
-@router.get(
-    "/progress",
-    dependencies=[Depends(require_api_key)],
-)
-async def get_batch_progress(
-    queue: Queue,
-    run_ids: str = Query(..., description="Comma-separated run IDs"),
-    count: int = Query(default=200, ge=1, le=1000),
-) -> dict[str, Any]:
-    """Retrieve persisted progress events for multiple runs in one call."""
-    if not isinstance(queue, ProgressStore):
-        raise HTTPException(501, "Backend does not support progress history")
-    ids = [r.strip() for r in run_ids.split(",") if r.strip()]
-    results: dict[str, list[dict[str, Any]]] = {}
-    for rid in ids[:50]:
-        events = await queue.get_progress_history(rid, count=count)
-        if events:
-            results[rid] = events
-    return {"progress": results}

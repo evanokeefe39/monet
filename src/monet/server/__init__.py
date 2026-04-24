@@ -13,11 +13,19 @@ if TYPE_CHECKING:
 
     from fastapi import FastAPI
 
+    from monet.artifacts._protocol import ArtifactClient
     from monet.queue import TaskQueue
+    from monet.queue._progress import ProgressReader, ProgressWriter
+    from monet.server._capabilities import CapabilityIndex
 
 from monet.config._schema import ChatConfig
 
-__all__ = ["create_app"]
+__all__ = [
+    "create_app",
+    "create_control_app",
+    "create_data_app",
+    "create_unified_app",
+]
 
 
 def create_app(
@@ -134,4 +142,104 @@ def create_app(
     app.state.config = config
     app.include_router(router)
 
+    return app
+
+
+def create_unified_app(
+    queue: TaskQueue,
+    capability_index: CapabilityIndex,
+    writer: ProgressWriter | None = None,
+    reader: ProgressReader | None = None,
+    artifact_store: ArtifactClient | None = None,
+) -> FastAPI:
+    """Create a unified app with both control and data plane routes.
+
+    Intended for S1/S2/S3 deployments where a single process serves all
+    planes. The data-plane routes (typed events, SSE) are only active when
+    *writer* and *reader* are provided; they return 501 otherwise.
+    """
+    from fastapi import FastAPI as _FastAPI
+
+    from monet.server._deployment import DeploymentStore
+    from monet.server.routes import router as _router
+
+    app = _FastAPI()
+    deployments = DeploymentStore(db_path=":memory:")
+    app.state.queue = queue
+    app.state.deployments = deployments
+    app.state.capability_index = capability_index
+    if writer is not None:
+        app.state.progress_writer = writer
+    if reader is not None:
+        app.state.progress_reader = reader
+    if artifact_store is not None:
+        app.state.artifact_store = artifact_store
+    app.include_router(_router)
+    return app
+
+
+def create_control_app(
+    queue: TaskQueue,
+    capability_index: CapabilityIndex,
+) -> FastAPI:
+    """Create a control-plane-only app.
+
+    Mounts: worker heartbeat, task claim/complete/fail, thread inspection,
+    invocations, health. Accepts no ProgressWriter or ArtifactStore — the
+    data boundary is enforced by the type system.
+    """
+    from fastapi import APIRouter
+    from fastapi import FastAPI as _FastAPI
+
+    from monet.server._deployment import DeploymentStore
+    from monet.server.routes import (
+        _invocations,
+        _ops,
+        _tasks_control,
+        _threads,
+        _workers,
+    )
+
+    app = _FastAPI()
+    deployments = DeploymentStore(db_path=":memory:")
+    app.state.queue = queue
+    app.state.deployments = deployments
+    app.state.capability_index = capability_index
+
+    control_router = APIRouter(prefix="/api/v1")
+    control_router.include_router(_workers.router)
+    control_router.include_router(_tasks_control.router)
+    control_router.include_router(_threads.router)
+    control_router.include_router(_ops.router)
+    control_router.include_router(_invocations.router)
+    app.include_router(control_router)
+    return app
+
+
+def create_data_app(
+    writer: ProgressWriter,
+    reader: ProgressReader,
+    artifact_store: ArtifactClient | None = None,
+) -> FastAPI:
+    """Create a data-plane-only app.
+
+    Mounts: typed event record/query, legacy progress endpoints, artifact
+    CRUD, health. Accepts no TaskQueue or CapabilityIndex.
+    """
+    from fastapi import APIRouter
+    from fastapi import FastAPI as _FastAPI
+
+    from monet.server.routes import _artifacts, _ops, _tasks_data
+
+    app = _FastAPI()
+    app.state.progress_writer = writer
+    app.state.progress_reader = reader
+    if artifact_store is not None:
+        app.state.artifact_store = artifact_store
+
+    data_router = APIRouter(prefix="/api/v1")
+    data_router.include_router(_tasks_data.router)
+    data_router.include_router(_artifacts.router)
+    data_router.include_router(_ops.router)
+    app.include_router(data_router)
     return app
