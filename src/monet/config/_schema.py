@@ -52,6 +52,7 @@ from ._env import (
     MONET_CHAT_GRAPH,
     MONET_CHAT_RESPOND_MODEL,
     MONET_CHAT_TRIAGE_MODEL,
+    MONET_DATA_PLANE_URL,
     MONET_DISTRIBUTED,
     MONET_QUEUE_BACKEND,
     MONET_QUEUE_COMPLETION_TTL,
@@ -653,20 +654,26 @@ class ClientConfig(BaseModel):
 
     server_url: str = _DEFAULT_SERVER_URL
     api_key: str | None = None
+    data_plane_url: str | None = None
 
     @classmethod
     def load(cls) -> ClientConfig:
+        planes = read_toml_section("planes")
         return cls(
             server_url=(
                 read_str(MONET_SERVER_URL, _DEFAULT_SERVER_URL) or _DEFAULT_SERVER_URL
             ),
             api_key=read_str(MONET_API_KEY),
+            data_plane_url=(
+                read_str(MONET_DATA_PLANE_URL) or (planes.get("data_url") or None)
+            ),
         )
 
     def redacted_summary(self) -> dict[str, Any]:
         return {
             "server_url": self.server_url,
             "api_key": _redact(self.api_key),
+            "data_plane_url": self.data_plane_url,
         }
 
 
