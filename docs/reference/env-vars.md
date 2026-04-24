@@ -19,13 +19,14 @@ Jidoka half of the configuration contract.
 | `MONET_API_KEY` | string | unset | yes (distributed mode) | Bearer token required by authenticated server routes. `ServerConfig.validate_for_boot` fails fast when `MONET_DISTRIBUTED=1` and the key is unset. |
 | `MONET_DISTRIBUTED` | bool | `false` | no | When true, the server skips artifact-store configuration (workers own it) and enforces the `MONET_API_KEY` boot check. Accepts `1/0`, `true/false`, `yes/no`, `on/off` case-insensitively. |
 | `MONET_ARTIFACTS_DIR` | path | `.artifacts` | no | Root directory for the artifact store. |
-| `MONET_QUEUE_BACKEND` | enum | `memory` | no | Task queue backend. One of `memory`, `redis`, `sqlite`, `upstash`. A typo fails boot. |
+| `MONET_QUEUE_BACKEND` | enum | `memory` | no | Task queue backend. One of `memory`, `redis`, `sqlite`. A typo fails boot. |
 | `MONET_QUEUE_DB` | path | `.monet/queue.db` | no | SQLite path when `MONET_QUEUE_BACKEND=sqlite`. |
 | `REDIS_URI` | string | unset | when backend=redis | Redis connection URI. |
-| `UPSTASH_REDIS_REST_URL` | string | unset | when backend=upstash | Upstash REST endpoint. |
-| `UPSTASH_REDIS_REST_TOKEN` | string | unset | when backend=upstash | Upstash REST bearer token. |
 | `MONET_AGENT_TIMEOUT` | float seconds | `600.0` | no | Dispatcher poll timeout for `invoke_agent`. |
 | `MONET_CONFIG_PATH` | path | `Path.cwd()/monet.toml` | no | Override `monet.toml` location. Written by `monet server --config` when uvicorn's factory loader cannot receive arguments directly. |
+| `MONET_DATA_PLANE_URL` | string | unset | no | Data-plane base URL. When set on workers/clients, event recording and queries are directed to this host instead of `MONET_SERVER_URL`. Used in split-plane deployments (`monet server --plane control` + `--plane data`). |
+| `MONET_PROGRESS_BACKEND` | enum | unset | yes (data-plane) | Progress event store backend. One of `postgres` or `sqlite`. Required when running `monet server --plane data`. A typo fails boot. |
+| `MONET_PROGRESS_DB` | path | `":memory:"` | no | SQLite file path when `MONET_PROGRESS_BACKEND=sqlite`. Defaults to in-memory when unset. |
 
 ## Worker (`monet worker`)
 

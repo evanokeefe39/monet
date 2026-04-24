@@ -8,13 +8,19 @@ from monet.client import MonetClient
 class MonetClient:
     def __init__(
         self,
-        url: str = "http://localhost:2026",
+        url: str | None = None,
         *,
+        api_key: str | None = None,
+        data_plane_url: str | None = None,
         graph_ids: dict[str, str] | None = None,
     ) -> None
 ```
 
 Graph-agnostic async client. Drives any graph declared in `monet.toml [entrypoints]`, streams typed core events, and exposes generic HITL resume/abort. Pipeline-specific composition (entry → planning → execution with HITL) lives in [`monet.pipelines.default`](#default-pipeline).
+
+`url` defaults to `MONET_SERVER_URL` (then `http://localhost:2026`). `api_key` defaults to `MONET_API_KEY`. `data_plane_url` defaults to `MONET_DATA_PLANE_URL`; when unset, all requests (including event recording and queries) go to `url`.
+
+In split-plane mode, `resume()` posts a `hitl_decision` event to the data plane before issuing the LangGraph `Command(resume=...)`. The step is idempotent — a 409 from the data plane means the decision was already recorded and the graph command can be retried safely.
 
 ### Run lifecycle
 
@@ -99,6 +105,31 @@ async def list_graphs() -> list[str]
 ```
 
 Return graph IDs available on the connected server.
+
+#### `query_events`
+
+```python
+async def query_events(
+    run_id: str,
+    *,
+    after: int = 0,
+    limit: int = 100,
+) -> list[ProgressEvent]
+```
+
+Fetch typed progress events for `run_id` from the data plane. Returns events with `event_id > after`, ordered by `event_id`. In split-plane mode reads from `data_plane_url`; otherwise reads from `url`.
+
+#### `subscribe_events`
+
+```python
+async def subscribe_events(
+    run_id: str,
+    *,
+    after: int = 0,
+) -> AsyncIterator[ProgressEvent]
+```
+
+Stream typed progress events for `run_id` from the data plane. Tracks the cursor internally so reconnects never duplicate. Stops when a terminal event (`run_completed` / `run_cancelled`) is received or the caller closes the iterator.
 
 ### Chat
 
