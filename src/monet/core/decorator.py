@@ -31,7 +31,7 @@ from .artifacts import _artifact_collector, _artifact_hashes, get_artifacts
 from .context import _agent_context
 from .hooks import run_after_agent_hooks, run_before_agent_hooks
 from .registry import default_registry
-from .stubs import _signal_collector
+from .stubs import _current_task_id, _progress_writer_cv, _signal_collector
 from .tracing import get_tracer
 
 # Default content limit for automatic offload (bytes).
@@ -183,18 +183,20 @@ def _handle_exception(
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
     signals: list[Signal],
+    cause_id: str | None = None,
 ) -> AgentResult:
     """Translate typed or unexpected exceptions into AgentResult with signals.
 
     Appends an appropriate signal to the accumulated list, then builds
-    a failed AgentResult.
+    a failed AgentResult. cause_id, when provided, is embedded in the
+    signal metadata for HITL exceptions so it can flow to the interrupt payload.
     """
     if isinstance(exc, NeedsHumanReview):
         signals.append(
             Signal(
                 type=SignalType.NEEDS_HUMAN_REVIEW,
                 reason=exc.reason,
-                metadata=None,
+                metadata={"cause_id": cause_id} if cause_id else None,
             )
         )
     elif isinstance(exc, EscalationRequired):
@@ -202,7 +204,7 @@ def _handle_exception(
             Signal(
                 type=SignalType.ESCALATION_REQUIRED,
                 reason=exc.reason,
-                metadata=None,
+                metadata={"cause_id": cause_id} if cause_id else None,
             )
         )
     elif isinstance(exc, SemanticError):
@@ -230,6 +232,37 @@ def _handle_exception(
         trace_id=ctx.get("trace_id", ""),
         run_id=ctx.get("run_id", ""),
     )
+
+
+async def _record_lifecycle(
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    event_type_str: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Record a lifecycle ProgressEvent. Best-effort — never raises."""
+    try:
+        import time as _time
+
+        pw = _progress_writer_cv.get()
+        if pw is None:
+            return
+        from monet.queue._progress import EventType, ProgressEvent
+
+        event: ProgressEvent = {
+            "event_id": 0,
+            "run_id": run_id,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "event_type": EventType(event_type_str),
+            "timestamp_ms": int(_time.time() * 1000),
+        }
+        if payload:
+            event["payload"] = payload
+        await pw.record(run_id, event)
+    except Exception:
+        pass
 
 
 @overload
@@ -305,6 +338,9 @@ def agent(
             sig_token = _signal_collector.set(signal_list)
             art_token = _artifact_collector.set(artifacts)
             hash_token = _artifact_hashes.set(written_hashes)
+            _run_id = ctx.get("run_id", "")
+            _task_id = _current_task_id.get()
+            await _record_lifecycle(_run_id, _task_id, agent_id, "agent_started")
             try:
                 with tracer.start_as_current_span(
                     f"agent.{agent_id}.{command}",
@@ -333,16 +369,34 @@ def agent(
                         agent_result = await run_after_agent_hooks(
                             agent_result, agent_id, command
                         )
+                        await _record_lifecycle(
+                            _run_id, _task_id, agent_id, "agent_completed"
+                        )
                         return agent_result
                     except Exception as exc:
+                        cause_id: str | None = None
+                        if isinstance(exc, NeedsHumanReview | EscalationRequired):
+                            import uuid as _uuid
+
+                            cause_id = str(_uuid.uuid4())
+                            await _record_lifecycle(
+                                _run_id,
+                                _task_id,
+                                agent_id,
+                                "hitl_cause",
+                                payload={"cause_id": cause_id},
+                            )
                         agent_result = _handle_exception(
-                            exc, ctx, artifacts, signal_list
+                            exc, ctx, artifacts, signal_list, cause_id
                         )
                         span.set_attribute("agent.success", False)
                         span.record_exception(exc)
                         # after_agent hooks also run on failed results.
                         agent_result = await run_after_agent_hooks(
                             agent_result, agent_id, command
+                        )
+                        await _record_lifecycle(
+                            _run_id, _task_id, agent_id, "agent_failed"
                         )
                         return agent_result
             finally:

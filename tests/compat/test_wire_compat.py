@@ -25,7 +25,7 @@ from monet.client._events import (
     RunStarted,
     SignalEmitted,
 )
-from monet.server._routes import ArtifactListItem
+from monet.server.routes._artifacts import ArtifactListItem
 
 SCHEMA_PATH = Path(__file__).parent / "wire_schema.json"
 

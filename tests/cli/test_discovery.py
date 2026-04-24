@@ -116,7 +116,9 @@ def test_discover_skips_unparseable(tmp_path: Path) -> None:
 
 def test_discover_reference_agents() -> None:
     """discover_agents finds the 8 reference agents in src/monet/agents."""
-    agents_dir = Path(__file__).resolve().parent.parent / "src" / "monet" / "agents"
+    agents_dir = (
+        Path(__file__).resolve().parent.parent.parent / "src" / "monet" / "agents"
+    )
     results = discover_agents(agents_dir)
 
     found = {(a.agent_id, a.command) for a in results}

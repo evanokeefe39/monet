@@ -178,8 +178,8 @@ async def test_progress_round_trip(
     await queue.publish_progress(task_id, {"step": 1})
     await queue.publish_progress(task_id, {"step": 2, "done": True})
     await asyncio.wait_for(consumer, timeout=2.0)
-    assert {"step": 1} in received
-    assert {"step": 2, "done": True} in received
+    assert any({"step": 1}.items() <= e.items() for e in received)
+    assert any({"step": 2, "done": True}.items() <= e.items() for e in received)
 
 
 async def test_await_completion_timeout(

@@ -223,7 +223,7 @@ async def test_publish_still_fans_out_to_subscribers() -> None:
     await q.complete(task_id, AgentResult(success=True, output="done"))
     await asyncio.wait_for(consumer_task, timeout=2.0)
 
-    assert {"status": "running"} in events
+    assert any({"status": "running"}.items() <= e.items() for e in events)
     history = await q.get_progress_history(task_id)
     assert len(history) == 1
     assert history[0]["status"] == "running"

@@ -18,6 +18,8 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from monet.core.registry import LocalRegistry
     from monet.queue import TaskQueue, TaskRecord
+    from monet.queue._dispatch import ClaimedTask, DispatchBackend
+    from monet.queue._progress import ProgressWriter
 
 logger = logging.getLogger("monet.worker")
 
@@ -34,11 +36,15 @@ async def run_worker(
     queue: TaskQueue,
     registry: LocalRegistry | None = None,
     pool: str = "local",
+    dispatch_backend: DispatchBackend | None = None,
+    server_url: str = "",
+    api_key: str = "",
     max_concurrency: int = 10,
     poll_interval: float = 0.1,
     shutdown_timeout: float = 30.0,
     task_timeout: float = 300.0,
     consumer_id: str | None = None,
+    writer: ProgressWriter | None = None,
 ) -> None:
     """Poll queue by pool, execute concurrently via registry.
 
@@ -50,6 +56,13 @@ async def run_worker(
         registry: Handler registry for local execution. Defaults to the
             global registry populated by ``@agent`` decorators.
         pool: Pool name this worker serves. Claims only tasks in this pool.
+        dispatch_backend: Optional cloud dispatch backend. When set, claimed
+            tasks are submitted to the backend instead of executed in-process.
+            The backend container calls complete/fail directly via WorkerClient.
+        server_url: Server URL passed to dispatch_backend.submit(). Required
+            when dispatch_backend is set.
+        api_key: API key passed to dispatch_backend.submit(). Required when
+            dispatch_backend is set.
         max_concurrency: Max concurrent task executions. Default 10.
         poll_interval: Seconds to sleep between claim attempts when the
             pool queue is empty. Default 0.1.
@@ -142,6 +155,22 @@ async def run_worker(
             drain_task = asyncio.create_task(
                 _drain_progress(progress_q, shutdown, task_id)
             )
+            # Heartbeat loop: renew lease periodically on backends that track it.
+            from monet.queue._interface import QueueMaintenance
+
+            heartbeat_task: asyncio.Task[None] | None = None
+            if isinstance(queue, QueueMaintenance):
+                heartbeat_interval = max(queue.lease_ttl_seconds / 3, 5.0)
+
+                async def _heartbeat(tid: str = task_id) -> None:
+                    while True:
+                        await asyncio.sleep(heartbeat_interval)
+                        try:
+                            await queue.renew_lease(tid)
+                        except Exception:
+                            logger.debug("renew_lease failed for task %s", tid)
+
+                heartbeat_task = asyncio.create_task(_heartbeat())
 
             def _publisher(data: dict[str, Any]) -> None:
                 # Ensure thread_id and run_id are serializable strings
@@ -165,7 +194,11 @@ async def run_worker(
                 with contextlib.suppress(asyncio.CancelledError):
                     await drain_task
 
+            from monet.core.stubs import _current_task_id, _progress_writer_cv
+
             token = _progress_publisher.set(_publisher)
+            writer_token = _progress_writer_cv.set(writer)
+            task_id_token = _current_task_id.set(task_id)
             try:
                 with _tracer.start_as_current_span(
                     f"worker.execute.{agent_id}.{command}",
@@ -236,8 +269,14 @@ async def run_worker(
                         await queue.fail(task_id, f"{type(exc).__name__}: {exc}")
             finally:
                 _progress_publisher.reset(token)
+                _progress_writer_cv.reset(writer_token)
+                _current_task_id.reset(task_id_token)
                 if not drain_task.done():
                     await _flush_drain()
+                if heartbeat_task is not None and not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await heartbeat_task
 
     if consumer_id is None:
         consumer_id = f"worker-{uuid.uuid4().hex[:8]}"
@@ -249,6 +288,26 @@ async def run_worker(
                 pool, consumer_id=consumer_id, block_ms=claim_block_ms
             )
             if record is None:
+                continue
+            if dispatch_backend is not None:
+                claimed: ClaimedTask = {
+                    "task_id": record["task_id"],
+                    "run_id": record["context"].get("run_id", ""),
+                    "thread_id": record["context"].get("thread_id", ""),
+                    "agent_id": record["agent_id"],
+                    "command": record["command"],
+                    "pool": pool,
+                }
+                try:
+                    await dispatch_backend.submit(claimed, server_url, api_key)
+                except Exception:
+                    logger.exception(
+                        "dispatch backend submit failed for task %s",
+                        record["task_id"],
+                    )
+                    await queue.fail(
+                        record["task_id"], "dispatch backend submit failed"
+                    )
                 continue
             task = asyncio.create_task(_execute(record))
             in_flight.add(task)

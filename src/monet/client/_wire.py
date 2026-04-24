@@ -234,3 +234,116 @@ def chat_input(message: str) -> dict[str, Any]:
     return {
         "messages": [{"role": "user", "content": message}],
     }
+
+
+# ── Data-plane event queries ────────────────────────────────────────
+
+
+async def query_progress_events(
+    url: str,
+    run_id: str,
+    *,
+    api_key: str | None = None,
+    after: int = 0,
+    limit: int = 100,
+) -> list[Any]:
+    """Fetch typed progress events from ``GET /runs/{run_id}/events``.
+
+    Returns the raw list of event dicts from the response body.
+    """
+    import httpx
+
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    base = url.rstrip("/")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{base}/runs/{run_id}/events",
+                headers=headers,
+                params={"after": after, "limit": limit},
+            )
+            resp.raise_for_status()
+    except Exception as exc:
+        _classify_transport_error(exc, url)
+        raise
+    return resp.json().get("events", [])  # type: ignore[no-any-return]
+
+
+async def post_hitl_decision(
+    url: str,
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    cause_id: str,
+    tag: str,
+    *,
+    api_key: str | None = None,
+    timestamp_ms: int | None = None,
+) -> None:
+    """POST a HITL_DECISION event to the data plane.
+
+    Returns normally on 202 (accepted). Raises :class:`AlreadyResolved` on
+    409 (decision already recorded for this cause_id). Re-raises other HTTP
+    errors unchanged.
+    """
+    import time
+
+    import httpx
+
+    from monet.client._errors import AlreadyResolved
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    base = url.rstrip("/")
+    body = {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "event_type": "hitl_decision",
+        "timestamp_ms": timestamp_ms or int(time.time() * 1000),
+        "payload": {"cause_id": cause_id, "tag": tag},
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{base}/runs/{run_id}/events",
+            json=body,
+            headers=headers,
+        )
+    if resp.status_code == 409:
+        raise AlreadyResolved(run_id)
+    resp.raise_for_status()
+
+
+async def stream_progress_events(
+    url: str,
+    run_id: str,
+    *,
+    api_key: str | None = None,
+    after: int = 0,
+    poll_interval: float = 0.5,
+) -> AsyncIterator[Any]:
+    """Poll ``GET /runs/{run_id}/events`` and yield events as they arrive.
+
+    Tracks the cursor via ``event_id`` so reconnects never duplicate.
+    Stops when a ``run_completed`` or ``run_cancelled`` event is emitted
+    or the caller closes the iterator.
+    """
+    import asyncio
+
+    terminal = {"run_completed", "run_cancelled"}
+    cursor = after
+    while True:
+        events = await query_progress_events(
+            url, run_id, api_key=api_key, after=cursor, limit=100
+        )
+        for event in events:
+            yield event
+            eid = event.get("event_id", 0)
+            if eid > cursor:
+                cursor = eid
+            if event.get("event_type") in terminal:
+                return
+        if not events:
+            await asyncio.sleep(poll_interval)

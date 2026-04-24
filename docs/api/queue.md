@@ -32,6 +32,10 @@ Two sides:
 
 Workers claim by pool name (Prefect model). Handler lookup is the worker's responsibility.
 
+### Lease heartbeat
+
+Backends that implement `QueueMaintenance` expose `renew_lease(task_id)`. The worker loop calls it every `lease_ttl_seconds / 3` seconds (minimum 5 seconds) while a task is executing, so the reclaim sweeper does not evict active tasks. The call is a no-op on unknown task IDs (task may have already completed).
+
 ## `TaskStatus`
 
 ```python
@@ -167,42 +171,6 @@ Distributed queue backed by Redis with pub/sub notifications and optional pollin
 
 ---
 
-## `UpstashTaskQueue`
-
-```python
-from monet.queue import UpstashTaskQueue
-
-queue = UpstashTaskQueue(
-    url="https://your-redis.upstash.io",
-    token="your-token",
-    prefix="monet",
-    poll_interval=0.5,
-    task_ttl=86400,
-)
-```
-
-HTTP-based serverless queue backed by Upstash Redis. No persistent connections.
-
-| Parameter | Default | Description |
-|---|---|---|
-| `url` | env `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL |
-| `token` | env `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
-| `prefix` | `"monet"` | Key namespace |
-| `poll_interval` | `0.5` | Seconds between poll_result status checks |
-| `task_ttl` | `86400` | TTL for task keys in seconds (1 day default) |
-
-**Behaviour:**
-
-- Connectionless HTTP requests (ideal for serverless)
-- `poll_result` always polls at intervals (no pub/sub)
-- Redis TTL handles auto-cleanup of old tasks
-- No internal lease sweeper — use external sweeper (e.g. QStash cron) for production
-- Per-task hash: `{prefix}:task:{task_id}`, per-pool list: `{prefix}:queue:{pool}`
-
-**Best for:** serverless deployments (Vercel, Lambda, Cloudflare Workers).
-
----
-
 ## Choosing a provider
 
 | Scenario | Provider |
@@ -210,6 +178,138 @@ HTTP-based serverless queue backed by Upstash Redis. No persistent connections.
 | Local development | `InMemoryTaskQueue` |
 | Single server, need persistence | `SQLiteTaskQueue` |
 | Multiple servers, standard Redis | `RedisTaskQueue` |
-| Serverless / edge functions | `UpstashTaskQueue` |
 
 All providers implement the same `TaskQueue` protocol and are interchangeable.
+
+---
+
+## `DispatchBackend` protocol
+
+```python
+from monet.queue._dispatch import DispatchBackend, ClaimedTask
+
+class DispatchBackend(Protocol):
+    async def submit(
+        self,
+        task: ClaimedTask,
+        server_url: str,
+        api_key: str,
+    ) -> None: ...
+```
+
+Used by push pools to forward claimed tasks to external compute. `submit` returns after dispatching — the submitted container calls `complete`/`fail` and renews the lease directly.
+
+### `ClaimedTask`
+
+```python
+class ClaimedTask(TypedDict):
+    task_id: str
+    run_id: str
+    thread_id: str
+    agent_id: str
+    command: str
+    pool: str
+```
+
+### Implementations
+
+| Class | Use case |
+|---|---|
+| `LocalDispatchBackend` | In-process dispatch (testing) |
+| `CloudRunDispatchBackend` | Google Cloud Run jobs |
+| `ECSDispatchBackend` | AWS ECS tasks (requires `aioboto3`) |
+
+---
+
+## Progress events
+
+### `EventType`
+
+```python
+from monet.queue._progress import EventType
+
+class EventType(StrEnum):
+    AGENT_STARTED = "agent_started"
+    AGENT_COMPLETED = "agent_completed"
+    AGENT_FAILED = "agent_failed"
+    STATUS = "status"
+    HITL_CAUSE = "hitl_cause"
+    HITL_DECISION = "hitl_decision"
+    RUN_COMPLETED = "run_completed"
+    RUN_CANCELLED = "run_cancelled"
+```
+
+### `ProgressEvent`
+
+```python
+from monet.queue._progress import ProgressEvent
+
+class ProgressEvent(TypedDict, total=False):
+    # Required — always present
+    event_id: int       # 0 before write; assigned by ProgressWriter.record()
+    run_id: str
+    task_id: str
+    agent_id: str
+    event_type: EventType
+    timestamp_ms: int
+    # Optional enrichment
+    trace_id: str
+    payload: dict[str, Any]
+```
+
+### `ProgressWriter` protocol
+
+```python
+class ProgressWriter(Protocol):
+    async def record(self, run_id: str, event: ProgressEvent) -> int: ...
+```
+
+`record` appends the event and returns the assigned `event_id`. Monotonic within `run_id`.
+
+### `ProgressReader` protocol
+
+```python
+class ProgressReader(Protocol):
+    async def query(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> list[ProgressEvent]: ...
+
+    def stream(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+    ) -> AsyncIterator[ProgressEvent]: ...
+
+    async def has_cause(self, run_id: str, cause_id: str) -> bool: ...
+
+    async def has_decision(self, run_id: str, cause_id: str) -> bool: ...
+```
+
+`query` returns events with `event_id > after`. `stream` yields events as they arrive and terminates on `run_completed`/`run_cancelled`. `has_cause`/`has_decision` support HITL idempotency checks.
+
+### Backends
+
+#### `SqliteProgressBackend`
+
+```python
+from monet.queue.backends.sqlite_progress import SqliteProgressBackend
+
+backend = SqliteProgressBackend(db_path=":memory:")
+```
+
+Implements both `ProgressWriter` and `ProgressReader`. Backed by a single persistent `aiosqlite` connection. Uses `":memory:"` by default; pass a file path for durability. Configured at boot by `MONET_PROGRESS_DB`.
+
+#### `PostgresProgressBackend`
+
+```python
+from monet.queue.backends.postgres_progress import PostgresProgressBackend
+
+backend = PostgresProgressBackend(dsn="postgresql://...")
+```
+
+Implements both `ProgressWriter` and `ProgressReader`. Backed by Postgres. DSN is required when `MONET_PROGRESS_BACKEND=postgres`.

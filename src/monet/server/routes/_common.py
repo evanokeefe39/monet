@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Request
+from opentelemetry import context as _ot_context
+from opentelemetry import propagate as _propagate
 from pydantic import BaseModel
 
 from monet.queue import TaskQueue
 from monet.server._capabilities import CapabilityIndex
 from monet.server._deployment import DeploymentStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _log = logging.getLogger("monet.server.routes")
 
@@ -37,6 +42,17 @@ def get_deployments(request: Request) -> DeploymentStore:
 def get_capability_index(request: Request) -> CapabilityIndex:
     """Retrieve the capability index from application state."""
     return request.app.state.capability_index  # type: ignore[no-any-return]
+
+
+async def attach_trace_context(request: Request) -> AsyncIterator[None]:
+    """Extract W3C traceparent from incoming headers and attach OTel context."""
+    carrier = dict(request.headers)
+    ctx = _propagate.extract(carrier)
+    token = _ot_context.attach(ctx)
+    try:
+        yield
+    finally:
+        _ot_context.detach(token)
 
 
 # Type aliases for annotated dependencies

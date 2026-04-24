@@ -70,6 +70,8 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
+    from monet.queue._progress import ProgressEvent
+
 _log = logging.getLogger("monet.client")
 
 
@@ -207,6 +209,7 @@ class MonetClient:
         url: str | None = None,
         *,
         api_key: str | None = None,
+        data_plane_url: str | None = None,
         graph_ids: dict[str, str] | None = None,
     ) -> None:
         from monet.client.chat import ChatClient
@@ -215,8 +218,12 @@ class MonetClient:
         cfg = ClientConfig.load()
         resolved_url = url if url is not None else cfg.server_url
         resolved_key = api_key if api_key is not None else cfg.api_key
+        resolved_data_url = (
+            data_plane_url if data_plane_url is not None else cfg.data_plane_url
+        )
         self._url = resolved_url
         self._api_key = resolved_key
+        self._data_url: str = resolved_data_url or resolved_url
         self._client: LangGraphClient = make_client(resolved_url, api_key=resolved_key)
         self._store = _RunStore()
         self._entrypoints = load_entrypoints()
@@ -331,6 +338,12 @@ class MonetClient:
         :class:`AlreadyResolved`, :class:`AmbiguousInterrupt`, or
         :class:`InterruptTagMismatch` on mismatch.
 
+        In split-plane mode (``data_plane_url`` set), posts a
+        ``HITL_DECISION`` event to the data plane before issuing the
+        LangGraph ``Command(resume=...)``. Step 1 is idempotent via
+        ``cause_id`` — a 409 means the decision was already recorded and
+        the LangGraph command can be retried safely.
+
         Args:
             run_id: The run to resume.
             tag: The interrupt node name (must match ``Interrupt.tag``).
@@ -350,6 +363,12 @@ class MonetClient:
         # committed to "interrupted" via finalize_run. Poll briefly so the
         # failure mode is a deterministic timeout, not a 400 race.
         await self._await_interrupted_status(thread)
+
+        # Split-plane ordering: record HITL_DECISION on the data plane
+        # before issuing the control-plane command. 409 = already recorded,
+        # safe to proceed. Any other error propagates to the caller for retry.
+        if self._data_url != self._url:
+            await self._post_hitl_decision(run_id, tag)
 
         _log.info(
             "resume",
@@ -682,6 +701,61 @@ class MonetClient:
                 graph_ids.append(gid)
         return sorted(graph_ids)
 
+    # ── Data-plane telemetry ─────────────────────────────────────
+
+    async def query_events(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> list[ProgressEvent]:
+        """Fetch typed progress events for *run_id* from the data plane.
+
+        Args:
+            run_id: The run to query.
+            after: Return only events with ``event_id > after`` (cursor).
+            limit: Maximum events to return (1-1000).
+
+        Returns:
+            List of :class:`~monet.queue._progress.ProgressEvent` dicts,
+            ordered by ``event_id``.
+        """
+        from monet.client._wire import query_progress_events
+
+        return await query_progress_events(  # type: ignore[return-value]
+            self._data_url,
+            run_id,
+            api_key=self._api_key,
+            after=after,
+            limit=limit,
+        )
+
+    async def subscribe_events(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+    ) -> AsyncIterator[ProgressEvent]:
+        """Stream typed progress events for *run_id* from the data plane.
+
+        Polls ``GET /runs/{run_id}/events`` and yields events as they
+        arrive, tracking the cursor so reconnects never duplicate. Stops
+        when a terminal event (``run_completed`` / ``run_cancelled``) is
+        received or the caller closes the iterator.
+
+        When ``data_plane_url`` is ``None``, reads from the unified URL.
+        """
+        from monet.client._wire import stream_progress_events
+
+        async for event in stream_progress_events(
+            self._data_url,
+            run_id,
+            api_key=self._api_key,
+            after=after,
+        ):
+            yield event  # type: ignore[misc]
+
     # ── Private helpers ─────────────────────────────────────────
 
     async def _find_interrupted_thread(self, run_id: str) -> tuple[str, str]:
@@ -706,6 +780,46 @@ class MonetClient:
         if not tid:
             raise RunNotInterrupted(run_id)
         return tid, graph_id
+
+    async def _post_hitl_decision(self, run_id: str, tag: str) -> None:
+        """Post a HITL_DECISION event to the data plane before resuming.
+
+        Queries progress events to find the most recent HITL_CAUSE event
+        and its cause_id. A 409 (duplicate decision) is treated as success
+        — the prior decision is already recorded and the LangGraph command
+        can proceed. Failure to find a cause_id skips the post so unified
+        mode (no progress writer) is unaffected.
+        """
+        from monet.client._wire import post_hitl_decision, query_progress_events
+
+        events = await query_progress_events(
+            self._data_url, run_id, api_key=self._api_key, after=0, limit=500
+        )
+        cause_id: str | None = None
+        task_id = ""
+        agent_id = ""
+        for ev in reversed(events):
+            if ev.get("event_type") == "hitl_cause":
+                cause_id = (ev.get("payload") or {}).get("cause_id")
+                task_id = ev.get("task_id", "")
+                agent_id = ev.get("agent_id", "")
+                break
+
+        if not cause_id:
+            return
+
+        import contextlib
+
+        with contextlib.suppress(AlreadyResolved):
+            await post_hitl_decision(
+                self._data_url,
+                run_id,
+                task_id=task_id,
+                agent_id=agent_id,
+                cause_id=cause_id,
+                tag=tag,
+                api_key=self._api_key,
+            )
 
     async def _await_interrupted_status(
         self,

@@ -21,6 +21,18 @@ _signal_collector: ContextVar[list[Signal] | None] = ContextVar(
 )
 
 
+# ── Typed progress writer — set by worker before each task execution ──────────
+# Typed as Any to avoid a monet.core → monet.queue import cycle.
+# At runtime this holds a ProgressWriter instance or None.
+
+_progress_writer_cv: ContextVar[Any] = ContextVar("_progress_writer_cv", default=None)
+
+# Current task_id — set alongside _progress_writer_cv by the worker so the
+# decorator can attribute lifecycle events to the correct task.
+
+_current_task_id: ContextVar[str] = ContextVar("_current_task_id", default="")
+
+
 # ── Progress publisher — set by the worker before each invocation ─────────────
 # The worker wraps each task with a publisher that forwards into a bounded
 # asyncio.Queue drained asynchronously to task_queue.publish_progress(). This

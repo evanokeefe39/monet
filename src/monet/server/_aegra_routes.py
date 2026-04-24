@@ -22,7 +22,7 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
@@ -36,105 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 logger = logging.getLogger("monet.server")
-
-
-async def _reissue_in_flight_push(queue: object) -> None:
-    """Re-dispatch push tasks that were in-flight when the server last crashed.
-
-    Called once during lifespan startup, before the reclaim loop begins.
-    Tasks that already exhausted all retries are failed immediately; others
-    are re-dispatched via a fresh HTTP POST so Cloud Run / Lambda receives
-    the dispatch envelope again.
-
-    Hard-fails at boot when in-flight push records exist but MONET_API_KEY
-    or MONET_SERVER_URL is unset — silent continuation would drop every
-    recovering task with no indication of the root cause.
-    """
-    if not isinstance(queue, QueueMaintenance):
-        return
-    # queue satisfies both QueueMaintenance and TaskQueue in practice;
-    # cast for the push functions that accept TaskQueue.
-    from monet.queue import TaskQueue
-
-    task_queue = cast("TaskQueue", queue)
-    records = await queue.list_in_flight_push_dispatches()
-    if not records:
-        return
-    logger.info(
-        "Reissuing %d in-flight push dispatch(es) from previous run",
-        len(records),
-    )
-
-    from monet.config import MONET_SERVER_URL, AuthConfig
-    from monet.config._env import read_str
-
-    api_key = AuthConfig.load().api_key
-    if not api_key:
-        raise RuntimeError(
-            f"Server has {len(records)} in-flight push-dispatch record(s) requiring "
-            "re-dispatch but MONET_API_KEY is unset. "
-            "Set MONET_API_KEY before restarting, or clear push-dispatch records."
-        )
-    api_url = read_str(MONET_SERVER_URL)
-    if not api_url:
-        raise RuntimeError(
-            f"Server has {len(records)} in-flight push-dispatch record(s) requiring "
-            "re-dispatch but MONET_SERVER_URL is unset."
-        )
-
-    from monet.orchestration import (
-        PUSH_MAX_ATTEMPTS,
-        push_with_retry,
-        write_dispatch_failed,
-    )
-    from monet.server._auth import task_hmac
-
-    for rec in records:
-        task_id = rec["task_id"]
-        attempt = int(rec.get("attempt", 0))
-        url = rec.get("url", "")
-        dispatch_secret = rec.get("dispatch_secret") or None
-        task_payload = rec.get("task_payload", "")
-
-        if not url or not task_payload:
-            logger.warning(
-                "push_dispatch restart_recovery: incomplete record %s, skipping",
-                task_id,
-            )
-            await queue.pop_push_dispatch(task_id)
-            continue
-
-        if attempt >= PUSH_MAX_ATTEMPTS:
-            logger.warning(
-                "push_dispatch restart_recovery: task %s exhausted, failing",
-                task_id,
-            )
-            detail = f"exhausted {attempt} attempts before server restart"
-            await write_dispatch_failed(task_id, task_queue, detail)
-            continue
-
-        token = task_hmac(api_key, task_id)
-        envelope = {
-            "task_id": task_id,
-            "token": token,
-            "callback_url": f"{api_url.rstrip('/')}/api/v1/tasks/{task_id}",
-            "payload": task_payload,
-        }
-        headers: dict[str, str] = {}
-        if dispatch_secret:
-            headers["Authorization"] = f"Bearer {dispatch_secret}"
-
-        asyncio.create_task(  # noqa: RUF006
-            push_with_retry(
-                task_id,
-                task_queue,
-                url,
-                headers,
-                envelope,
-                task_payload,
-                dispatch_secret=dispatch_secret,
-            )
-        )
 
 
 _deployments = DeploymentStore()
@@ -171,7 +72,6 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.queue = queue
 
     await _deployments.initialize()
-    await _reissue_in_flight_push(queue)
 
     cfg = QueueConfig.load()
 
