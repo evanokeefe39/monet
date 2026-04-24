@@ -12,6 +12,7 @@ import contextlib
 import logging
 import random
 import secrets
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -171,6 +172,16 @@ async def invoke_agent(
         )
         raise RuntimeError(msg)
 
+    # 0. Sniff orchestration context (for in-graph invocations)
+    if not thread_id:
+        try:
+            from langgraph.config import get_config
+
+            cfg = get_config()
+            thread_id = cfg.get("configurable", {}).get("thread_id")
+        except (ImportError, LookupError, RuntimeError):
+            pass
+
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_trace_id = trace_id or _generate_trace_id()
 
@@ -182,9 +193,8 @@ async def invoke_agent(
         "run_id": resolved_run_id,
         "agent_id": agent_id,
         "skills": skills or [],
+        "thread_id": thread_id or "",
     }
-    if thread_id:
-        ctx["thread_id"] = thread_id
 
     # Pool routing: prefer the local registry (in-process ``@agent``
     # handlers carry pool on the wrapper), fall back to the server
@@ -200,6 +210,10 @@ async def invoke_agent(
         pool = _capability_index.get_pool(agent_id, command)
     if pool is None:
         pool = "local"
+
+    # 2. Prepare task context for worker-side rehydration
+    # Ensure all orchestration metadata (thread_id, run_id) is preserved
+    ctx["run_id"] = resolved_run_id
 
     task_id = str(uuid.uuid4())
     record: TaskRecord = {
@@ -230,8 +244,9 @@ async def invoke_agent(
         "command": command,
         "run_id": resolved_run_id,
         "task_id": task_id,
+        "thread_id": str(ctx.get("thread_id") or ""),
+        "timestamp_ms": int(time.time() * 1000),
     }
-    _emit_lifecycle({"status": AGENT_STARTED_STATUS, **_lifecycle})
     with tracer.start_as_current_span(
         f"agent.{agent_id}.{command}",
         attributes={
@@ -245,6 +260,9 @@ async def invoke_agent(
         # to observe. Push pools additionally POST to the provider
         # webhook — pull pools rely on a worker's claim loop.
         await _task_queue.enqueue(record)
+
+        # Emit started status AFTER enqueue so the task identity is established
+        _emit_lifecycle({"status": AGENT_STARTED_STATUS, **_lifecycle})
         pool_cfg = _load_push_pool(pool)
         if pool_cfg is not None:
             try:

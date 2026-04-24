@@ -156,6 +156,7 @@ class ChatClient:
         input: dict[str, Any] | None = None,
         command: dict[str, Any] | None = None,
     ) -> AsyncIterator[str | AgentProgress]:
+        active_run_id = ""
         async for mode, data in stream_run(
             self._client,
             thread_id,
@@ -163,12 +164,17 @@ class ChatClient:
             input=input,
             command=command,
         ):
+            if mode == "metadata":
+                if isinstance(data, dict):
+                    active_run_id = data.get("run_id", "")
+                continue
+
             if mode == "error":
                 raise ServerError(None, str(data))
             if mode == "custom":
                 _log.debug("custom event type=%s data=%r", type(data).__name__, data)
                 if isinstance(data, dict):
-                    rid = data.get("run_id", "")
+                    rid = data.get("run_id", "") or active_run_id
                     if not rid:
                         _log.debug("progress event missing run_id: %s", data)
                     progress = _build_agent_progress(rid, data)

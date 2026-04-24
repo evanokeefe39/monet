@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 import httpx
@@ -29,25 +29,27 @@ from monet.config import MONET_API_KEY, MONET_SERVER_URL
 _DEFAULT_LOG_DIR = Path.cwd() / ".cli-logs"
 
 
-def _log_filename(thread_id: str) -> str:
-    """Build ``<ISO-timestamp>_<thread_id>.log`` name for this session."""
-    ts = datetime.now(UTC).strftime("%Y%m%d")
-    tid = thread_id[:12] if thread_id else "new"
-    return f"{ts}_{tid}.log"
+def _get_log_path(log_dir: Path, session_id: str) -> Path:
+    """Build .cli-logs/YYYYMMDD/HH-mm-ss_<session_id>.log path."""
+    now = datetime.now()
+    date_part = now.strftime("%Y%m%d")
+    time_part = now.strftime("%H-%m-%S")
+
+    full_dir = log_dir / date_part
+    full_dir.mkdir(parents=True, exist_ok=True)
+
+    return full_dir / f"{time_part}_{session_id}.log"
 
 
 def _configure_chat_logging(
     log_dir: Path,
-    thread_id: str,
+    session_id: str,
 ) -> Path:
-    """Route Python logging to a per-thread file under *log_dir*.
+    """Route Python logging to a per-session file.
 
-    Only called when ``--verbose`` is active. Textual swallows
-    stdout/stderr while the app is running, so a file handler is the
-    only way to preserve tracebacks and diagnostics.
+    Only called when ``--verbose`` is active.
     """
-    log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_dir / _log_filename(thread_id)
+    path = _get_log_path(log_dir, session_id)
     handler = logging.FileHandler(path, encoding="utf-8")
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(
@@ -62,6 +64,7 @@ def _configure_chat_logging(
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
 
+    # Simplified internal traces
     debug_log = Path.home() / ".monet" / "chat-debug.log"
     debug_log.parent.mkdir(parents=True, exist_ok=True)
     sse_handler = logging.FileHandler(debug_log, encoding="utf-8")
@@ -234,6 +237,10 @@ async def _chat_main(
         await _render_session_list(client)
         return
 
+    import uuid
+
+    session_id = uuid.uuid4().hex[:12]
+
     thread_id = await _resolve_thread(
         client,
         resume_id=resume_id,
@@ -243,7 +250,7 @@ async def _chat_main(
 
     log_path: Path | None = None
     if verbose:
-        log_path = _configure_chat_logging(_DEFAULT_LOG_DIR, thread_id)
+        log_path = _configure_chat_logging(_DEFAULT_LOG_DIR, session_id)
         if not list_sessions:
             click.secho(f"chat logs → {log_path}", dim=True, err=True)
 

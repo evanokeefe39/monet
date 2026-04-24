@@ -129,26 +129,26 @@ class StatusBar(Widget):
             elapsed = int(time.monotonic() - self._run_start)
             mins, secs = divmod(elapsed, 60)
             t.append(f"{mins}:{secs:02d} ", style=_V["text-muted"])
-            t.append("run:", style=_T.secondary)
+            t.append("run:", style=_T.accent)
             t.append(self._active_run[:8], style=_V["text-muted"])
             t.append(" ", style="")
             t.append(self.update_spinner(), style=_V["status-highlight"])
             t.append(" · ", style=_V["text-muted"])
 
         if self._thread_name:
-            t.append("thread:", style=_T.secondary)
+            t.append("thread:", style=_T.accent)
             t.append(self._thread_name, style=_V["text-muted"])
             t.append(" · ", style=_V["text-muted"])
 
-        t.append("runs:", style=_T.secondary)
+        t.append("runs:", style=_T.accent)
         t.append(str(self._runs), style=_V["text-muted"])
         t.append(" · ", style=_V["text-muted"])
 
-        t.append("agents:", style=_T.secondary)
+        t.append("agents:", style=_T.accent)
         t.append(str(self._agents), style=_V["text-muted"])
         t.append(" · ", style=_V["text-muted"])
 
-        t.append("artifacts:", style=_T.secondary)
+        t.append("artifacts:", style=_T.accent)
         t.append(str(self._artifacts), style=_V["text-muted"])
 
         return t

@@ -23,6 +23,8 @@ from monet.types import AgentResult, Signal
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from monet.queue._interface import ProgressStore
+
 _log = logging.getLogger("monet.queue.memory")
 
 __all__ = ["InMemoryTaskQueue"]
@@ -59,6 +61,7 @@ class InMemoryTaskQueue:
         max_pending: int = 0,
         completion_ttl_seconds: float = _DEFAULT_COMPLETION_TTL,
         progress_maxlen: int = _DEFAULT_PROGRESS_MAXLEN,
+        telemetry_store: ProgressStore | None = None,
     ) -> None:
         self._tasks: dict[str, TaskRecord] = {}
         self._pool_queues: dict[str, asyncio.Queue[str]] = defaultdict(asyncio.Queue)
@@ -77,6 +80,7 @@ class InMemoryTaskQueue:
         # Maps task_id → set of secondary keys (run_ids) written to _progress_history
         # via dual-index. Pruned together with the primary task record.
         self._secondary_keys: dict[str, set[str]] = {}
+        self._telemetry_store = telemetry_store
 
     @property
     def pending_count(self) -> int:
@@ -234,13 +238,22 @@ class InMemoryTaskQueue:
 
     # --- Progress streaming ---
 
-    async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
+    async def publish_progress(
+        self, task_id: str, event: dict[str, Any], **kwargs: Any
+    ) -> None:
         """Persist and fan out a progress event. Drops on full queue."""
-        entry = {"v": "1", "ts": time.monotonic_ns(), **event}
+        import time as _time
+
+        if "timestamp_ms" not in event:
+            event["timestamp_ms"] = int(_time.time() * 1000)
+
+        entry = {"v": "1", "ts": _time.monotonic_ns(), **event}
         history = self._progress_history[task_id]
         history.append(entry)
         if len(history) > self._progress_maxlen:
             self._progress_history[task_id] = history[-self._progress_maxlen :]
+
+        # Dual-index by run_id
         run_id = event.get("run_id", "")
         if run_id and run_id != task_id:
             run_history = self._progress_history[run_id]
@@ -248,9 +261,35 @@ class InMemoryTaskQueue:
             if len(run_history) > self._progress_maxlen:
                 self._progress_history[run_id] = run_history[-self._progress_maxlen :]
             self._secondary_keys.setdefault(task_id, set()).add(run_id)
+
+        # Dual-index by thread_id
+        thread_id = event.get("thread_id", "")
+        if thread_id and thread_id != task_id:
+            thread_history = self._progress_history[thread_id]
+            thread_history.append(entry)
+            if len(thread_history) > self._progress_maxlen:
+                self._progress_history[thread_id] = thread_history[
+                    -self._progress_maxlen :
+                ]
+            self._secondary_keys.setdefault(task_id, set()).add(thread_id)
+
+        # Persistence
+        if self._telemetry_store:
+            await self._telemetry_store.publish_progress(task_id, event)
+
         for sub_q in self._progress_subscribers.get(task_id, set()):
             with contextlib.suppress(asyncio.QueueFull):
                 sub_q.put_nowait(event)
+
+    async def get_thread_progress_history(
+        self, thread_id: str, *, count: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return stored progress events for an entire thread."""
+        if self._telemetry_store:
+            return await self._telemetry_store.get_thread_progress_history(
+                thread_id, count=count
+            )
+        return list(self._progress_history.get(thread_id, []))[:count]
 
     async def subscribe_progress(self, task_id: str) -> AsyncIterator[dict[str, Any]]:
         """Yield progress events until the task reaches a terminal state."""

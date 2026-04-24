@@ -272,26 +272,34 @@ class MonetClient:
         self._store.put_thread(rid, graph_id, thread)
         yield RunStarted(run_id=rid, graph_id=graph_id, thread_id=thread)
 
+        active_rid = rid
         try:
             async for mode, data in stream_run(
                 self._client, thread, graph_id, input=input or {}
             ):
+                if mode == "metadata":
+                    if isinstance(data, dict):
+                        active_rid = data.get("run_id", active_rid)
+                    continue
+
                 if mode == "error":
-                    yield RunFailed(run_id=rid, error=str(data))
+                    yield RunFailed(run_id=active_rid, error=str(data))
                     return
                 if mode == "custom" and isinstance(data, dict):
-                    signal = _build_signal_emitted(rid, data)
+                    signal = _build_signal_emitted(active_rid, data)
                     if signal is not None:
                         yield signal
                         continue
-                    progress = _build_agent_progress(rid, data)
+                    progress = _build_agent_progress(active_rid, data)
                     if progress is not None:
                         yield progress
                         continue
                 elif mode == "updates" and isinstance(data, dict):
                     for node_name, update in data.items():
                         if isinstance(update, dict):
-                            yield NodeUpdate(run_id=rid, node=node_name, update=update)
+                            yield NodeUpdate(
+                                run_id=active_rid, node=node_name, update=update
+                            )
 
             values, nxt = await get_state_values(self._client, thread)
             if nxt:

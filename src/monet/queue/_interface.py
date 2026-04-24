@@ -206,14 +206,20 @@ class ProgressStore(Protocol):
     server layer. Follows the :class:`QueueMaintenance` precedent.
     """
 
+    async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
+        """Persist a progress event for the given task."""
+        ...
+
     async def get_progress_history(
         self, run_id: str, *, count: int = 1000
     ) -> list[dict[str, Any]]:
-        """Return stored progress events for a run, oldest-first.
+        """Return stored progress events for a run, oldest-first."""
+        ...
 
-        Returns best-effort history — may have gaps due to trimming or
-        write failures. Not a complete audit trail.
-        """
+    async def get_thread_progress_history(
+        self, thread_id: str, *, count: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return stored progress events for an entire thread, oldest-first."""
         ...
 
     async def expire_progress(self, run_id: str, ttl: int) -> None:

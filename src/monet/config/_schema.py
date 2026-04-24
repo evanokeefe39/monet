@@ -58,6 +58,7 @@ from ._env import (
     MONET_QUEUE_LEASE_TTL,
     MONET_QUEUE_RECLAIM_INTERVAL,
     MONET_SERVER_URL,
+    MONET_SKIP_SMOKE_TEST,
     MONET_TRACE_FILE,
     MONET_WORKER_AGENTS,
     MONET_WORKER_CONCURRENCY,
@@ -428,6 +429,7 @@ class ChatConfig(BaseModel):
     graph: str = _DEFAULT_CHAT_GRAPH
     respond_model: str = _DEFAULT_CHAT_RESPOND_MODEL
     triage_model: str = _DEFAULT_CHAT_TRIAGE_MODEL
+    skip_smoke_test: bool = True
 
     @classmethod
     def load(cls) -> ChatConfig:
@@ -454,10 +456,14 @@ class ChatConfig(BaseModel):
             or (toml_triage if isinstance(toml_triage, str) and toml_triage else None)
             or _DEFAULT_CHAT_TRIAGE_MODEL
         )
+        skip_smoke_test = read_bool(MONET_SKIP_SMOKE_TEST, True) or (
+            section.get("skip_smoke_test") if isinstance(section, dict) else True
+        )
         return cls(
             graph=graph,
             respond_model=respond_model,
             triage_model=triage_model,
+            skip_smoke_test=bool(skip_smoke_test),
         )
 
     def validate_for_boot(self) -> None:

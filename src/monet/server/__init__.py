@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
     from monet.queue import TaskQueue
 
+from monet.config._schema import ChatConfig
+
 __all__ = ["create_app"]
 
 
@@ -63,6 +65,13 @@ def create_app(
 
         app.state.start_time = _time.monotonic()
         await deployments.initialize()
+
+        # Model smoke test — fail fast if models are decomm'd or keys invalid
+        chat_cfg = ChatConfig.load()
+        if not chat_cfg.skip_smoke_test:
+            from monet.server._smoke import smoke_test_models
+
+            await smoke_test_models(chat_cfg)
 
         # Periodic stale-deployment sweeper
         sweeper_task: asyncio.Task[None] | None = None

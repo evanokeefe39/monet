@@ -49,8 +49,26 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
     function trusts that credentials for the chosen backend are present.
     """
     if cfg.backend == "memory":
-        queue: TaskQueue = InMemoryTaskQueue()
-        return queue
+        from monet.config import read_int
+        from monet.queue.backends.sqlite_store import SqliteProgressStore
+
+        db_path = os.environ.get("MONET_PROGRESS_DB")
+        store = None
+        if db_path:
+            max_ev = read_int("MONET_PROGRESS_MAX_EVENTS", 50_000)
+            ttl_days = read_int("MONET_PROGRESS_TTL_DAYS", 7)
+            store = SqliteProgressStore(db_path, max_events=max_ev, ttl_days=ttl_days)
+            _log.info(
+                "Persistent progress store enabled: %s (max=%d, ttl=%dd)",
+                db_path,
+                max_ev,
+                ttl_days,
+            )
+
+        return InMemoryTaskQueue(  # type: ignore[no-any-return]
+            completion_ttl_seconds=cfg.completion_ttl_seconds, telemetry_store=store
+        )
+
     if cfg.backend == "redis":
         from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 
