@@ -7,29 +7,16 @@ Public surface for custom graph authors:
 - Graph builders — composable subgraphs for planning, execution, chat
 - Lifecycle constants — ``AGENT_*_STATUS`` for progress stream convention
 - Queue config — ``configure_queue``, ``get_queue``
-
-Server-bootstrap internals (``push_with_retry``, ``close_dispatch_client``,
-etc.) are importable but not part of ``__all__``.
 """
 
-from ._invoke import (
-    _PUSH_MAX_ATTEMPTS as PUSH_MAX_ATTEMPTS,
-)
 from ._invoke import (
     AGENT_COMPLETED_STATUS,
     AGENT_FAILED_STATUS,
     AGENT_STARTED_STATUS,
-    close_dispatch_client,
     configure_capability_index,
     configure_queue,
     get_queue,
     invoke_agent,
-)
-from ._invoke import (
-    _push_with_retry as push_with_retry,
-)
-from ._invoke import (
-    _write_dispatch_failed as write_dispatch_failed,
 )
 from ._state import (
     ExecutionState,
@@ -49,8 +36,6 @@ __all__ = [
     "AGENT_COMPLETED_STATUS",
     "AGENT_FAILED_STATUS",
     "AGENT_STARTED_STATUS",
-    # Queue + dispatch config
-    "PUSH_MAX_ATTEMPTS",
     # State schemas
     "ChatState",
     "ExecutionState",
@@ -64,11 +49,8 @@ __all__ = [
     "build_default_graph",
     "build_execution_subgraph",
     "build_planning_subgraph",
-    "close_dispatch_client",
     "configure_capability_index",
     "configure_queue",
     "get_queue",
     "invoke_agent",
-    "push_with_retry",
-    "write_dispatch_failed",
 ]

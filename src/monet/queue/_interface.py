@@ -161,10 +161,9 @@ class QueueMaintenance(Protocol):
     """Optional maintenance operations for persistent queue backends.
 
     Not part of the core transport-neutral contract. Backends that
-    support lease-based crash recovery and push-dispatch tracking
-    implement this protocol. Server lifespans check
-    ``isinstance(queue, QueueMaintenance)`` to activate sweepers and
-    boot recovery without coupling to a specific backend class.
+    support lease-based crash recovery implement this protocol. Server
+    lifespans check ``isinstance(queue, QueueMaintenance)`` to activate
+    the reclaim sweeper without coupling to a specific backend class.
     """
 
     @property
@@ -174,26 +173,6 @@ class QueueMaintenance(Protocol):
 
     async def reclaim_expired(self) -> list[str]:
         """Reclaim tasks whose lease has expired. Returns reclaimed task_ids."""
-        ...
-
-    async def record_push_dispatch(
-        self,
-        task_id: str,
-        url: str,
-        dispatch_secret: str | None,
-        task_payload: str,
-        *,
-        attempt: int = 0,
-    ) -> None:
-        """Track an in-flight push dispatch for restart recovery."""
-        ...
-
-    async def pop_push_dispatch(self, task_id: str) -> None:
-        """Remove a push dispatch tracking record on success or terminal failure."""
-        ...
-
-    async def list_in_flight_push_dispatches(self) -> list[dict[str, Any]]:
-        """List all in-flight push dispatch records for boot recovery."""
         ...
 
 

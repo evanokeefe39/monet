@@ -71,18 +71,6 @@ logger = logging.getLogger("monet.cli.worker")
     type=click.Path(exists=True),
     help="Path to agents.toml for declarative agent registration.",
 )
-@click.option(
-    "--push",
-    "push_mode",
-    is_flag=True,
-    default=False,
-    help=(
-        "Run as a push worker: start a FastAPI server on $PORT (default "
-        "8080) serving POST /dispatch. Use this for Cloud Run Service, "
-        "Lambda Function URL, Azure Container Apps, and any other "
-        "HTTP-triggered compute. Requires MONET_DISPATCH_SECRET."
-    ),
-)
 def worker(
     path: str,
     pool: str | None,
@@ -90,7 +78,6 @@ def worker(
     server_url: str | None,
     api_key: str | None,
     agents_file: str | None,
-    push_mode: bool,
 ) -> None:
     """Start a monet worker process.
 
@@ -133,40 +120,7 @@ def worker(
         raise click.ClickException(str(exc)) from None
 
     logger.info("monet worker booted: %s", cfg.redacted_summary())
-    if push_mode:
-        _run_push(Path(path), cfg)
-    else:
-        asyncio.run(_run_worker(Path(path), cfg))
-
-
-def _run_push(path: Path, cfg: WorkerConfig) -> None:
-    """Start the FastAPI push-dispatch app on $PORT.
-
-    The push worker is a short-lived HTTP server: the cloud provider
-    invokes ``POST /dispatch`` per task, the handler runs the agent,
-    and the container exits on SIGTERM. Import is deferred so running
-    ``monet worker`` without ``--push`` does not pull uvicorn/FastAPI.
-    """
-    import os
-
-    import uvicorn
-
-    from monet.core.push_handler import create_push_app
-
-    # Load agents into the global registry so create_push_app's default
-    # can dispatch to them. Reuse the same discovery + import path as
-    # pull-mode workers.
-    _import_agents(path, cfg)
-
-    if "MONET_DISPATCH_SECRET" not in os.environ:
-        raise click.ClickException(
-            "MONET_DISPATCH_SECRET must be set when running monet worker --push"
-        )
-
-    app = create_push_app()
-    port = int(os.environ.get("PORT", "8080"))
-    logger.info("monet push worker listening on 0.0.0.0:%d", port)
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    asyncio.run(_run_worker(Path(path), cfg))
 
 
 def _import_agents(path: Path, cfg: WorkerConfig) -> None:

@@ -28,7 +28,6 @@ import contextlib
 import json
 import logging
 import socket
-import time
 from typing import TYPE_CHECKING, Any
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
@@ -488,57 +487,6 @@ class RedisStreamsTaskQueue:
         """Set EXPIRE on the progress stream for a completed run."""
         client = await self._ensure_client()
         await client.expire(_progress_stream(run_id), ttl)  # type: ignore[misc]
-
-    # --- Push dispatch tracking (restart recovery) -----------------------
-
-    def _push_dispatch_key(self, task_id: str) -> str:
-        return f"push_dispatch:{task_id}"
-
-    async def record_push_dispatch(
-        self,
-        task_id: str,
-        url: str,
-        dispatch_secret: str | None,
-        task_payload: str,
-        *,
-        attempt: int = 0,
-    ) -> None:
-        """Record an in-flight push dispatch so the server can reissue after restart."""
-        client = await self._ensure_client()
-        ttl = self._lease_ttl + 60
-        await client.hset(  # type: ignore[misc]
-            self._push_dispatch_key(task_id),
-            mapping={
-                "url": url,
-                "dispatch_secret": dispatch_secret or "",
-                "task_payload": task_payload,
-                "attempt": str(attempt),
-                "started_at": str(time.time()),
-            },
-        )
-        await client.expire(self._push_dispatch_key(task_id), ttl)  # type: ignore[misc]
-
-    async def pop_push_dispatch(self, task_id: str) -> None:
-        """Remove the dispatch tracking record on success or failure."""
-        client = await self._ensure_client()
-        await client.delete(self._push_dispatch_key(task_id))
-
-    async def list_in_flight_push_dispatches(
-        self,
-    ) -> list[dict[str, str]]:
-        """Return all in-flight push dispatch records for restart recovery.
-
-        Scans ``push_dispatch:*`` keys and returns their contents with
-        ``task_id`` injected. Called once at server startup; not on the hot path.
-        """
-        client = await self._ensure_client()
-        records: list[dict[str, str]] = []
-        async for key in client.scan_iter("push_dispatch:*"):
-            data: dict[str, str] = await client.hgetall(key)  # type: ignore[misc]
-            if data:
-                task_id = key.removeprefix("push_dispatch:")
-                records.append({"task_id": task_id, **data})
-        return records
 
     # --- QueueMaintenance protocol -----------------------------------------
 
