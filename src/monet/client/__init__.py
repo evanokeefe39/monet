@@ -70,6 +70,8 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
+    from monet.queue._progress import ProgressEvent
+
 _log = logging.getLogger("monet.client")
 
 
@@ -207,6 +209,7 @@ class MonetClient:
         url: str | None = None,
         *,
         api_key: str | None = None,
+        data_plane_url: str | None = None,
         graph_ids: dict[str, str] | None = None,
     ) -> None:
         from monet.client.chat import ChatClient
@@ -215,8 +218,12 @@ class MonetClient:
         cfg = ClientConfig.load()
         resolved_url = url if url is not None else cfg.server_url
         resolved_key = api_key if api_key is not None else cfg.api_key
+        resolved_data_url = (
+            data_plane_url if data_plane_url is not None else cfg.data_plane_url
+        )
         self._url = resolved_url
         self._api_key = resolved_key
+        self._data_url: str = resolved_data_url or resolved_url
         self._client: LangGraphClient = make_client(resolved_url, api_key=resolved_key)
         self._store = _RunStore()
         self._entrypoints = load_entrypoints()
@@ -681,6 +688,61 @@ class MonetClient:
                 seen.add(gid)
                 graph_ids.append(gid)
         return sorted(graph_ids)
+
+    # ── Data-plane telemetry ─────────────────────────────────────
+
+    async def query_events(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> list[ProgressEvent]:
+        """Fetch typed progress events for *run_id* from the data plane.
+
+        Args:
+            run_id: The run to query.
+            after: Return only events with ``event_id > after`` (cursor).
+            limit: Maximum events to return (1-1000).
+
+        Returns:
+            List of :class:`~monet.queue._progress.ProgressEvent` dicts,
+            ordered by ``event_id``.
+        """
+        from monet.client._wire import query_progress_events
+
+        return await query_progress_events(  # type: ignore[return-value]
+            self._data_url,
+            run_id,
+            api_key=self._api_key,
+            after=after,
+            limit=limit,
+        )
+
+    async def subscribe_events(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+    ) -> AsyncIterator[ProgressEvent]:
+        """Stream typed progress events for *run_id* from the data plane.
+
+        Polls ``GET /runs/{run_id}/events`` and yields events as they
+        arrive, tracking the cursor so reconnects never duplicate. Stops
+        when a terminal event (``run_completed`` / ``run_cancelled``) is
+        received or the caller closes the iterator.
+
+        When ``data_plane_url`` is ``None``, reads from the unified URL.
+        """
+        from monet.client._wire import stream_progress_events
+
+        async for event in stream_progress_events(
+            self._data_url,
+            run_id,
+            api_key=self._api_key,
+            after=after,
+        ):
+            yield event  # type: ignore[misc]
 
     # ── Private helpers ─────────────────────────────────────────
 
