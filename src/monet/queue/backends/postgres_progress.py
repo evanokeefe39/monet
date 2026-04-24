@@ -198,6 +198,22 @@ class PostgresProgressBackend:
             )
         return row is not None
 
+    async def has_decision(self, run_id: str, cause_id: str) -> bool:
+        """Return True if a HITL_DECISION event with payload.cause_id exists."""
+        pool = await self._pool_or_raise()
+        async with pool.connection() as conn:
+            row = await conn.fetchone(
+                """
+                SELECT 1 FROM typed_progress_events
+                WHERE run_id = %s
+                  AND event_type = %s
+                  AND payload->>'cause_id' = %s
+                LIMIT 1
+                """,
+                (run_id, str(EventType.HITL_DECISION), cause_id),
+            )
+        return row is not None
+
 
 def _row_to_event(row: tuple[Any, ...]) -> ProgressEvent:
     (

@@ -271,6 +271,51 @@ async def query_progress_events(
     return resp.json().get("events", [])  # type: ignore[no-any-return]
 
 
+async def post_hitl_decision(
+    url: str,
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    cause_id: str,
+    tag: str,
+    *,
+    api_key: str | None = None,
+    timestamp_ms: int | None = None,
+) -> None:
+    """POST a HITL_DECISION event to the data plane.
+
+    Returns normally on 202 (accepted). Raises :class:`AlreadyResolved` on
+    409 (decision already recorded for this cause_id). Re-raises other HTTP
+    errors unchanged.
+    """
+    import time
+
+    import httpx
+
+    from monet.client._errors import AlreadyResolved
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    base = url.rstrip("/")
+    body = {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "event_type": "hitl_decision",
+        "timestamp_ms": timestamp_ms or int(time.time() * 1000),
+        "payload": {"cause_id": cause_id, "tag": tag},
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{base}/runs/{run_id}/events",
+            json=body,
+            headers=headers,
+        )
+    if resp.status_code == 409:
+        raise AlreadyResolved(run_id)
+    resp.raise_for_status()
+
+
 async def stream_progress_events(
     url: str,
     run_id: str,

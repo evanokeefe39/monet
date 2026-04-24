@@ -129,18 +129,32 @@ async def record_run_event(
     run_id: str,
     body: RecordEventRequest,
     writer: OptWriter,
+    reader: OptReader,
 ) -> dict[str, Any]:
     """Record a typed progress event for a run."""
     if writer is None:
         raise HTTPException(501, "No ProgressWriter configured")
     from monet.queue._progress import EventType, ProgressEvent
 
+    event_type = EventType(body.event_type)
+
+    if event_type == EventType.HITL_DECISION:
+        cause_id = body.payload.get("cause_id") if body.payload else None
+        if not cause_id:
+            raise HTTPException(400, "hitl_decision must include payload.cause_id")
+        if reader is None:
+            raise HTTPException(501, "No ProgressReader configured")
+        if not await reader.has_cause(run_id, cause_id):
+            raise HTTPException(400, "hitl_decision must reference a known hitl_cause")
+        if await reader.has_decision(run_id, cause_id):
+            raise HTTPException(409, "hitl_decision for this cause_id already recorded")
+
     event: ProgressEvent = {
         "event_id": 0,
         "run_id": run_id,
         "task_id": body.task_id,
         "agent_id": body.agent_id,
-        "event_type": EventType(body.event_type),
+        "event_type": event_type,
         "timestamp_ms": body.timestamp_ms,
     }
     if body.trace_id:

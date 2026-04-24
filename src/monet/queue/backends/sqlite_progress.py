@@ -156,6 +156,22 @@ class SqliteProgressBackend:
         row = await cursor.fetchone()
         return row is not None
 
+    async def has_decision(self, run_id: str, cause_id: str) -> bool:
+        """Return True if a HITL_DECISION event with payload.cause_id exists."""
+        db = await self._ensure_init()
+        cursor = await db.execute(
+            """
+            SELECT 1 FROM typed_progress_events
+            WHERE run_id = ?
+              AND event_type = ?
+              AND json_extract(payload, '$.cause_id') = ?
+            LIMIT 1
+            """,
+            (run_id, str(EventType.HITL_DECISION), cause_id),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
 
 def _row_to_event(row: dict[str, Any]) -> ProgressEvent:
     event: ProgressEvent = {

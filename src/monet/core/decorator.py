@@ -183,18 +183,20 @@ def _handle_exception(
     ctx: AgentRunContext,
     artifacts: list[ArtifactPointer],
     signals: list[Signal],
+    cause_id: str | None = None,
 ) -> AgentResult:
     """Translate typed or unexpected exceptions into AgentResult with signals.
 
     Appends an appropriate signal to the accumulated list, then builds
-    a failed AgentResult.
+    a failed AgentResult. cause_id, when provided, is embedded in the
+    signal metadata for HITL exceptions so it can flow to the interrupt payload.
     """
     if isinstance(exc, NeedsHumanReview):
         signals.append(
             Signal(
                 type=SignalType.NEEDS_HUMAN_REVIEW,
                 reason=exc.reason,
-                metadata=None,
+                metadata={"cause_id": cause_id} if cause_id else None,
             )
         )
     elif isinstance(exc, EscalationRequired):
@@ -202,7 +204,7 @@ def _handle_exception(
             Signal(
                 type=SignalType.ESCALATION_REQUIRED,
                 reason=exc.reason,
-                metadata=None,
+                metadata={"cause_id": cause_id} if cause_id else None,
             )
         )
     elif isinstance(exc, SemanticError):
@@ -237,6 +239,7 @@ async def _record_lifecycle(
     task_id: str,
     agent_id: str,
     event_type_str: str,
+    payload: dict[str, Any] | None = None,
 ) -> None:
     """Record a lifecycle ProgressEvent. Best-effort — never raises."""
     try:
@@ -255,6 +258,8 @@ async def _record_lifecycle(
             "event_type": EventType(event_type_str),
             "timestamp_ms": int(_time.time() * 1000),
         }
+        if payload:
+            event["payload"] = payload
         await pw.record(run_id, event)
     except Exception:
         pass
@@ -369,8 +374,20 @@ def agent(
                         )
                         return agent_result
                     except Exception as exc:
+                        cause_id: str | None = None
+                        if isinstance(exc, NeedsHumanReview | EscalationRequired):
+                            import uuid as _uuid
+
+                            cause_id = str(_uuid.uuid4())
+                            await _record_lifecycle(
+                                _run_id,
+                                _task_id,
+                                agent_id,
+                                "hitl_cause",
+                                payload={"cause_id": cause_id},
+                            )
                         agent_result = _handle_exception(
-                            exc, ctx, artifacts, signal_list
+                            exc, ctx, artifacts, signal_list, cause_id
                         )
                         span.set_attribute("agent.success", False)
                         span.record_exception(exc)

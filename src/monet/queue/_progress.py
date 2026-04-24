@@ -92,3 +92,7 @@ class ProgressReader(Protocol):
     async def has_cause(self, run_id: str, cause_id: str) -> bool:
         """Return True if a HITL_CAUSE event with payload.cause_id exists."""
         ...
+
+    async def has_decision(self, run_id: str, cause_id: str) -> bool:
+        """Return True if a HITL_DECISION event with payload.cause_id exists."""
+        ...
