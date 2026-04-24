@@ -64,6 +64,8 @@ Start the orchestration server.
 ```bash
 monet server --host 0.0.0.0 --port 8000
 monet server --config ./monet.toml --reload
+monet server --plane control
+monet server --plane data
 ```
 
 | Option | Default | Description |
@@ -72,8 +74,11 @@ monet server --config ./monet.toml --reload
 | `--port` | `8000` | Port to listen on |
 | `--config` | `monet.toml` in cwd | Path to monet.toml |
 | `--reload` | off | Enable auto-reload for development |
+| `--plane` | `unified` | Plane to run: `unified`, `control`, or `data` |
 
-The server creates a FastAPI application with worker registration, heartbeat, task dispatch, and deployment management endpoints. See [Server API Reference](../api/server.md) for endpoint details.
+The default (`--plane unified`) serves all routes in a single process. `--plane control` runs the control-plane only (worker management, task dispatch). `--plane data` runs the data-plane only (typed events, SSE, artifacts) and requires `MONET_PROGRESS_BACKEND`.
+
+See [Server API Reference](../api/server.md) for endpoint details and the split-plane section below.
 
 ### monet worker
 
@@ -187,16 +192,49 @@ Workers and CLI commands pass this via the `--api-key` flag or `MONET_API_KEY` e
 4. **Execution** — Worker executes agent handler, posts result via `POST /api/v1/tasks/{task_id}/complete` or `POST /api/v1/tasks/{task_id}/fail`.
 5. **Stale cleanup** — Server runs a sweeper every 60 seconds. Workers with no heartbeat for 90 seconds are dropped from the `CapabilityIndex`; orphan capabilities (no remaining worker serving them) are pruned.
 
+## Push pools and dispatch backends
+
+Push pools forward claimed tasks to external compute via the `DispatchBackend` protocol. Three implementations ship with monet:
+
+| Class | Target | Extra dependencies |
+|---|---|---|
+| `LocalDispatchBackend` | In-process (testing) | none |
+| `CloudRunDispatchBackend` | Google Cloud Run jobs | `google-cloud-run` |
+| `ECSDispatchBackend` | AWS ECS tasks | `aioboto3` |
+
+The `submit(task, server_url, api_key)` call returns as soon as the job is dispatched. The spawned container calls `complete`/`fail` and renews the lease directly — the dispatch worker has no further responsibility.
+
+## Split-plane deployment
+
+For large deployments, the control and data planes can run on separate hosts:
+
+```bash
+# Control plane — worker registration, task dispatch
+monet server --plane control --host 0.0.0.0 --port 8000
+
+# Data plane — typed events, SSE streams, artifacts
+MONET_PROGRESS_BACKEND=postgres \
+monet server --plane data --host 0.0.0.0 --port 8001
+```
+
+Workers and clients set `MONET_DATA_PLANE_URL` to point event recording and queries at the data-plane host:
+
+```bash
+export MONET_SERVER_URL=http://control:8000
+export MONET_DATA_PLANE_URL=http://data:8001
+```
+
+When `MONET_DATA_PLANE_URL` is unset, both planes are assumed to be at `MONET_SERVER_URL` (unified mode).
+
 ## Queue providers
 
-The task queue is pluggable. Four implementations are available:
+The task queue is pluggable. Three implementations are available:
 
 | Provider | Best for | Persistence | Dependencies |
 |---|---|---|---|
 | `InMemoryTaskQueue` | Development, testing | None | None |
 | `SQLiteTaskQueue` | Single-server production | SQLite file | aiosqlite |
 | `RedisTaskQueue` | Multi-server production | Redis | redis-py |
-| `UpstashTaskQueue` | Serverless (Lambda, Vercel) | Upstash Redis (HTTP) | upstash-redis |
 
 See [Queue Providers Reference](../api/queue.md) for constructor signatures and configuration.
 
@@ -206,8 +244,11 @@ See [Queue Providers Reference](../api/queue.md) for constructor signatures and 
 |---|---|---|
 | `MONET_API_KEY` | server, worker, CLI | Bearer token for authenticated endpoints |
 | `MONET_SERVER_URL` | worker, CLI | Orchestration server URL |
+| `MONET_DATA_PLANE_URL` | worker, client | Data-plane URL in split-plane deployments |
 | `MONET_CONFIG_PATH` | server | Path to monet.toml |
 | `MONET_ARTIFACTS_DIR` | server | Artifact Store storage directory |
 | `MONET_AGENT_TIMEOUT` | orchestration | Task poll timeout in seconds (default 600) |
 | `MONET_POOL_{NAME}_URL` | server | Pool endpoint URL |
 | `MONET_POOL_{NAME}_AUTH` | server | Pool auth token |
+| `MONET_PROGRESS_BACKEND` | server (data-plane) | `postgres` or `sqlite` (required for `--plane data`) |
+| `MONET_PROGRESS_DB` | server (data-plane) | SQLite file path when `MONET_PROGRESS_BACKEND=sqlite` |

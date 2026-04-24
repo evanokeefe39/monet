@@ -293,6 +293,64 @@ def _kill_process_tree(pid: int) -> None:
             os.kill(pid, signal.SIGTERM)
 
 
+def _try_kill_port_holder(port: int) -> bool:
+    """Best-effort: find and kill whatever process holds *port*.
+
+    Returns ``True`` if the port was successfully freed.
+    """
+    pid = _pid_holding_port(port)
+    if pid is None:
+        return False
+    _kill_process_tree(pid)
+    time.sleep(1.0)
+    return not _port_in_use(port)
+
+
+def _pid_holding_port(port: int) -> int | None:
+    """Return the PID of the process listening on *port*, or ``None``."""
+    if sys.platform == "win32":
+        return _pid_holding_port_windows(port)
+    return _pid_holding_port_unix(port)
+
+
+def _pid_holding_port_windows(port: int) -> int | None:
+    """Parse ``netstat -ano`` for the PID listening on *port*."""
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[3] != "LISTENING":
+            continue
+        if parts[1].endswith(f":{port}"):
+            with contextlib.suppress(ValueError):
+                return int(parts[4])
+    return None
+
+
+def _pid_holding_port_unix(port: int) -> int | None:
+    """Parse ``lsof -ti :<port>`` for the first PID."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in result.stdout.strip().splitlines():
+        with contextlib.suppress(ValueError):
+            return int(line.strip())
+    return None
+
+
 def _teardown_previous(current: Path) -> None:
     """If a different example was last active, stop its containers.
 
@@ -571,12 +629,22 @@ def _check_ports_free(dev_port: int) -> None:
         if not busy:
             return
 
+    if _port_in_use(dev_port):
+        click.echo(
+            f"No tracked state \u2014 attempting to reclaim :{dev_port} "
+            "from orphaned process."
+        )
+        if _try_kill_port_holder(dev_port):
+            busy = _busy_standard_ports(dev_port)
+            if not busy:
+                return
+
     lines = [f"  :{p} ({label})" for p, label in busy]
     detail = "\n".join(lines)
     raise click.ClickException(
         "Standard monet dev ports are already in use:\n"
         f"{detail}\n\n"
-        "No tracked monet example was able to free them — another "
+        "No tracked monet example was able to free them \u2014 another "
         "process is holding these ports. Stop it (check `docker ps` "
         "and any running `monet dev`), then retry."
     )

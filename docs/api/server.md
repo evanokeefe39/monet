@@ -2,7 +2,54 @@
 
 ## Python API
 
-### `create_app`
+### Named constructors
+
+Three named constructors cover the three deployment shapes. `create_app` is the original legacy factory and remains available; prefer `create_unified_app` for new code.
+
+#### `create_unified_app`
+
+```python
+from monet.server import create_unified_app
+
+def create_unified_app(
+    queue: TaskQueue,
+    capability_index: CapabilityIndex,
+    writer: ProgressWriter | None = None,
+    reader: ProgressReader | None = None,
+    artifact_store: ArtifactClient | None = None,
+) -> FastAPI
+```
+
+Single-process app serving both control and data plane routes. Intended for S1/S2/S3 deployments. Data-plane routes (typed events, SSE, artifacts) are mounted but return 501 when `writer` and `reader` are not provided.
+
+#### `create_control_app`
+
+```python
+from monet.server import create_control_app
+
+def create_control_app(
+    queue: TaskQueue,
+    capability_index: CapabilityIndex,
+) -> FastAPI
+```
+
+Control-plane-only app. Mounts: worker heartbeat, task claim/complete/fail, thread inspection, invocations, health. Accepts no `ProgressWriter` or `ArtifactStore` — the data boundary is enforced by the type system.
+
+#### `create_data_app`
+
+```python
+from monet.server import create_data_app
+
+def create_data_app(
+    writer: ProgressWriter,
+    reader: ProgressReader,
+    artifact_store: ArtifactClient | None = None,
+) -> FastAPI
+```
+
+Data-plane-only app. Mounts: typed event record/query, SSE stream, legacy progress endpoints, artifact CRUD, health. Accepts no `TaskQueue` or `CapabilityIndex`.
+
+#### `create_app` (legacy)
 
 ```python
 from monet.server import create_app
@@ -13,22 +60,13 @@ def create_app(
 ) -> FastAPI
 ```
 
-Creates a FastAPI application with worker management, task dispatch, and deployment tracking.
+Original unified factory. Loads pool topology from `monet.toml` at `config_path` (defaults to cwd), creates `InMemoryTaskQueue` if no queue is provided, and registers all routes under `/api/v1`. Still functional; superseded by `create_unified_app` for explicit wiring.
 
-- Loads pool topology from `monet.toml` at `config_path` (defaults to cwd, falls back to single `local` pool)
-- Creates `InMemoryTaskQueue` if no queue provided
-- Initializes SQLite-backed deployment store
-- Starts periodic stale-worker sweeper (60-second intervals, 90-second staleness threshold)
-- Registers all routes under `/api/v1`
+### Internal 0-arg factories
 
-**App state** (available on `app.state`):
+`_create_control_plane()` and `_create_data_plane()` are Uvicorn `factory=True` entry points used by `monet server --plane control` and `monet server --plane data`. They read config from env/toml and are not intended to be called directly.
 
-| Attribute | Type | Description |
-|---|---|---|
-| `queue` | `TaskQueue` | Task queue instance |
-| `deployments` | `DeploymentStore` | Worker deployment tracking |
-| `manifest` | `AgentManifest` | Capability manifest |
-| `config` | `dict[str, PoolConfig]` | Pool topology |
+`_create_data_plane()` requires `MONET_PROGRESS_BACKEND` to be set; raises `ConfigError` if absent.
 
 ### `bootstrap`
 
@@ -66,6 +104,18 @@ def configure_lazy_worker(queue: TaskQueue) -> None
 ```
 
 Patches `queue.enqueue()` to start the worker on first call. For `aegra dev` environments.
+
+---
+
+## Split-plane architecture
+
+The server can run as a single unified process or as two separate processes on different hosts:
+
+- **Control plane** — worker heartbeat, task claim/complete/fail, thread inspection, invocations. Started with `monet server --plane control`.
+- **Data plane** — typed progress events, SSE streams, artifact CRUD. Started with `monet server --plane data`. Requires `MONET_PROGRESS_BACKEND`.
+- **Unified** (default) — both planes in one process. `monet server` with no `--plane` flag.
+
+Workers and clients set `MONET_DATA_PLANE_URL` to direct event recording and queries to the data-plane host when running in split mode.
 
 ---
 
@@ -258,6 +308,71 @@ List active deployments.
     }
 ]
 ```
+
+---
+
+### `POST /api/v1/runs/{run_id}/events`
+
+Record a typed progress event for a run. Returns 501 when no `ProgressWriter` is configured.
+
+**Request body:**
+```json
+{
+    "task_id": "task-abc",
+    "agent_id": "researcher",
+    "event_type": "agent_started",
+    "timestamp_ms": 1700000000000,
+    "trace_id": "",
+    "payload": {}
+}
+```
+
+`event_type` must be a value from `EventType`: `agent_started`, `agent_completed`, `agent_failed`, `status`, `hitl_cause`, `hitl_decision`, `run_completed`, `run_cancelled`.
+
+For `hitl_decision`: `payload.cause_id` is required; returns 400 if the referenced `hitl_cause` does not exist, and 409 if a decision for that `cause_id` is already recorded.
+
+**Response (202):**
+```json
+{"event_id": 42}
+```
+
+---
+
+### `GET /api/v1/runs/{run_id}/events`
+
+Query typed progress events for a run. Returns 501 when no `ProgressReader` is configured.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `after` | `0` | Return only events with `event_id > after` (cursor) |
+| `limit` | `100` | Maximum events returned (1–1000) |
+
+**Response:**
+```json
+{
+    "run_id": "run-123",
+    "events": [...],
+    "count": 5
+}
+```
+
+---
+
+### `GET /api/v1/runs/{run_id}/events/stream`
+
+Stream typed progress events as Server-Sent Events. Returns 501 when no `ProgressReader` is configured.
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `after` | `0` | Start after this `event_id` |
+
+Each SSE message carries `id: <event_id>` so browser `EventSource` reconnects via the `Last-Event-ID` header automatically. The stream terminates when a `run_completed` or `run_cancelled` event is received.
+
+To reconnect without duplicates, pass `?after=<last_event_id>`.
 
 ---
 

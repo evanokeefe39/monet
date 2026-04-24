@@ -49,6 +49,8 @@ Dev: pytest, pytest-asyncio, hypothesis, httpx, ruff, mypy, mkdocs-material, pre
 - Every public function needs a test
 - conftest.py provides autouse `_queue_worker` fixture: creates InMemoryTaskQueue + background worker for all async tests. invoke_agent works transparently.
 
+- Always run tests with `-q 2>&1 | tail -60` so the pass/fail summary is visible in one shot. Never use `-v` without a tail pipe — output truncates and you will not know if tests passed without running again.
+
 ## Code navigation
 
 SymDex MCP installed, repo registered (`~/.symdex/monet.db`). Tools **deferred** — schemas not loaded by default. For ANY symbol lookup, callgraph trace, file outline, or semantic search against `src/monet/**`, **MUST** load schemas first via `ToolSearch`:
