@@ -129,10 +129,6 @@ def create_app(
                 with contextlib.suppress(asyncio.CancelledError):
                     await queue_sweeper_task
             await queue.close()
-            from monet.orchestration import close_dispatch_client
-
-            with contextlib.suppress(Exception):
-                await close_dispatch_client()
             await deployments.close()
 
     app = _FastAPI(lifespan=lifespan)

@@ -18,6 +18,7 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from monet.core.registry import LocalRegistry
     from monet.queue import TaskQueue, TaskRecord
+    from monet.queue._dispatch import ClaimedTask, DispatchBackend
 
 logger = logging.getLogger("monet.worker")
 
@@ -34,6 +35,9 @@ async def run_worker(
     queue: TaskQueue,
     registry: LocalRegistry | None = None,
     pool: str = "local",
+    dispatch_backend: DispatchBackend | None = None,
+    server_url: str = "",
+    api_key: str = "",
     max_concurrency: int = 10,
     poll_interval: float = 0.1,
     shutdown_timeout: float = 30.0,
@@ -50,6 +54,13 @@ async def run_worker(
         registry: Handler registry for local execution. Defaults to the
             global registry populated by ``@agent`` decorators.
         pool: Pool name this worker serves. Claims only tasks in this pool.
+        dispatch_backend: Optional cloud dispatch backend. When set, claimed
+            tasks are submitted to the backend instead of executed in-process.
+            The backend container calls complete/fail directly via WorkerClient.
+        server_url: Server URL passed to dispatch_backend.submit(). Required
+            when dispatch_backend is set.
+        api_key: API key passed to dispatch_backend.submit(). Required when
+            dispatch_backend is set.
         max_concurrency: Max concurrent task executions. Default 10.
         poll_interval: Seconds to sleep between claim attempts when the
             pool queue is empty. Default 0.1.
@@ -249,6 +260,26 @@ async def run_worker(
                 pool, consumer_id=consumer_id, block_ms=claim_block_ms
             )
             if record is None:
+                continue
+            if dispatch_backend is not None:
+                claimed: ClaimedTask = {
+                    "task_id": record["task_id"],
+                    "run_id": record["context"].get("run_id", ""),
+                    "thread_id": record["context"].get("thread_id", ""),
+                    "agent_id": record["agent_id"],
+                    "command": record["command"],
+                    "pool": pool,
+                }
+                try:
+                    await dispatch_backend.submit(claimed, server_url, api_key)
+                except Exception:
+                    logger.exception(
+                        "dispatch backend submit failed for task %s",
+                        record["task_id"],
+                    )
+                    await queue.fail(
+                        record["task_id"], "dispatch backend submit failed"
+                    )
                 continue
             task = asyncio.create_task(_execute(record))
             in_flight.add(task)
