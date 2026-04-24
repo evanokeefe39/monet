@@ -68,8 +68,8 @@ async def test_publish_subscribe_round_trip() -> None:
     await queue.complete(task_id, AgentResult(success=True, output="done"))
     await asyncio.wait_for(consumer_task, timeout=2.0)
 
-    assert {"status": "running"} in events
-    assert {"status": "step_2"} in events
+    assert any({"status": "running"}.items() <= e.items() for e in events)
+    assert any({"status": "step_2"}.items() <= e.items() for e in events)
 
 
 async def test_subscribe_cleanup_after_iteration() -> None:
@@ -146,7 +146,7 @@ async def test_sleep_zero_flush_before_return() -> None:
     await queue.complete(task_id, AgentResult(success=True, output="done"))
 
     await asyncio.wait_for(consumer_task, timeout=2.0)
-    assert {"final": True} in received
+    assert any({"final": True}.items() <= e.items() for e in received)
 
 
 # --- RemoteQueue subscribe raises NotImplementedError ---
@@ -175,7 +175,7 @@ async def test_forward_progress_suppresses_not_implemented() -> None:
             raise NotImplementedError("nope")
 
     # Should complete without raising.
-    await _forward_progress(NotImplQueue(), "t-1", "run-1")  # type: ignore[arg-type]
+    await _forward_progress(NotImplQueue(), "t-1")  # type: ignore[arg-type]
 
 
 # --- Worker drain flushes on cancellation ---
