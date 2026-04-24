@@ -14,6 +14,9 @@ def _load_model(model_string: str) -> Any:
     """Return a LangChain chat model for ``model_string`` (``provider:name``)."""
     from langchain.chat_models import init_chat_model  # type: ignore[import-not-found]
 
+    if ":" in model_string:
+        provider, model = model_string.split(":", 1)
+        return init_chat_model(model, model_provider=provider)
     return init_chat_model(model_string)
 
 

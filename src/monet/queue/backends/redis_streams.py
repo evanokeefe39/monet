@@ -82,6 +82,10 @@ def _progress_stream(task_id: str) -> str:
     return f"phist:{task_id}"
 
 
+def _thread_progress_stream(thread_id: str) -> str:
+    return f"phist:th:{thread_id}"
+
+
 def _index_key(task_id: str) -> str:
     return f"taskidx:{task_id}"
 
@@ -355,49 +359,64 @@ class RedisStreamsTaskQueue:
     # --- Progress streaming ---------------------------------------------
 
     async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
-        """XADD a progress event to the task's stream. Best-effort."""
+        """XADD a progress event to task, run, and thread streams. Best-effort."""
         try:
             payload = json.dumps(event)
         except (TypeError, ValueError):
             _log.debug("Progress event not JSON-serialisable, dropping", exc_info=True)
             return
+
         if len(payload) > MAX_INLINE_PAYLOAD_BYTES:
             _log.debug(
                 "Progress event %d bytes exceeds MAX_INLINE_PAYLOAD_BYTES, dropping",
                 len(payload),
             )
             return
+
         try:
             client = await self._ensure_client()
+            fields = {
+                "v": "2",
+                "agent_id": event.get("agent_id") or event.get("agent", ""),
+                "status": event.get("status", ""),
+                "command": event.get("command", ""),
+                "task_id": task_id,
+                "parent_call_id": event.get("parent_call_id", ""),
+                "payload": payload,
+            }
+
+            # 1. Per-task stream (for live subscribe)
             await asyncio.wait_for(
                 client.xadd(
                     _progress_stream(task_id),
-                    {
-                        "v": "1",
-                        "agent_id": event.get("agent", ""),
-                        "status": event.get("status", ""),
-                        "command": event.get("command", ""),
-                        "payload": payload,
-                    },
+                    fields,  # type: ignore[arg-type]
                     maxlen=self._progress_stream_maxlen,
                     approximate=True,
                 ),
                 timeout=2.0,
             )
+
+            # 2. Per-run stream (legacy logic / scoped rehydrate)
             run_id = event.get("run_id", "")
             if run_id and run_id != task_id:
                 await asyncio.wait_for(
                     client.xadd(
                         _progress_stream(run_id),
-                        {
-                            "v": "1",
-                            "agent_id": event.get("agent", ""),
-                            "status": event.get("status", ""),
-                            "command": event.get("command", ""),
-                            "task_id": task_id,
-                            "payload": payload,
-                        },
+                        fields,  # type: ignore[arg-type]
                         maxlen=self._progress_stream_maxlen,
+                        approximate=True,
+                    ),
+                    timeout=2.0,
+                )
+
+            # 3. Per-thread stream (high-performance O(1) thread rehydrate)
+            thread_id = event.get("thread_id", "")
+            if thread_id:
+                await asyncio.wait_for(
+                    client.xadd(
+                        _thread_progress_stream(thread_id),
+                        fields,  # type: ignore[arg-type]
+                        maxlen=self._progress_stream_maxlen * 5,
                         approximate=True,
                     ),
                     timeout=2.0,
@@ -436,17 +455,32 @@ class RedisStreamsTaskQueue:
         self, run_id: str, *, count: int = 1000
     ) -> list[dict[str, Any]]:
         """Return stored progress events via XRANGE on phist:{run_id}."""
+        return await self._get_stream_history(_progress_stream(run_id), count)
+
+    async def get_thread_progress_history(
+        self, thread_id: str, *, count: int = 1000
+    ) -> list[dict[str, Any]]:
+        """Return stored progress events for an entire thread."""
+        return await self._get_stream_history(_thread_progress_stream(thread_id), count)
+
+    async def _get_stream_history(
+        self, stream: str, count: int
+    ) -> list[dict[str, Any]]:
         client = await self._ensure_client()
-        entries = await client.xrange(_progress_stream(run_id), count=count)
+        entries = await client.xrange(stream, count=count)
         results: list[dict[str, Any]] = []
         for entry_id, fields in entries:
             raw = fields.get("payload") or fields.get(b"payload")
             if raw:
                 try:
                     event = json.loads(raw)
-                    event["_stream_id"] = entry_id
+                    # Expose Redis-native sequencing for tie-breaking
+                    event["_redis_id"] = entry_id
+                    # Extract timestamp from ID (ms-seq format)
+                    if "-" in entry_id:
+                        event["timestamp_ms"] = int(entry_id.split("-")[0])
                     results.append(event)
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError, ValueError):
                     continue
         return results
 

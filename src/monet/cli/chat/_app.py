@@ -566,6 +566,7 @@ class ChatApp(SlashSuggestMixin, IndicatorMixin, App[None]):  # type: ignore[mis
                     self._transcript.append(format_agent_header(agent_key))
 
                 from monet.client._events import AgentProgress
+
                 p = AgentProgress(
                     run_id=str(run_id),
                     agent_id=str(agent),

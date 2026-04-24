@@ -131,6 +131,8 @@ async def run_worker(
         agent_id = record["agent_id"]
         command = record["command"]
         run_id = record["context"].get("run_id", "")
+        thread_id = record["context"].get("thread_id", "")
+        parent_call_id = record["context"].get("parent_call_id", "")
 
         async with sem:
             progress_q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
@@ -142,9 +144,12 @@ async def run_worker(
             )
 
             def _publisher(data: dict[str, Any]) -> None:
+                # Ensure thread_id and run_id are serializable strings
                 enriched = {
                     **data,
-                    "run_id": run_id,
+                    "run_id": str(run_id or ""),
+                    "thread_id": str(thread_id or ""),
+                    "parent_call_id": str(parent_call_id or ""),
                     "agent": agent_id,
                     "command": command,
                     "task_id": task_id,

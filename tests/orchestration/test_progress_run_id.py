@@ -64,9 +64,7 @@ async def test_forward_progress_injects_run_id(queue: InMemoryTaskQueue) -> None
     )
     await queue.complete(
         task_id,
-        AgentResult(
-            success=True, output="", signals=(), trace_id="", run_id=run_id
-        ),
+        AgentResult(success=True, output="", signals=(), trace_id="", run_id=run_id),
     )
     # _forward_progress should exit naturally now that task is terminal.
     await asyncio.wait_for(fwd, timeout=2.0)
@@ -121,9 +119,7 @@ async def test_forward_progress_preserves_existing_fields(
     )
     await queue.complete(
         task_id,
-        AgentResult(
-            success=True, output="", signals=(), trace_id="", run_id=run_id
-        ),
+        AgentResult(success=True, output="", signals=(), trace_id="", run_id=run_id),
     )
     await asyncio.wait_for(fwd, timeout=2.0)
 
@@ -138,7 +134,8 @@ async def test_forward_progress_preserves_existing_fields(
 async def test_forward_progress_noop_without_writer(
     queue: InMemoryTaskQueue,
 ) -> None:
-    """_forward_progress with writer=None exits immediately without touching the queue."""
+    """_forward_progress with writer=None exits immediately without touching
+    the queue."""
     task_id = "t-3"
     # No enqueue — if it tried to subscribe it would block or error.
     fwd = asyncio.create_task(_forward_progress(queue, task_id, writer=None))
