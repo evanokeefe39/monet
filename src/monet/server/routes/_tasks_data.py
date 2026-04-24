@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
@@ -120,7 +123,7 @@ class RecordEventRequest(BaseModel):
 @router.post(
     "/runs/{run_id}/events",
     status_code=202,
-    dependencies=[Depends(require_task_auth)],
+    dependencies=[Depends(require_api_key)],
 )
 async def record_run_event(
     run_id: str,
@@ -163,3 +166,37 @@ async def query_run_events(
         raise HTTPException(501, "No ProgressReader configured")
     events = await reader.query(run_id, after=after, limit=limit)
     return {"run_id": run_id, "events": events, "count": len(events)}
+
+
+@router.get(
+    "/runs/{run_id}/events/stream",
+    dependencies=[Depends(require_api_key)],
+)
+async def stream_run_events(
+    run_id: str,
+    reader: OptReader,
+    after: int = Query(default=0, ge=0),
+) -> StreamingResponse:
+    """Stream typed progress events for a run as Server-Sent Events.
+
+    Each SSE message carries ``id: <event_id>`` so browser EventSource
+    reconnects via Last-Event-ID header automatically. Callers reconnect
+    with ``?after=<last_event_id>`` to resume without duplicates.
+    """
+    if reader is None:
+        raise HTTPException(501, "No ProgressReader configured")
+
+    async def _generate() -> Any:
+        try:
+            async for event in reader.stream(run_id, after=after):
+                event_id = event.get("event_id", 0)
+                data = json.dumps(event, default=str)
+                yield f"id: {event_id}\ndata: {data}\n\n"
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
