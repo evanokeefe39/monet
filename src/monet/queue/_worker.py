@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from monet.core.registry import LocalRegistry
     from monet.queue import TaskQueue, TaskRecord
     from monet.queue._dispatch import ClaimedTask, DispatchBackend
+    from monet.queue._progress import ProgressWriter
 
 logger = logging.getLogger("monet.worker")
 
@@ -43,6 +44,7 @@ async def run_worker(
     shutdown_timeout: float = 30.0,
     task_timeout: float = 300.0,
     consumer_id: str | None = None,
+    writer: ProgressWriter | None = None,
 ) -> None:
     """Poll queue by pool, execute concurrently via registry.
 
@@ -176,7 +178,11 @@ async def run_worker(
                 with contextlib.suppress(asyncio.CancelledError):
                     await drain_task
 
+            from monet.core.stubs import _current_task_id, _progress_writer_cv
+
             token = _progress_publisher.set(_publisher)
+            writer_token = _progress_writer_cv.set(writer)
+            task_id_token = _current_task_id.set(task_id)
             try:
                 with _tracer.start_as_current_span(
                     f"worker.execute.{agent_id}.{command}",
@@ -247,6 +253,8 @@ async def run_worker(
                         await queue.fail(task_id, f"{type(exc).__name__}: {exc}")
             finally:
                 _progress_publisher.reset(token)
+                _progress_writer_cv.reset(writer_token)
+                _current_task_id.reset(task_id_token)
                 if not drain_task.done():
                     await _flush_drain()
 

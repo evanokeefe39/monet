@@ -31,7 +31,7 @@ from .artifacts import _artifact_collector, _artifact_hashes, get_artifacts
 from .context import _agent_context
 from .hooks import run_after_agent_hooks, run_before_agent_hooks
 from .registry import default_registry
-from .stubs import _signal_collector
+from .stubs import _current_task_id, _progress_writer_cv, _signal_collector
 from .tracing import get_tracer
 
 # Default content limit for automatic offload (bytes).
@@ -232,6 +232,34 @@ def _handle_exception(
     )
 
 
+async def _record_lifecycle(
+    run_id: str,
+    task_id: str,
+    agent_id: str,
+    event_type_str: str,
+) -> None:
+    """Record a lifecycle ProgressEvent. Best-effort — never raises."""
+    try:
+        import time as _time
+
+        pw = _progress_writer_cv.get()
+        if pw is None:
+            return
+        from monet.queue._progress import EventType, ProgressEvent
+
+        event: ProgressEvent = {
+            "event_id": 0,
+            "run_id": run_id,
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "event_type": EventType(event_type_str),
+            "timestamp_ms": int(_time.time() * 1000),
+        }
+        await pw.record(run_id, event)
+    except Exception:
+        pass
+
+
 @overload
 def agent(
     agent_id_or_fn: str, /
@@ -305,6 +333,9 @@ def agent(
             sig_token = _signal_collector.set(signal_list)
             art_token = _artifact_collector.set(artifacts)
             hash_token = _artifact_hashes.set(written_hashes)
+            _run_id = ctx.get("run_id", "")
+            _task_id = _current_task_id.get()
+            await _record_lifecycle(_run_id, _task_id, agent_id, "agent_started")
             try:
                 with tracer.start_as_current_span(
                     f"agent.{agent_id}.{command}",
@@ -333,6 +364,9 @@ def agent(
                         agent_result = await run_after_agent_hooks(
                             agent_result, agent_id, command
                         )
+                        await _record_lifecycle(
+                            _run_id, _task_id, agent_id, "agent_completed"
+                        )
                         return agent_result
                     except Exception as exc:
                         agent_result = _handle_exception(
@@ -343,6 +377,9 @@ def agent(
                         # after_agent hooks also run on failed results.
                         agent_result = await run_after_agent_hooks(
                             agent_result, agent_id, command
+                        )
+                        await _record_lifecycle(
+                            _run_id, _task_id, agent_id, "agent_failed"
                         )
                         return agent_result
             finally:
