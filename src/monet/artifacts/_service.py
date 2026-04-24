@@ -57,8 +57,8 @@ class ArtifactService:
         Context is optional — write() can be called outside the decorator.
 
         When ``key`` kwarg is provided and run_id is available from context,
-        the artifact is stored at ``{run_id}/{key}`` — a stable, collision-free
-        path that lets callers reference the artifact by logical name rather
+        the artifact is stored at ``{run_id}--{key}`` — a stable, collision-free
+        id that lets callers reference the artifact by logical name rather
         than opaque UUID. Without run_id context, a UUID is used as usual.
         """
         await self._ensure_initialised()
@@ -82,7 +82,7 @@ class ArtifactService:
         # Derive a stable, run-scoped artifact_id when a semantic key is
         # provided. This namespaces storage to prevent key collision across
         # concurrent runs and allows lookups by logical name.
-        artifact_id = f"{run_id}/{key}" if key and run_id else str(uuid.uuid4())
+        artifact_id = f"{run_id}--{key}" if key and run_id else str(uuid.uuid4())
 
         metadata = ArtifactMetadata(
             artifact_id=artifact_id,
