@@ -14,7 +14,7 @@ Always use `caveman:caveman-commit` skill for commit subject + body. No hand-wri
 See `docs/reference/codebase-layout.md` for full per-module descriptions.
 
 Top-level dirs:
-- `src/monet/` — package source (src layout): `config/`, `core/`, `cli/`, `client/`, `hooks/`, `queue/`, `orchestration/`, `server/`, `agents/`, `artifacts/`, `_migrations/`
+- `src/monet/` — package source (src layout): `contracts/`, `config/`, `core/`, `cli/`, `client/`, `hooks/`, `progress/`, `queue/`, `orchestration/`, `server/`, `agents/`, `artifacts/`, `_migrations/`
 - `tests/` — pytest tests; `tests/e2e/` opt-in E2E behind `e2e` marker
 - `docs/` — mkdocs-material documentation
 
@@ -102,8 +102,9 @@ Key design: agents are opaque capability units with uniform interface, orchestra
 - Distribution (pools, workers, monet.toml, CLI): `docs/guides/distribution.md`, `docs/api/server.md`.
 - Artifact store: `docs/guides/artifacts.md`, `docs/api/artifacts.md`.
 - Observability (OTel, Langfuse, trace continuity): `docs/guides/observability.md`.
-- Server: Aegra (Apache 2.0 LangGraph Platform replacement). `monet dev` shells to `aegra dev`, production uses `aegra serve`. Worker/task routes mounted as Aegra custom HTTP routes via `_aegra_routes.py`.
-- **CLI surface**: `monet dev` (group: default=start, `monet dev down` for teardown), `monet run` (default pipeline vs single-graph via `--graph <entrypoint>`), `monet runs` (list/inspect/pending/resume), `monet chat` (Textual TUI — HITL interrupts render as transcript text, next user submission resumes run), `monet worker` (registration is first heartbeat), `monet server`, `monet status`.
+- **Split-plane architecture**: `contracts/` has zero imports from any other monet package — `ProgressEvent`, `EventType`, `ClaimedTask` live there. `progress/` owns `ProgressWriter` / `ProgressReader` protocols + SQLite and Postgres backends. Server exposes three named constructors: `create_unified_app` (S1–S3), `create_control_app` (control plane only), `create_data_app` (data plane only). `server/_event_router.py` classifies each event into `EventPolicy`: `DUAL_ROUTED` (domain events, stored + streamed), `EPHEMERAL_UI` (stream-only), `SILENT_AUDIT` (store-only). `TaskQueue` protocol extended to 9 methods: adds `renew_lease` (heartbeat) and `cancel` (abort). `DispatchBackend` protocol in `queue/_dispatch.py` — `submit(task, server_url, api_key)` for outbound-only ECS / Cloud Run dispatch; no inbound ports on workers. Pool config carries optional `dispatch` field; absent = in-process execution. `MonetClient` has dual-view interface: control-plane methods (`run`, `resume`, `abort`, `list_runs`) and data-plane methods (`subscribe_events`, `query_events`, `list_artifacts`). `data_plane_url` in `[planes]` config section; absent = both views hit unified URL. `PlanesConfig` / `ProgressConfig` / `ProgressBackend` in `config/_schema.py`. SSE stream emits `id: <event_id>` for `Last-Event-ID` reconnect.
+- Server: Aegra (Apache 2.0 LangGraph Platform replacement). `monet dev` shells to `aegra dev`, production uses `aegra serve`. Worker/task routes mounted as Aegra custom HTTP routes via `_aegra_routes.py`. Server routes split by plane: `server/routes/_tasks_control.py` (claim/complete/fail), `server/routes/_tasks_data.py` (event record/query/stream).
+- **CLI surface**: `monet dev` (group: default=start, `monet dev down` for teardown), `monet run` (default pipeline vs single-graph via `--graph <entrypoint>`), `monet runs` (list/inspect/pending/resume), `monet chat` (Textual TUI — HITL interrupts render as transcript text, next user submission resumes run), `monet worker` (registration is first heartbeat), `monet server [--plane unified|control|data]`, `monet status`.
 - **Config-declared entrypoints**: `monet.toml [entrypoints.<name>]` with `graph = "<id>"`. Default: `default`, `chat`, `execution` invocable; `planning` internal. New invocable graph = config change, not code change.
 - **Client / pipeline split**: `MonetClient` is graph-agnostic — `run(graph_id, input)` streams core events, `resume(run_id, tag, payload)` dispatches to paused interrupt, `abort(run_id)` terminates.
 
@@ -113,9 +114,9 @@ Six shapes. Full descriptions in `docs/architecture/deployment-scenarios.md`.
 
 - **S1 local all-in-one** — `monet dev`, Docker-backed Postgres/Redis, `pool="local"` in-server.
 - **S2 self-hosted production** — `aegra serve` + managed Postgres/Redis, `monet worker --server-url ...`, shared `MONET_API_KEY`.
-- **S3 split fleet** — S2 with N worker pools via `monet.toml [pools]`. Pull pools today; push pools via webhook.
+- **S3 split fleet** — S2 with N worker pools via `monet.toml [pools]`. Pull pools (poll `claim()`) plus cloud dispatch pools (`dispatch = "ecs"` / `"cloudrun"`) — dispatcher claims, submits outbound to ECS/Cloud Run, claims next; no inbound ports.
 - **S4 workers-only** — `monet worker` with no server URL, `InMemoryTaskQueue`. Test/library only.
-- **S5 SaaS** — vendor-hosted orchestrator, customer-hosted workers. SaaS productization in separate downstream repo.
+- **S5 SaaS / split-plane** — vendor-hosted control plane (`create_control_app`), customer-hosted data plane (`create_data_app`). `MonetClient(url=control, data_plane_url=data)`. Customer telemetry and artifacts never leave customer infra. SaaS productization in separate downstream repo.
 - **S6 embedded / no-server** — removed. Trigger to reintroduce: library-only use case.
 
 ## Standard ports and example lifecycle
