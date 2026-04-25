@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from monet.contracts import EventType, ProgressEvent
+from monet.events import EventType, ProgressEvent
 
 _DSN = os.environ.get("MONET_PROGRESS_DSN")
 pytestmark = pytest.mark.skipif(not _DSN, reason="MONET_PROGRESS_DSN not set")

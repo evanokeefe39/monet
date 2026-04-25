@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from monet.queue import TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
 from tests.conftest import make_ctx
 
 API_KEY = "test-secret-key"

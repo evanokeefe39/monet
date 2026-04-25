@@ -12,7 +12,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from monet.contracts import EventType, ProgressEvent
+from monet.events import EventType, ProgressEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator

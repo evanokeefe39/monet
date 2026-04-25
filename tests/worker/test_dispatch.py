@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from monet.queue._dispatch import ClaimedTask, DispatchBackend
-from monet.queue.backends.dispatch_local import LocalDispatchBackend
+from monet.worker._dispatch import ClaimedTask, DispatchBackend
+from monet.worker.push_providers.local import LocalDispatchBackend
 
 
 def _make_task(**overrides: str) -> ClaimedTask:

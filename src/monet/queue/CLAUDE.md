@@ -19,15 +19,12 @@ class TaskQueue(Protocol):
 
 ## Public types
 
-- `TaskRecord` — TypedDict, `schema_version` field (current: 1). Serialized via `monet.core._serialization`.
-- `TaskStatus` — StrEnum: PENDING, CLAIMED, COMPLETED, FAILED.
 - `AwaitAlreadyConsumedError` — TTL-expired result re-accessed.
-- `TASK_RECORD_SCHEMA_VERSION` — int constant, current wire version.
 - `ProgressStore` — `@runtime_checkable` Protocol. Methods: `get_progress_history(run_id, *, count)`, `expire_progress(run_id, ttl)`. Both backends implement it.
+- `TaskQueue`, `QueueMaintenance` — transport protocols.
 
-## Public functions
-
-`run_worker(queue, registry, pool, max_concurrency, poll_interval, shutdown_timeout, task_timeout, consumer_id)` — claim loop, bounded concurrency, per-task timeout.
+Wire shapes (`TaskRecord`, `TaskStatus`, `TASK_RECORD_SCHEMA_VERSION`, `ClaimedTask`) live in `monet.events`.
+Worker claim loop (`run_worker`) and dispatch backends live in `monet.worker`.
 
 ## Backends
 
@@ -71,13 +68,11 @@ class TaskQueue(Protocol):
 |---------|-------|
 | `orchestration/_invoke.py` | enqueue, await_completion, complete, fail, publish_progress, push dispatch |
 | `server/_routes.py` | claim, complete, fail, publish_progress, ping |
-| `server/_aegra_routes.py` | run_worker, push recovery |
+| `server/_aegra_routes.py` | push recovery (QueueMaintenance) |
 | `server/__init__.py` | TaskQueue type, close, _lease_ttl |
 | `server/server_bootstrap.py` | InMemoryTaskQueue, TaskQueue instantiation |
-| `cli/_worker.py` | run_worker, InMemoryTaskQueue |
-| `core/worker_client.py` | TaskRecord type (RemoteQueue adapter) |
-| `core/_serialization.py` | TaskRecord, TaskStatus wire format |
-| `tests/conftest.py` | InMemoryTaskQueue, run_worker (auto-fixture) |
+| `cli/_worker.py` | InMemoryTaskQueue |
+| `tests/conftest.py` | InMemoryTaskQueue |
 
 ## Known issues
 

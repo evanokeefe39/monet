@@ -20,7 +20,7 @@ from opentelemetry import propagate as _propagate
 from monet.core._retry import retry_with_backoff
 
 if TYPE_CHECKING:
-    from monet.queue import TaskRecord
+    from monet.events import TaskRecord
     from monet.server._capabilities import Capability
     from monet.types import AgentResult
 

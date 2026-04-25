@@ -9,19 +9,21 @@ import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from monet.queue._dispatch import ClaimedTask
+    from monet.events._tasks import ClaimedTask
 
-_log = logging.getLogger("monet.queue.dispatch.local")
+_log = logging.getLogger("monet.worker.dispatch.local")
 
 
 class LocalDispatchBackend:
     """Dispatch backend that spawns an in-process subprocess per task."""
 
     async def submit(self, task: ClaimedTask, server_url: str, api_key: str) -> None:
+        # monet.worker.push_providers._dispatch_subprocess does not yet exist.
+        # Tracked in ISSUES.md: LocalDispatchBackend subprocess module missing.
         cmd = [
             sys.executable,
             "-m",
-            "monet.queue.backends._dispatch_subprocess",
+            "monet.worker.push_providers._dispatch_subprocess",
             "--task-id",
             task["task_id"],
             "--agent-id",

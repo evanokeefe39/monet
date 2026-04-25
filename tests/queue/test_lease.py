@@ -12,7 +12,7 @@ from monet.queue.backends.memory import InMemoryTaskQueue
 
 
 def _make_task(task_id: str = "t-1", pool: str = "local") -> dict[str, Any]:
-    from monet.queue._interface import TASK_RECORD_SCHEMA_VERSION, TaskStatus
+    from monet.events import TASK_RECORD_SCHEMA_VERSION, TaskStatus
 
     return {
         "schema_version": TASK_RECORD_SCHEMA_VERSION,

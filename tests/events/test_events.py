@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from monet.contracts import EventType, ProgressEvent
+from monet.events import EventType, ProgressEvent
 from monet.server._event_router import EventPolicy, classify_event
 
 
