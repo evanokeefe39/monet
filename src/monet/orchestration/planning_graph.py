@@ -222,6 +222,7 @@ async def questionnaire_node(state: PlanningState) -> dict[str, Any]:
     decision = interrupt(_followup_form(questions))
 
     answers: list[dict[str, Any]] = []
+    msg_parts: list[str] = []
     if isinstance(decision, dict):
         for idx, question in enumerate(questions):
             raw = decision.get(f"q{idx}")
@@ -237,11 +238,14 @@ async def questionnaire_node(state: PlanningState) -> dict[str, Any]:
                     "content": f"Q: {question}\nA: {text}",
                 }
             )
+            msg_parts.append(f"q{idx}={text}")
 
+    msg_content = ", ".join(msg_parts) or "(submitted)"
     return {
         "pending_questions": None,
         "followup_attempts": attempts + 1,
         "followup_answers": answers,
+        "messages": [{"role": "user", "content": msg_content}],
     }
 
 
@@ -291,7 +295,10 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
     )
 
     if decision.action == "approve":
-        return {"plan_approved": True}
+        return {
+            "plan_approved": True,
+            "messages": [{"role": "user", "content": "action=approve"}],
+        }
     if (
         decision.action == "revise"
         and decision.feedback
@@ -300,9 +307,19 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
         return {
             "plan_approved": False,
             "human_feedback": decision.feedback,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"action=revise, feedback={decision.feedback}",
+                }
+            ],
             **increment_budget(state),
         }
-    return {"plan_approved": False}
+    msg = f"action={decision.action}" if decision.action else "action=reject"
+    return {
+        "plan_approved": False,
+        "messages": [{"role": "user", "content": msg}],
+    }
 
 
 async def planning_failed_node(state: PlanningState) -> dict[str, Any]:
