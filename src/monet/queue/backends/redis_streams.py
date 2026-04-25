@@ -37,7 +37,7 @@ from monet.core._serialization import (
     serialize_result,
     serialize_task_record,
 )
-from monet.queue._interface import TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
 from monet.signals import SignalType
 from monet.types import AgentResult, Signal
 

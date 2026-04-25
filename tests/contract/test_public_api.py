@@ -110,13 +110,9 @@ def test_tracing_public_api() -> None:
 
 
 def test_queue_concrete_exports() -> None:
-    from monet.queue import (  # noqa: F401
-        InMemoryTaskQueue,
-        TaskQueue,
-        TaskRecord,
-        TaskStatus,
-        run_worker,
-    )
+    from monet.events import TaskRecord, TaskStatus  # noqa: F401
+    from monet.queue import InMemoryTaskQueue, TaskQueue  # noqa: F401
+    from monet.worker import run_worker  # noqa: F401
 
 
 def test_server_public_api() -> None:

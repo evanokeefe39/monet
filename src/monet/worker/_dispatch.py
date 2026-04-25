@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from monet.contracts._tasks import ClaimedTask
+from monet.events._tasks import ClaimedTask
 
 __all__ = ["ClaimedTask", "DispatchBackend"]
 

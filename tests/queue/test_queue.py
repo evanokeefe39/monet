@@ -9,9 +9,11 @@ from datetime import UTC, datetime
 import pytest
 
 from monet.core.registry import LocalRegistry
+from monet.events import TaskRecord, TaskStatus
 from monet.orchestration._invoke import wait_completion
-from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus, run_worker
+from monet.queue import InMemoryTaskQueue
 from monet.types import AgentResult, AgentRunContext, SignalType
+from monet.worker import run_worker
 
 
 def _make_ctx(agent_id: str = "test-agent", command: str = "fast") -> AgentRunContext:

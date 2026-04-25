@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import time
 
-from monet.queue._progress import (
-    EventType,
-    ProgressEvent,
-    ProgressReader,
-    ProgressWriter,
-)
+from monet.events import EventType, ProgressEvent
+from monet.progress._protocol import ProgressReader, ProgressWriter
 
 
 def _make_event(event_type: EventType) -> ProgressEvent:
@@ -76,9 +72,10 @@ def test_progress_reader_protocol_shape() -> None:
 
 
 def test_public_exports() -> None:
-    import monet.queue as q
+    import monet.events as e
+    import monet.progress._protocol as p
 
-    assert q.EventType is EventType
-    assert q.ProgressEvent is ProgressEvent
-    assert q.ProgressWriter is ProgressWriter
-    assert q.ProgressReader is ProgressReader
+    assert e.EventType is EventType
+    assert e.ProgressEvent is ProgressEvent
+    assert p.ProgressWriter is ProgressWriter
+    assert p.ProgressReader is ProgressReader
