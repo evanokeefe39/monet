@@ -107,8 +107,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # an empty handler set.
     from monet.agents import register_reference_agents
     from monet.core.registry import default_registry
-    from monet.queue._worker import run_worker
     from monet.server._capabilities import Capability
+    from monet.worker import run_worker
 
     register_reference_agents()
 

@@ -7,8 +7,8 @@ import time
 
 import pytest
 
+from monet.events import EventType, ProgressEvent
 from monet.progress.backends.sqlite import SqliteProgressBackend
-from monet.queue._progress import EventType, ProgressEvent
 
 
 def _evt(

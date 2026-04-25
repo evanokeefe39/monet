@@ -14,22 +14,19 @@ crash recovery; the protocol does not mandate Redis-specific machinery.
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from monet.types import AgentResult, AgentRunContext
+    from monet.events._tasks import TaskRecord
+    from monet.types import AgentResult
 
 __all__ = [
-    "TASK_RECORD_SCHEMA_VERSION",
     "AwaitAlreadyConsumedError",
     "ProgressStore",
     "QueueMaintenance",
     "TaskQueue",
-    "TaskRecord",
-    "TaskStatus",
 ]
 
 
@@ -42,34 +39,6 @@ class AwaitAlreadyConsumedError(Exception):
     After the TTL, the record is pruned and this exception is raised to
     distinguish "expired" from "never existed" (``KeyError``).
     """
-
-
-class TaskStatus(StrEnum):
-    """Lifecycle states of a queued task."""
-
-    PENDING = "pending"
-    CLAIMED = "claimed"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-TASK_RECORD_SCHEMA_VERSION = 1
-
-
-class TaskRecord(TypedDict):
-    """Snapshot of a task at a point in time."""
-
-    schema_version: int
-    task_id: str
-    agent_id: str
-    command: str
-    pool: str
-    context: AgentRunContext
-    status: TaskStatus
-    result: AgentResult | None
-    created_at: str
-    claimed_at: str | None
-    completed_at: str | None
 
 
 @runtime_checkable

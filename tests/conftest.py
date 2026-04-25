@@ -12,7 +12,8 @@ from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.config import MONET_ENV_VARS
 from monet.core.registry import default_registry
 from monet.orchestration._invoke import configure_queue
-from monet.queue import InMemoryTaskQueue, run_worker
+from monet.queue import InMemoryTaskQueue
+from monet.worker import run_worker
 
 if TYPE_CHECKING:
     from monet.types import AgentRunContext

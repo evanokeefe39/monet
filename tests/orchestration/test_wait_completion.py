@@ -22,8 +22,9 @@ if TYPE_CHECKING:
 import pytest
 from fakeredis import FakeAsyncRedis
 
+from monet.events import TaskRecord, TaskStatus
 from monet.orchestration._invoke import wait_completion
-from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus
+from monet.queue import InMemoryTaskQueue
 from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 from monet.types import AgentResult
 

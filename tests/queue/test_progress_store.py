@@ -6,7 +6,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from monet.queue import InMemoryTaskQueue, ProgressStore, TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
+from monet.queue import InMemoryTaskQueue, ProgressStore
 from monet.types import AgentResult, AgentRunContext
 
 

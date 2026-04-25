@@ -63,9 +63,18 @@ Removed:
 - `PushDispatchTerminal` exception (use `DispatchBackend.submit` failure handling instead)
 
 Added:
-- `monet.queue._dispatch.DispatchBackend` protocol
-- `monet.queue._dispatch.ClaimedTask` TypedDict
-- `monet.queue.backends.dispatch_local.LocalDispatchBackend`
-- `monet.queue.backends.dispatch_ecs.ECSDispatchBackend`
-- `monet.queue.backends.dispatch_cloudrun.CloudRunDispatchBackend`
+- `monet.worker._dispatch.DispatchBackend` protocol
+- `monet.events.ClaimedTask` TypedDict
+- `monet.worker.push_providers.local.LocalDispatchBackend`
+- `monet.worker.push_providers.ecs.ECSDispatchBackend`
+- `monet.worker.push_providers.cloudrun.CloudRunDispatchBackend`
 - `run_worker(dispatch_backend=..., server_url=..., api_key=...)` params
+
+## Known-Dead: LocalDispatchBackend subprocess module
+
+`monet.worker.push_providers.LocalDispatchBackend.submit()` spawns
+`monet.worker.push_providers._dispatch_subprocess` as a subprocess entry point,
+but that module does not exist. `LocalDispatchBackend` is dev/test only; the gap
+has no user-visible impact unless someone explicitly configures a local dispatch
+pool. Implement `_dispatch_subprocess` before shipping `LocalDispatchBackend` for
+real use.

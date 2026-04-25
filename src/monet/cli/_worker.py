@@ -189,8 +189,8 @@ async def _run_remote(
 
     from monet.core.registry import default_registry
     from monet.core.worker_client import RemoteQueue, WorkerClient
-    from monet.queue import run_worker
     from monet.server._capabilities import Capability
+    from monet.worker import run_worker
 
     pool = cfg.pool
 
@@ -257,7 +257,8 @@ async def _run_remote(
 async def _run_local(cfg: WorkerConfig) -> None:
     """Run worker in local mode with an in-memory queue."""
     from monet.orchestration._invoke import configure_queue
-    from monet.queue import InMemoryTaskQueue, run_worker
+    from monet.queue import InMemoryTaskQueue
+    from monet.worker import run_worker
 
     queue = InMemoryTaskQueue()
     configure_queue(queue)

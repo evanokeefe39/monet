@@ -12,10 +12,10 @@
 - `agent_manifest.py` — `configure_agent_manifest`, `get_agent_manifest` (orchestration-side)
 - `_ports.py` — canonical local ports (`STANDARD_POSTGRES_PORT=5432`, `STANDARD_REDIS_PORT=6379`, `STANDARD_DEV_PORT=2026`, `STANDARD_LANGFUSE_PORT=3000`) and `state_file()` helper
 
-**`contracts/`** — zero-import foundation (no imports from any other monet package)
+**`events/`** — zero-import foundation (no imports from any other monet package)
 - `_events.py` — `EventType` (StrEnum: `AGENT_STARTED`, `AGENT_COMPLETED`, `AGENT_FAILED`, `HITL_CAUSE`, `HITL_DECISION`, `RUN_COMPLETED`, `RUN_CANCELLED`, `STREAM_UPDATE`), `ProgressEvent` TypedDict
-- `_tasks.py` — `ClaimedTask` TypedDict (`task_id`, `run_id`, `thread_id`, `agent_id`, `command`, `pool`)
-- `__init__.py` — re-exports all three names
+- `_tasks.py` — `ClaimedTask`, `TaskRecord`, `TaskStatus`, `TASK_RECORD_SCHEMA_VERSION` — task wire shapes
+- `__init__.py` — re-exports all public names
 
 **`config/`** — central configuration subpackage
 - `_env.py` — single boundary where SDK touches `os.environ`: registers every `MONET_*` name as `Final[str]`, exposes typed accessors `read_str/bool/float/int/path/enum`, defines `ConfigError`
@@ -67,19 +67,18 @@
 **`hooks/`** — built-in graph hooks
 - `plan_context.py` — `inject_plan_context` worker hook that resolves `work_brief_pointer` + `node_id` into task content
 
-**`queue/`** — task queue protocol, worker loop, and dispatch
-- `_interface.py` — `TaskQueue` Protocol (9 methods): `enqueue`, `claim`, `complete`, `fail`, `heartbeat`, `list_pending`, `get`, `renew_lease` (worker heartbeat, called every 30s), `cancel` (abort signal)
-- `_dispatch.py` — `DispatchBackend` Protocol: `submit(task, server_url, api_key)` — outbound-only submission, no inbound ports
-- `_worker.py` — `run_worker` loop; checks `pool_config.dispatch_backend`; if set, claims + submits then claims next (never waits for completion); else executes in-process
-- `_progress.py` — re-exports `ProgressEvent` for worker internals
+**`queue/`** — task queue transport protocols and backends
+- `_interface.py` — `TaskQueue` Protocol (9 methods): `enqueue`, `claim`, `complete`, `fail`, `publish_progress`, `subscribe_progress`, `await_completion`, `renew_lease`, `cancel`; `QueueMaintenance` Protocol; `ProgressStore` Protocol; `AwaitAlreadyConsumedError`
 - `backends/memory.py` — `InMemoryTaskQueue`; `_leases: dict[str, float]` + `_cancelled: set[str]` + `threading.Lock`
 - `backends/sqlite_store.py` — SQLite queue; `task_leases` table for heartbeat/cancel
 - `backends/redis_streams.py` — Redis Streams queue; stream entry ID ms component as `event_id`; `HSET task:{id}:lease` for heartbeat
-- `backends/dispatch_local.py` — `LocalDispatchBackend`; spawns subprocess (dev + testing)
-- `backends/dispatch_ecs.py` — `ECSDispatchBackend`; calls AWS `run_task` API
-- `backends/dispatch_cloudrun.py` — `CloudRunDispatchBackend`; calls GCP Cloud Run Jobs API
-- `backends/sqlite_progress.py` — SQLite `ProgressWriter`/`ProgressReader` (delegated to `progress/backends/sqlite.py`)
-- `backends/postgres_progress.py` — Postgres `ProgressWriter`/`ProgressReader` (delegated to `progress/backends/postgres.py`)
+
+**`worker/`** — claim loop and cloud dispatch backends
+- `_loop.py` — `run_worker` loop; checks `dispatch_backend`; if set, claims + submits then claims next (never waits for completion); else executes in-process via registry
+- `_dispatch.py` — `DispatchBackend` Protocol: `submit(task, server_url, api_key)` — outbound-only, no inbound ports
+- `push_providers/local.py` — `LocalDispatchBackend`; spawns subprocess (dev + testing)
+- `push_providers/ecs.py` — `ECSDispatchBackend`; calls AWS `run_task` API
+- `push_providers/cloudrun.py` — `CloudRunDispatchBackend`; calls GCP Cloud Run Jobs API
 
 **`orchestration/`** — flat-DAG subgraphs and the compound default graph
 - Public surface: `RunState` (slim parent state, designed for `MyRunState(RunState)` extension), `build_planning_subgraph` / `build_execution_subgraph` (uncompiled `StateGraph`s for composing custom pipelines), `build_default_graph` (composes planning + execution as nodes under `RunState`), `build_chat_graph` (slash-parse → binary triage `{chat, plan}` → planner / questionnaire / approval, then on approve mounts the same `build_execution_subgraph` as a node + `execution_summary_node`)

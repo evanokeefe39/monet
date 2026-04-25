@@ -20,7 +20,8 @@ from typing import Any
 
 import pytest
 
-from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
+from monet.queue import InMemoryTaskQueue
 from monet.types import AgentResult, AgentRunContext
 
 N_TASKS = 25

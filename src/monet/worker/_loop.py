@@ -1,4 +1,4 @@
-"""Queue worker — claims and executes tasks concurrently.
+"""Worker claim loop — claims and executes tasks concurrently.
 
 Follows the Prefect model: one worker per pool, claims any task in that
 pool, looks up handler in local registry. Spawns concurrent asyncio.Tasks
@@ -17,9 +17,10 @@ from opentelemetry import trace
 
 if TYPE_CHECKING:
     from monet.core.registry import LocalRegistry
-    from monet.queue import TaskQueue, TaskRecord
-    from monet.queue._dispatch import ClaimedTask, DispatchBackend
-    from monet.queue._progress import ProgressWriter
+    from monet.events import ClaimedTask, TaskRecord
+    from monet.progress._protocol import ProgressWriter
+    from monet.queue import TaskQueue
+    from monet.worker._dispatch import DispatchBackend
 
 logger = logging.getLogger("monet.worker")
 
