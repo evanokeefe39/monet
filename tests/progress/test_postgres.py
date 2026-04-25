@@ -41,7 +41,7 @@ def _event(
 
 @pytest.fixture
 async def backend():  # type: ignore[return]
-    from monet.queue.backends.postgres_progress import PostgresProgressBackend
+    from monet.progress.backends.postgres import PostgresProgressBackend
 
     b = PostgresProgressBackend(_DSN)  # type: ignore[arg-type]
     await b.open()

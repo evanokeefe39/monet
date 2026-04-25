@@ -7,8 +7,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from monet.progress.backends.sqlite import SqliteProgressBackend
 from monet.queue._progress import EventType, ProgressEvent
-from monet.queue.backends.sqlite_progress import SqliteProgressBackend
 from monet.server import create_data_app
 
 _API_KEY = "test-key"
