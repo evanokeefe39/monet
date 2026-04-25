@@ -27,7 +27,7 @@ def test_event_type_values() -> None:
     assert EventType.AGENT_STARTED == "agent_started"
     assert EventType.AGENT_COMPLETED == "agent_completed"
     assert EventType.AGENT_FAILED == "agent_failed"
-    assert EventType.STATUS == "status"
+    assert EventType.STREAM_UPDATE == "stream_update"
     assert EventType.HITL_CAUSE == "hitl_cause"
     assert EventType.HITL_DECISION == "hitl_decision"
     assert EventType.RUN_COMPLETED == "run_completed"
@@ -50,7 +50,7 @@ def test_progress_event_required_fields() -> None:
 
 
 def test_progress_event_optional_fields() -> None:
-    event = _make_event(EventType.STATUS)
+    event = _make_event(EventType.STREAM_UPDATE)
     event["trace_id"] = "abc123"
     event["payload"] = {"message": "doing work"}
     assert event["trace_id"] == "abc123"

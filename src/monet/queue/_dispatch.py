@@ -4,16 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from typing_extensions import TypedDict
+from monet.contracts._tasks import ClaimedTask
 
-
-class ClaimedTask(TypedDict):
-    task_id: str
-    run_id: str
-    thread_id: str
-    agent_id: str
-    command: str
-    pool: str
+__all__ = ["ClaimedTask", "DispatchBackend"]
 
 
 @runtime_checkable
