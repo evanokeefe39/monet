@@ -9,7 +9,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from monet.queue._progress import EventType, ProgressEvent, ProgressWriter
+from monet.contracts import EventType, ProgressEvent
+from monet.progress import ProgressWriter
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._event_router import EventPolicy, classify_event
 from monet.server.routes._common import CapIndex, Queue, attach_trace_context

@@ -12,8 +12,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
+from monet.progress import ProgressReader, ProgressWriter
 from monet.queue import ProgressStore
-from monet.queue._progress import ProgressReader, ProgressWriter
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server.routes._common import Queue, attach_trace_context
 
@@ -134,7 +134,7 @@ async def record_run_event(
     """Record a typed progress event for a run."""
     if writer is None:
         raise HTTPException(501, "No ProgressWriter configured")
-    from monet.queue._progress import EventType, ProgressEvent
+    from monet.contracts import EventType, ProgressEvent
 
     event_type = EventType(body.event_type)
 

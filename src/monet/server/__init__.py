@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from monet.artifacts._protocol import ArtifactClient
+    from monet.progress import ProgressReader, ProgressWriter
     from monet.queue import TaskQueue
-    from monet.queue._progress import ProgressReader, ProgressWriter
     from monet.server._capabilities import CapabilityIndex
 
 from monet.config._schema import ChatConfig

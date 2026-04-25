@@ -248,7 +248,7 @@ async def _record_lifecycle(
         pw = _progress_writer_cv.get()
         if pw is None:
             return
-        from monet.queue._progress import EventType, ProgressEvent
+        from monet.contracts import EventType, ProgressEvent
 
         event: ProgressEvent = {
             "event_id": 0,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from monet.queue._progress import EventType, ProgressEvent
+from monet.contracts import EventType, ProgressEvent
 
 __all__ = ["EventPolicy", "classify_event"]
 
@@ -29,7 +29,7 @@ def classify_event(event: ProgressEvent) -> EventPolicy:
     when EventType grows.
     """
     match event["event_type"]:
-        case EventType.STATUS:
+        case EventType.STREAM_UPDATE:
             return EventPolicy.EPHEMERAL_UI
         case (
             EventType.AGENT_STARTED

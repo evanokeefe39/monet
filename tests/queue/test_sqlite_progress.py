@@ -12,7 +12,7 @@ from monet.queue.backends.sqlite_progress import SqliteProgressBackend
 
 
 def _evt(
-    event_type: EventType = EventType.STATUS,
+    event_type: EventType = EventType.STREAM_UPDATE,
     run_id: str = "run-1",
     task_id: str = "task-1",
     agent_id: str = "agent-1",
@@ -80,7 +80,11 @@ async def test_record_preserves_optional_fields(backend: SqliteProgressBackend) 
 
 @pytest.mark.asyncio
 async def test_query_events_ordered_by_event_id(backend: SqliteProgressBackend) -> None:
-    for et in [EventType.AGENT_STARTED, EventType.STATUS, EventType.AGENT_COMPLETED]:
+    for et in [
+        EventType.AGENT_STARTED,
+        EventType.STREAM_UPDATE,
+        EventType.AGENT_COMPLETED,
+    ]:
         await backend.record("run-1", _evt(et))
     events = await backend.query("run-1")
     ids = [e["event_id"] for e in events]

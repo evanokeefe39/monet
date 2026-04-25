@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from monet.queue._progress import EventType, ProgressEvent
+from monet.contracts import EventType, ProgressEvent
 from monet.server._event_router import EventPolicy, classify_event
 
 
@@ -24,7 +24,7 @@ def _event(event_type: EventType) -> ProgressEvent:
 @pytest.mark.parametrize(
     "event_type,expected",
     [
-        (EventType.STATUS, EventPolicy.EPHEMERAL_UI),
+        (EventType.STREAM_UPDATE, EventPolicy.EPHEMERAL_UI),
         (EventType.AGENT_STARTED, EventPolicy.DUAL_ROUTED),
         (EventType.AGENT_COMPLETED, EventPolicy.DUAL_ROUTED),
         (EventType.AGENT_FAILED, EventPolicy.DUAL_ROUTED),
