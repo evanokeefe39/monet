@@ -45,4 +45,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
 
-CMD ["monet", "worker", "--pool", "local", "--path", "agents"]
+CMD monet worker \
+    --server-url ${MONET_SERVER_URL} \
+    --pool ${MONET_WORKER_POOL:-default} \
+    --concurrency ${MONET_WORKER_CONCURRENCY:-10} \
+    --path agents
