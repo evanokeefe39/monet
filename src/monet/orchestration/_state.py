@@ -218,8 +218,14 @@ class PlanningState(TypedDict, total=False):
     with ``max_followup_attempts > 0``. Pipeline uses the default (0,
     questions-are-failures); chat uses 1 to allow a single clarification
     round.
+
+    ``messages`` carries human summaries of HITL interactions so they
+    appear in transcript history when the thread is reloaded. The parent
+    chat graph's ``ChatState.messages`` reducer appends them via
+    LangGraph's subgraph state name-matching.
     """
 
+    messages: Annotated[list[dict[str, Any]], _append_reducer]
     task: str
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None  # RoutingSkeleton.model_dump()

@@ -14,6 +14,33 @@ No E2E coverage across deployment topologies. Needs tests for:
 6. Worker reconnection after server restart
 7. `monet run --auto-approve` happy path end-to-end
 
+## Implicit Wire Formats
+
+Systemic issue: many data shapes that cross process boundaries (HTTP, Redis, SSE) lack explicit wire-format schemas. Some boundaries use hand-built dicts with no TypedDict or Pydantic model; others have typed envelopes with untyped inner payloads.
+
+**Pattern**: TypedDicts for LangGraph state boundaries, Pydantic models for REST wire formats with validation at deserialization.
+
+**Gold standard** (already correct): `TaskRecord` (TypedDict + schema_version), `WorkBrief` / `RoutingSkeleton` (Pydantic round-trip), `RecordEventRequest` / `WorkerHeartbeatBody` (Pydantic request models).
+
+### High severity
+
+- **AgentResult** — dataclass hand-serialized via `serialize_result()` / `deserialize_result()` in `core/_serialization.py`. Crosses Redis (`result:{task_id}`), HTTP (`POST /tasks/{id}/complete`), and is nested inside schema-versioned `TaskRecord` without its own schema version. No shared type between worker client (`worker_client.py:199` hand-builds dict) and server (`TaskCompleteRequest` with `artifacts: list[dict[str, Any]]`).
+- **Progress events** — Redis Streams `phist:*` uses `dict[str, Any]` with no schema. `POST /tasks/{id}/progress` accepts `body: dict[str, Any]`. Key name mismatch: agents emit `agent`, client types expect `agent_id`.
+- **AgentStream protocol** — 5 event types (`progress`, `signal`, `artifact`, `result`, `error`) across subprocess/SSE/HTTP transports in `streams.py`. Protocol defined only in comments and runtime string checks.
+
+### Medium severity
+
+- **HTTP responses without models** — `GET /agents` returns hand-built dict with extra `worker_ids` field not in `Capability` model. `GET /deployments` returns `dict(r)`. Claim response (`POST /pools/{pool}/claim`) returns `dict(record)`, receiver does `resp.json()` with no validation.
+- **Typed envelopes, untyped payloads** — `ProgressEvent.payload` is `dict[str, Any]`; HITL events rely on `payload.cause_id` by string convention. `TaskCompleteRequest.artifacts` and `.signals` are `list[dict[str, Any]]`.
+
+### Low severity
+
+- **Hook/webhook events** — bash hook stdin and webhook payloads are untyped `dict[str, Any]`. Extension points, harder to type fully.
+
+### Proposed fix
+
+Add Pydantic models for all REST wire formats (AgentResult wire shape, progress event envelope, AgentStream event union, response models for GET endpoints). Add schema_version to AgentResult wire format. Keep TypedDicts for LangGraph state boundaries.
+
 ## Deferred Items
 
 - **In-process (no-server) programmatic driver**: removed during client-decoupling refactor. Library callers use `monet dev` + `MonetClient`, or shell to `aegra dev`. Trigger: concrete need for server-less library usage (e.g. notebook example). If reintroduced, driver should use `build_default_graph` directly.

@@ -7,14 +7,6 @@ from typing import Annotated, Any
 from monet.orchestration._state import PlanningState, _append_reducer
 
 
-def _message_reducer(
-    existing: list[dict[str, Any]] | None,
-    new: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Append-only reducer for chat messages."""
-    return (existing or []) + new
-
-
 class ChatState(PlanningState, total=False):
     """State for the chat graph.
 
@@ -22,11 +14,11 @@ class ChatState(PlanningState, total=False):
     subgraph shares fields by name — ``task``, ``work_brief_pointer``,
     ``routing_skeleton``, ``plan_approved``, ``revision_count``,
     ``pending_questions``, ``followup_answers``, ``followup_attempts``,
-    ``human_feedback``, ``planner_error``, ``planning_context``.
+    ``human_feedback``, ``planner_error``, ``planning_context``,
+    ``messages``.
 
     Chat-only fields:
 
-    - ``messages``: append-only transcript.
     - ``route``: routing decision written by ``parse_command_node`` or
       ``triage_node``.
     - ``command_meta``: per-route metadata (specialist agent + mode,
@@ -38,7 +30,6 @@ class ChatState(PlanningState, total=False):
     - ``completed_node_ids``, ``wave_results``, ``wave_reflections``.
     """
 
-    messages: Annotated[list[dict[str, Any]], _message_reducer]
     route: str | None
     command_meta: dict[str, Any]
     completed_node_ids: list[str]
