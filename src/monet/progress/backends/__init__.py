@@ -1,4 +1,4 @@
-from monet.queue.backends.postgres_progress import PostgresProgressBackend
-from monet.queue.backends.sqlite_progress import SqliteProgressBackend
+from monet.progress.backends.postgres import PostgresProgressBackend
+from monet.progress.backends.sqlite import SqliteProgressBackend
 
 __all__ = ["PostgresProgressBackend", "SqliteProgressBackend"]

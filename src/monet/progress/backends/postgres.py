@@ -17,7 +17,7 @@ from monet.contracts import EventType, ProgressEvent
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-_log = logging.getLogger("monet.queue.postgres_progress")
+_log = logging.getLogger("monet.progress.postgres")
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS typed_progress_events (

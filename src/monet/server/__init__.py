@@ -270,13 +270,13 @@ def _create_data_plane() -> FastAPI:
     planes.progress.validate_for_boot()
 
     if planes.progress.backend.value == "postgres":
-        from monet.queue.backends.postgres_progress import PostgresProgressBackend
+        from monet.progress.backends.postgres import PostgresProgressBackend
 
         pg = PostgresProgressBackend(dsn=planes.progress.dsn or "")
         return create_data_app(writer=pg, reader=pg)
 
     from monet.config._env import MONET_PROGRESS_DB, read_str
-    from monet.queue.backends.sqlite_progress import SqliteProgressBackend
+    from monet.progress.backends.sqlite import SqliteProgressBackend
 
     db_path = read_str(MONET_PROGRESS_DB) or ":memory:"
     sl = SqliteProgressBackend(db_path=db_path)
