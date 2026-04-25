@@ -1,4 +1,4 @@
-"""Tests for contracts._events package."""
+"""Tests for events._events package."""
 
 from __future__ import annotations
 
