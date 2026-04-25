@@ -12,11 +12,22 @@
 - `agent_manifest.py` — `configure_agent_manifest`, `get_agent_manifest` (orchestration-side)
 - `_ports.py` — canonical local ports (`STANDARD_POSTGRES_PORT=5432`, `STANDARD_REDIS_PORT=6379`, `STANDARD_DEV_PORT=2026`, `STANDARD_LANGFUSE_PORT=3000`) and `state_file()` helper
 
+**`contracts/`** — zero-import foundation (no imports from any other monet package)
+- `_events.py` — `EventType` (StrEnum: `AGENT_STARTED`, `AGENT_COMPLETED`, `AGENT_FAILED`, `HITL_CAUSE`, `HITL_DECISION`, `RUN_COMPLETED`, `RUN_CANCELLED`, `STREAM_UPDATE`), `ProgressEvent` TypedDict
+- `_tasks.py` — `ClaimedTask` TypedDict (`task_id`, `run_id`, `thread_id`, `agent_id`, `command`, `pool`)
+- `__init__.py` — re-exports all three names
+
 **`config/`** — central configuration subpackage
 - `_env.py` — single boundary where SDK touches `os.environ`: registers every `MONET_*` name as `Final[str]`, exposes typed accessors `read_str/bool/float/int/path/enum`, defines `ConfigError`
 - `_load.py` — owns `monet.toml` reading: `default_config_path`, `read_toml`, `read_toml_section`
-- `_schema.py` — per-unit pydantic schemas: `ServerConfig`, `WorkerConfig`, `ClientConfig`, `ObservabilityConfig`, `ArtifactsConfig`, `QueueConfig`, `AuthConfig`, `OrchestrationConfig`, `ChatConfig`, `CLIDevConfig` — each with `load()`, `validate_for_boot()`, `redacted_summary()`. `ChatConfig.graph` is a `module.path:factory` dotted reference resolved at server boot.
+- `_pools.py` — `PoolConfig` dataclass + `load_pool_config()` — pool topology from `monet.toml [pools]`; separated from server config to break circular import
+- `_schema.py` — per-unit pydantic schemas: `ServerConfig`, `WorkerConfig`, `ClientConfig`, `ObservabilityConfig`, `ArtifactsConfig`, `QueueConfig`, `AuthConfig`, `OrchestrationConfig`, `ChatConfig`, `CLIDevConfig`, `ProgressBackend` (StrEnum), `ProgressConfig`, `PlanesConfig` — each with `load()`, `validate_for_boot()`, `redacted_summary()`. `ChatConfig.graph` is a `module.path:factory` dotted reference resolved at server boot. `PlanesConfig` reads optional `[planes]` TOML section: `data_url` and `[planes.progress]` with `backend` + `dsn`.
 - `_graphs.py` — loads `monet.toml [graphs]` role mapping and `[entrypoints.<name>]` declarations. `DEFAULT_ENTRYPOINTS` + `load_entrypoints()` gate which graphs `MonetClient.run` / `monet run` can invoke. `Entrypoint` is a one-field `TypedDict({"graph": str})`. Every deployable unit validates config at boot and emits a redacted summary at `INFO`. See `docs/reference/env-vars.md` for the full registry.
+
+**`progress/`** — progress event read/write protocols + backends
+- `_protocol.py` — `ProgressWriter` Protocol (`record(run_id, event) -> int`), `ProgressReader` Protocol (`query`, `stream`, `has_cause`)
+- `backends/sqlite.py` — SQLite implementation (S1 local dev); `INTEGER PRIMARY KEY AUTOINCREMENT` event_id
+- `backends/postgres.py` — Postgres implementation; `BIGSERIAL` event_id; `ix_progress_run_event` + `ix_progress_run_type` indexes; `stream()` uses polling loop
 
 **`core/`** — worker-side internals
 - `decorator.py` — `@agent`
@@ -47,7 +58,7 @@
 - `_db.py` — `monet db migrate | current | stamp | check`
 
 **`client/`**
-- `__init__.py` — `MonetClient` (graph-agnostic)
+- `__init__.py` — `MonetClient` (graph-agnostic); dual-view interface: control-plane methods (`run`, `resume`, `abort`, `list_runs`) target `url`; data-plane methods (`subscribe_events`, `query_events`, `list_artifacts`) target `data_plane_url` when set, else fall back to `url`; SSE reconnect via `after=<last_event_id>` parameter
 - `_events.py` — core events: `RunStarted`, `NodeUpdate`, `AgentProgress`, `SignalEmitted`, `Interrupt`, `RunComplete`, `RunFailed`, plus `RunSummary`, `RunDetail`, `PendingDecision`, `ChatSummary`, plus form-schema interrupt convention `Form` / `Field` / `FieldOption` TypedDicts
 - `_errors.py` — `MonetClientError` + `RunNotInterrupted`, `AlreadyResolved`, `AmbiguousInterrupt`, `InterruptTagMismatch`, `GraphNotInvocable`, `ServerUnreachable`, `ServerError`
 - `_wire.py` — `task_input`, `chat_input`, `stream_run`, `get_state_values`, `create_thread`, metadata keys, `_classify_transport_error` maps httpx errors to typed `MonetClientError` subclasses
@@ -56,7 +67,19 @@
 **`hooks/`** — built-in graph hooks
 - `plan_context.py` — `inject_plan_context` worker hook that resolves `work_brief_pointer` + `node_id` into task content
 
-**`queue/`** — `TaskQueue` protocol + `_worker.run_worker` + backends: `memory`, `redis`, `sqlite`, `upstash`
+**`queue/`** — task queue protocol, worker loop, and dispatch
+- `_interface.py` — `TaskQueue` Protocol (9 methods): `enqueue`, `claim`, `complete`, `fail`, `heartbeat`, `list_pending`, `get`, `renew_lease` (worker heartbeat, called every 30s), `cancel` (abort signal)
+- `_dispatch.py` — `DispatchBackend` Protocol: `submit(task, server_url, api_key)` — outbound-only submission, no inbound ports
+- `_worker.py` — `run_worker` loop; checks `pool_config.dispatch_backend`; if set, claims + submits then claims next (never waits for completion); else executes in-process
+- `_progress.py` — re-exports `ProgressEvent` for worker internals
+- `backends/memory.py` — `InMemoryTaskQueue`; `_leases: dict[str, float]` + `_cancelled: set[str]` + `threading.Lock`
+- `backends/sqlite_store.py` — SQLite queue; `task_leases` table for heartbeat/cancel
+- `backends/redis_streams.py` — Redis Streams queue; stream entry ID ms component as `event_id`; `HSET task:{id}:lease` for heartbeat
+- `backends/dispatch_local.py` — `LocalDispatchBackend`; spawns subprocess (dev + testing)
+- `backends/dispatch_ecs.py` — `ECSDispatchBackend`; calls AWS `run_task` API
+- `backends/dispatch_cloudrun.py` — `CloudRunDispatchBackend`; calls GCP Cloud Run Jobs API
+- `backends/sqlite_progress.py` — SQLite `ProgressWriter`/`ProgressReader` (delegated to `progress/backends/sqlite.py`)
+- `backends/postgres_progress.py` — Postgres `ProgressWriter`/`ProgressReader` (delegated to `progress/backends/postgres.py`)
 
 **`orchestration/`** — flat-DAG subgraphs and the compound default graph
 - Public surface: `RunState` (slim parent state, designed for `MyRunState(RunState)` extension), `build_planning_subgraph` / `build_execution_subgraph` (uncompiled `StateGraph`s for composing custom pipelines), `build_default_graph` (composes planning + execution as nodes under `RunState`), `build_chat_graph` (slash-parse → binary triage `{chat, plan}` → planner / questionnaire / approval, then on approve mounts the same `build_execution_subgraph` as a node + `execution_summary_node`)
@@ -70,13 +93,20 @@
 - Private: `_state.py` (state schemas, `RoutingSkeleton`/`RoutingNode` pydantic models), `_invoke.py` (queue-only dispatch), `_signal_router.py`, `_validate.py`
 
 **`server/`**
-- `create_app()` — FastAPI factory + ASGI lifespan
-- `_aegra_routes.py` — lifespan calls `bootstrap_server()` (single queue-creation site), registers reference agents, heartbeats `monolith-0` in-process worker, spawns `run_worker` against shared queue
+- `__init__.py` — three named app constructors: `create_unified_app` (S1–S3, all routes), `create_control_app` (claim/complete/fail + workers + invocations; cannot receive `ProgressWriter`), `create_data_app` (event record/query/stream + artifacts); `create_app()` legacy alias for `create_unified_app`
+- `_event_router.py` — `EventPolicy` StrEnum (`EPHEMERAL_UI`, `SILENT_AUDIT`, `DUAL_ROUTED`); `classify_event(event)` — exhaustive match over `EventType`; mypy flags unhandled variants when `EventType` grows
+- `_aegra_routes.py` — lifespan calls `bootstrap_server()` (single queue-creation site), registers reference agents, heartbeats `monolith-0` in-process worker, spawns `run_worker` against shared queue; startup validator raises `ConfigurationError` when `data_plane_url` configured but no `ProgressWriter` backend set
 - `_capabilities.py` — authoritative server-side `CapabilityIndex` populated by worker heartbeats; pydantic `Capability` wire model validates charset / length at boundary
 - `_langgraph_config.py` — langgraph config generation
 - `server_bootstrap.py` — 0-arg Aegra wrappers for `build_chat_graph`, `build_default_graph`, `build_execution_graph`; `bootstrap_server()` idempotent queue factory (call once from lifespan, never from module body); promotes `monet` logger to INFO at boot (respects `MONET_LOG_LEVEL` override)
 - `_auth.py` — `require_api_key` is no-op when `MONET_API_KEY` unset (keyless dev); strict Bearer check when key configured. `require_task_auth` always requires key (HMAC derivation)
-- `_routes.py` — `POST /api/v1/workers/{worker_id}/heartbeat`, `POST /api/v1/pools/{pool}/claim`, `GET /api/v1/agents`, `GET /api/v1/artifacts/{id}` / `{id}/view`
+- `_routes.py` — legacy route mount for `GET /api/v1/agents`, artifact routes
+- `routes/_tasks_control.py` — control-plane routes: `POST /pools/{pool}/claim`, `POST /tasks/{task_id}/complete`, `POST /tasks/{task_id}/fail`; wires `EventRouter` for task lifecycle events (`DUAL_ROUTED` → `ProgressWriter` + LangGraph custom event; `EPHEMERAL_UI` → custom event only)
+- `routes/_tasks_data.py` — data-plane routes: `POST /runs/{run_id}/events`, `GET /runs/{run_id}/events`, `GET /runs/{run_id}/events/stream` (SSE, emits `id: <event_id>`); validates `HITL_DECISION` references a known `HITL_CAUSE`
+- `routes/_workers.py` — heartbeat, capability registration (control plane)
+- `routes/_invocations.py` — direct agent invocation (control plane)
+- `routes/_threads.py` — thread listing, state inspection (control plane)
+- `routes/_artifacts.py` — artifact CRUD (data plane)
 
 **`agents/`** — reference agents using partial form: planner, researcher, writer, qa, publisher
 
@@ -84,7 +114,7 @@
 - `_migrations.py` — programmatic alembic entry points: `apply_migrations`, `check_at_head`, `head_revision`, `stamp_head`
 - `artifacts_from_env()` auto-migrates for dev ergonomics; production deploys gate with `monet db check` + construct `SQLiteIndex` directly
 
-**`_migrations/`** — package-shipped alembic tree (`env.py`, `script.py.mako`, `versions/`). Sync-only (no asyncio loops). Baseline `0001_baseline` creates `artifacts` table.
+**`_migrations/`** — package-shipped alembic tree (`env.py`, `script.py.mako`, `versions/`). Sync-only (no asyncio loops). Baseline `0001_baseline` creates `artifacts` table. `0002_progress_events_up.sql` / `_down.sql` — creates `progress_events` table with `ix_progress_run_event` and `ix_progress_run_type` indexes.
 
 ## `tests/`
 

@@ -106,15 +106,15 @@ Queue plane already SaaS-compatible (all backends pull-only). Control-plane prim
 - **Tenant-scoped stream keys** (`work:{tenant}:{pool}`) — trigger: Priority 1 lands. Current `work:{pool}` maps cleanly, one segment insertion.
 - **Per-tenant rate limits on `/progress` and `/complete`** — trigger: Priority 1 lands.
 
-### Priority 2 — Push pool dispatch (shipped) + follow-ons
+### Priority 2 — Cloud dispatch pools (shipped) + follow-ons
 
-**Shipped:** `src/monet/orchestration/_invoke.py` branches on `PoolConfig.type == "push"`, POSTs `{task_id, token, callback_url, payload}` to pool webhook URL via `httpx`. Workers run `monet worker --push` to stand up `POST /dispatch` endpoint. Auth is HMAC-derived per task (`HMAC_SHA256(MONET_API_KEY, task_id)`). Batch providers use `monet.core.push_handler.handle_dispatch(...)` in ~10-line user entry script.
+**Shipped:** `DispatchBackend` Protocol in `src/monet/queue/_dispatch.py`. Pool config carries optional `dispatch = "ecs"` / `"cloudrun"`. Dispatch worker polls `claim()`, submits outbound to AWS ECS or GCP Cloud Run via provider API, claims next — no inbound ports on any worker. Spawned containers run standard worker bootstrap: deserialise task, execute `@agent`, call `WorkerClient.complete()`/`fail()`, heartbeat lease directly. Replaces old webhook push model (`push_handler.py`, `_push_with_retry`) which required inbound HTTP on the worker.
 
 Follow-ons (trigger-gated):
 
-- **Retry / circuit breaker on provider API failures** — webhook POST 5xx raises `RuntimeError` today. Trigger: first observed transient throttling on real Cloud Run / Lambda.
+- **Retry / circuit breaker on provider API failures** — `submit()` raises on provider 5xx today. Trigger: first observed transient throttling on real Cloud Run / ECS.
 - **Convenience provider extras** `monet[gcp]` / `monet[aws]` / `monet[azure]` / `monet[all-providers]`. Trigger: first user request for provider glue inside monet.
-- **Long-running job suspend pattern** — `invoke_agent` stays alive waiting full `agent_timeout`. Trigger: measured Aegra worker-thread pressure from jobs > 5min.
+- **Long-running job suspend pattern** — lease TTL covers the job window; dispatch worker has no keepalive. Trigger: job duration approaches `MONET_TASK_LEASE_TTL`.
 
 ### Priority 3 — Scheduled runs
 

@@ -1,27 +1,31 @@
 # Server Contract Specification
 
-## Problem Statement
+## Status
 
-`monet.server` and `monet.orchestration` have circular imports through private symbols:
+The circular import problem described below has been resolved. This document records the original problem and the contracts that were established to fix it.
+
+**Shipped:** `contracts/` is now a zero-import foundation package. `PoolConfig` lives in `monet.config._pools`. `task_hmac` lives in `monet.core.auth`. The old webhook push model (`push_handler.py`, `_push_with_retry`, `close_dispatch_client`) has been removed and replaced by the outbound-only `DispatchBackend` protocol.
+
+## Problem Statement (historical)
+
+`monet.server` and `monet.orchestration` had circular imports through private symbols:
 
 ```
 server._aegra_routes  →  orchestration._invoke.configure_capability_index
-server._aegra_routes  →  orchestration._invoke._push_with_retry (private)
-server._aegra_routes  →  orchestration._invoke._write_dispatch_failed (private)
-server._aegra_routes  →  orchestration._invoke._PUSH_MAX_ATTEMPTS (private)
-server.__init__       →  orchestration._invoke.configure_capability_index
-server.__init__       →  orchestration._invoke.close_dispatch_client
+server._aegra_routes  →  orchestration._invoke._push_with_retry (private)  [removed]
+server._aegra_routes  →  orchestration._invoke._write_dispatch_failed (private)  [removed]
+server.__init__       →  orchestration._invoke.close_dispatch_client  [removed]
 server.server_bootstrap → orchestration._invoke.get_queue
 server.server_bootstrap → orchestration.configure_queue
 server._routes        →  orchestration._invoke.invoke_agent
 
-orchestration._invoke →  server._auth.task_hmac
-orchestration._invoke →  server._config.load_config (PoolConfig)
+orchestration._invoke →  server._auth.task_hmac  [moved to core.auth]
+orchestration._invoke →  server._config.load_config (PoolConfig)  [moved to config._pools]
 ```
 
-This creates:
+This created:
 - Fragile coupling to private implementation details
-- Circular import risk (currently deferred via local imports)
+- Circular import risk (deferred via local imports)
 - No testable contract boundary
 - Impossible to mock orchestration in server tests without patching internals
 

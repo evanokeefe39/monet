@@ -24,11 +24,14 @@ Key files: `src/monet/cli/_worker.py`, `src/monet/server/_auth.py`, `src/monet/q
 
 Same as S2 but N worker processes across regions or hardware classes, each claiming by `--pool` name declared in `monet.toml [pools]`. One logical server, several worker fleets.
 
-Push pools (Cloud Run, Lambda, Vercel Functions) are declared in config but the dispatcher is **not implemented** — see `CLAUDE.md ## Roadmap` Priority 2.
+Two pool execution modes exist:
+
+- **Pull pools** — workers poll `claim()`, execute in-process, heartbeat lease every 30s via `renew_lease()`. No inbound ports required.
+- **Cloud dispatch pools** — `dispatch = "ecs"` or `dispatch = "cloudrun"` in `monet.toml [pools.<name>]`. A thin dispatch worker polls `claim()`, submits the task to ECS/Cloud Run via outbound API call, then immediately claims next. The spawned container runs standard worker bootstrap, calls `complete()`/`fail()`, and heartbeats directly. No inbound ports on any worker.
 
 Target audience: `examples/split-fleet/` (one server, two pools `fast` + `heavy`, shipped as both a Docker Compose stack and a Railway deployment).
 
-Key files: `src/monet/config/_schema.py` (pool parsing), `src/monet/orchestration/_invoke.py` (queue dispatch; push branch missing).
+Key files: `src/monet/config/_pools.py`, `src/monet/queue/_dispatch.py`, `src/monet/queue/backends/dispatch_ecs.py`, `src/monet/queue/backends/dispatch_cloudrun.py`, `src/monet/queue/_worker.py`.
 
 ## S4 — Workers-only local (test / library)
 
@@ -36,19 +39,34 @@ Key files: `src/monet/config/_schema.py` (pool parsing), `src/monet/orchestratio
 
 Not a user-facing run mode — no pipeline composition happens here, no graph driver. Execution plane only. Useful for validating `@agent` + signals + artifact store in isolation.
 
-## S5 — Vendor-hosted orchestrator, customer-hosted workers (SaaS)
+## S5 — Vendor-hosted control plane, customer-hosted data plane (split-plane / SaaS)
 
-The SaaS platform itself — user management, accounts, billing, usage limits, customer UI — lives in a **separate downstream repo that imports `monet`**. This keeps the SDK repo focused and MIT-licensed, and isolates fast-churning commercial concerns from orchestration correctness.
+The split-plane shape separates orchestration from telemetry by construction. The vendor runs `create_control_app` (claim/complete/fail, worker registration, graph invocation) on vendor infra. The customer runs `create_data_app` (event record/query/stream, artifacts) on their own infra. Customer telemetry and artifacts never traverse vendor infrastructure.
 
-The vendor deployment from the outside: Aegra + Postgres + shared Redis/Upstash running on vendor infra behind a URL like `https://api.monet.cloud`. Customers run `monet worker --server-url <vendor-url> --pool <tenant-pool>` outbound-only. `MonetClient` also targets the vendor URL.
+```
+MonetClient(url="https://control.saas.com", data_plane_url="https://data.customer.com")
+```
 
-`monet`'s job for S5 is only to **expose the enabling primitives** the downstream SaaS repo builds on. Out of scope for this repo: user accounts, billing, quota UX, rate-limit dashboards, API-key issuance/rotation flows, customer onboarding.
+Control-plane methods (`run`, `resume`, `abort`, `list_runs`) target `url`. Data-plane methods (`subscribe_events`, `query_events`, `list_artifacts`) target `data_plane_url`. When `data_plane_url` is absent, all methods resolve against `url` — zero config change for S1–S3.
 
-**Queue plane already works** — every backend is pull/poll, no inbound callbacks to workers. See `src/monet/queue/backends/`.
+Data plane config in `monet.toml`:
 
-**Control plane enabling primitives not yet present** — single global `MONET_API_KEY` at `src/monet/server/_auth.py`, no tenant/workspace/project ID in request path, state, or `MonetClient.list_runs()`. These are the primitives the SaaS repo needs `monet` to surface. See `CLAUDE.md ## Roadmap` Priority 1 for the five extension points.
+```toml
+[planes]
+data_url = "https://data.customer.com"
 
-The boundary is the auth dependency swap: SaaS repo ships a FastAPI app that mounts `monet`'s server factory and injects its own auth/tenant resolver. Everything downstream of that point is `monet`; everything upstream is SaaS.
+[planes.progress]
+backend = "postgres"
+dsn     = "postgresql://..."
+```
+
+`ProgressBackend` enum rejects invalid values at config-parse time. Boot validator raises `ConfigurationError` if `data_plane_url` is set but no `ProgressWriter` backend is configured.
+
+Data-plane SSE stream emits `id: <event_id>` on each event. Browser `EventSource` reconnects automatically via `Last-Event-ID`. Python client tracks last `event_id` and reconnects with `?after=<last_event_id>`.
+
+The SaaS platform itself — accounts, billing, quotas, customer UI — lives in a **separate downstream repo that imports `monet`**. Out of scope for this repo. The auth boundary: SaaS repo mounts `monet`'s server factory and injects its own auth/tenant resolver.
+
+Key files: `src/monet/server/__init__.py` (three app constructors), `src/monet/progress/`, `src/monet/client/__init__.py` (dual-view), `src/monet/config/_schema.py` (`PlanesConfig`).
 
 ## S6 — Library / embedded (no server) — REMOVED
 
@@ -64,15 +82,18 @@ Trigger for reintroduction: a concrete need for library-only usage (notebook exa
 |---|---|---|---|---|---|
 | S1 local dev | `monet dev` (Docker) | In-server (`pool="local"`) | `memory` or `sqlite` | None | Supported |
 | S2 self-hosted prod | `aegra serve` | `monet worker --server-url` | `redis` or `upstash` | `MONET_API_KEY` | Supported — `examples/deployed/` |
-| S3 split fleet | `aegra serve` | N × `monet worker`, different `--pool` | `redis` or `upstash` | `MONET_API_KEY` | Supported except push pools — `examples/split-fleet/` |
+| S3 split fleet | `aegra serve` | N × `monet worker` per pool; or cloud dispatch | `redis` or `upstash` | `MONET_API_KEY` | Supported — pull + ECS/Cloud Run dispatch — `examples/split-fleet/` |
 | S4 workers-only | — | `monet worker` (no `--server-url`) | `memory` | — | Test/library only |
-| S5 SaaS | Vendor-hosted Aegra | Customer-hosted `monet worker` | Shared `redis` / `upstash` | Needs pluggable auth + tenant ID | Queue plane ready, control plane pending (see Roadmap P1) |
+| S5 split-plane / SaaS | Vendor `create_control_app` + customer `create_data_app` | Customer-hosted `monet worker` | Shared `redis` / `upstash` | `MONET_API_KEY`; pluggable auth in downstream SaaS repo | Supported — three app constructors + dual-view client |
 | S6 embedded | — | — | — | — | Removed (see Deferred) |
 
 ## Deployment-assumption defaults
 
 - `MONET_SERVER_URL` default `http://localhost:2026` across `cli/_run.py`, `cli/_chat.py`, `cli/_runs.py`, `cli/_worker.py`, `config/_schema.py`. All env-overridable for remote deployment.
 - `MONET_QUEUE_BACKEND` default `memory`; Redis URI default `redis://localhost:6379`. All env-overridable.
+- `MONET_DATA_PLANE_URL` — when set, `MonetClient` routes telemetry methods to the data plane. Absent = unified URL for all methods.
+- `MONET_TASK_LEASE_TTL` — lease window in seconds (default 90). Tasks not heartbeated within this window are re-queued.
+- `MONET_TASK_LEASE_INTERVAL` — worker heartbeat interval in seconds (default 30).
 - `cli/_dev.py` healthcheck polls `127.0.0.1` — dev-only, correct.
 
 No hardcodes that break remote deployment.
