@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 
 from monet.client import AlreadyResolved, MonetClient
 from monet.client._wire import post_hitl_decision
+from monet.events import EventType, ProgressEvent
 from monet.progress.backends.sqlite import SqliteProgressBackend
-from monet.queue._progress import EventType, ProgressEvent
 from monet.server import create_data_app
 
 _API_KEY = "test-key"

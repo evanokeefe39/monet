@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from monet.contracts import EventType, ProgressEvent
+from monet.events import EventType, ProgressEvent
 
 __all__ = ["EventPolicy", "classify_event"]
 

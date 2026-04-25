@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, cast
 from monet.types import AgentResult, Signal, build_artifact_pointer
 
 if TYPE_CHECKING:
-    from monet.queue import TaskRecord
+    from monet.events import TaskRecord
 
 __all__ = [
     "deserialize_result",
@@ -77,7 +77,7 @@ def serialize_task_record(record: TaskRecord) -> str:
     :func:`serialize_result` so enum/datetime/tuple shapes survive the
     round-trip; all other fields are JSON-native.
     """
-    from monet.queue._interface import TASK_RECORD_SCHEMA_VERSION
+    from monet.events import TASK_RECORD_SCHEMA_VERSION
 
     result = record.get("result")
     return json.dumps(
@@ -105,7 +105,7 @@ def deserialize_task_record(raw: str) -> TaskRecord:
         KeyError: if required fields are missing.
         ValueError: if schema_version is newer than supported.
     """
-    from monet.queue import TASK_RECORD_SCHEMA_VERSION, TaskStatus
+    from monet.events import TASK_RECORD_SCHEMA_VERSION, TaskStatus
 
     d: dict[str, Any] = json.loads(raw)
     version = d.get("schema_version", 1)

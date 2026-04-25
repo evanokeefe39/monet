@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from monet.contracts import EventType, ProgressEvent
+from monet.events import EventType, ProgressEvent
 from monet.progress.backends.sqlite import SqliteProgressBackend
 
 

@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
+from monet.queue import InMemoryTaskQueue
 from monet.types import AgentResult, AgentRunContext
 
 
@@ -185,7 +186,7 @@ async def test_worker_publishes_emit_progress_events() -> None:
     """Worker wires _progress_publisher so emit_progress() forwards to queue."""
     from monet.core.registry import LocalRegistry
     from monet.core.stubs import emit_progress
-    from monet.queue import run_worker
+    from monet.worker import run_worker
 
     queue = InMemoryTaskQueue()
     registry = LocalRegistry()

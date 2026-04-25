@@ -70,7 +70,7 @@ if TYPE_CHECKING:
 
     from langgraph_sdk.client import LangGraphClient
 
-    from monet.queue._progress import ProgressEvent
+    from monet.events import ProgressEvent
 
 _log = logging.getLogger("monet.client")
 

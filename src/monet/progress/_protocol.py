@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from monet.contracts import ProgressEvent
+    from monet.events import ProgressEvent
 
 __all__ = ["ProgressReader", "ProgressWriter"]
 

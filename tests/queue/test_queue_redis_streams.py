@@ -20,7 +20,8 @@ import pytest
 from fakeredis import FakeAsyncRedis
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
-from monet.queue import InMemoryTaskQueue, TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
+from monet.queue import InMemoryTaskQueue
 from monet.queue.backends.redis_streams import RedisStreamsTaskQueue
 from monet.types import AgentResult, AgentRunContext
 

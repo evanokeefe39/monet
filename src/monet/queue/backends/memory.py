@@ -16,7 +16,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from monet.queue import TaskRecord, TaskStatus
+from monet.events import TaskRecord, TaskStatus
 from monet.queue._interface import AwaitAlreadyConsumedError
 from monet.signals import SignalType
 from monet.types import AgentResult, Signal

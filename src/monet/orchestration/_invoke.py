@@ -19,15 +19,13 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import trace
 
 from monet.config import OrchestrationConfig
-from monet.queue import (
-    TASK_RECORD_SCHEMA_VERSION,
-    TaskStatus,
-)
+from monet.events import TASK_RECORD_SCHEMA_VERSION, TaskStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from monet.queue import TaskQueue, TaskRecord
+    from monet.events import TaskRecord
+    from monet.queue import TaskQueue
     from monet.server._capabilities import CapabilityIndex
     from monet.types import AgentResult, AgentRunContext
 

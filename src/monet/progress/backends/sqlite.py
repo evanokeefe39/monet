@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-from monet.contracts import EventType, ProgressEvent
+from monet.events import EventType, ProgressEvent
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS typed_progress_events (

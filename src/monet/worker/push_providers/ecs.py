@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from monet.queue._dispatch import ClaimedTask
+    from monet.events._tasks import ClaimedTask
 
-_log = logging.getLogger("monet.queue.dispatch.ecs")
+_log = logging.getLogger("monet.worker.dispatch.ecs")
 
 
 @dataclass

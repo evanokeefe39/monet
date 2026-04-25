@@ -134,7 +134,7 @@ async def record_run_event(
     """Record a typed progress event for a run."""
     if writer is None:
         raise HTTPException(501, "No ProgressWriter configured")
-    from monet.contracts import EventType, ProgressEvent
+    from monet.events import EventType, ProgressEvent
 
     event_type = EventType(body.event_type)
 
