@@ -12,7 +12,7 @@ self-hosted production, single tenant.
 - **server/** runs `aegra serve` — graph execution (entry / planning /
   execution / chat) plus monet's worker-coordination routes (register,
   heartbeat, claim). Stateless apart from Postgres.
-- **worker/** runs `monet worker --server-url ... --pool local` — claims
+- **worker/** runs `monet worker --server-url ... --pool default` — claims
   tasks from the shared Redis queue, executes the reference agents
   (`planner`, `researcher`, `writer`, `qa`, `publisher`), posts results
   back.
@@ -25,19 +25,24 @@ deploying the `worker/` service more times.
 
 ```
 examples/deployed/
-  .env.example          # shared env for both services
-  server/               # aegra serve
+  .env.example                    # shared env for both services
+  docker-compose.split-plane.yml  # one-time S5 split-plane validation
+  server/                         # aegra serve
     aegra.json
     server_graphs.py
     railway.toml
-    docker-compose.yml
+    docker-compose.yml            # includes worker service for local S2 testing
     Dockerfile
     pyproject.toml
-  worker/               # monet worker
+  worker/                         # monet worker
     agents/__init__.py  # `import monet.agents` — registers reference set
     railway.toml
     Dockerfile
     pyproject.toml
+  railway/                        # Railway deployment guide + reference configs
+    server.toml
+    worker.toml
+    README.md
 ```
 
 ## Run locally with Docker Compose
@@ -51,10 +56,7 @@ cd server
 docker compose up -d
 ```
 
-Compose brings up Postgres, Redis, and the server together. To add a
-worker container, run a second compose up from the worker dir (or add a
-worker service to the compose file as in `../split-fleet/compose/` which
-demonstrates both in one stack).
+Compose brings up Postgres, Redis, the server, and a worker together.
 
 Quick sanity check:
 
@@ -90,10 +92,9 @@ monet run --url http://localhost:2026 "AI trends in healthcare"
 
 ## Pool names
 
-The worker claims `--pool local` because monet's reference agents
-declare `pool="local"` (the default). If you add your own agents with
-a different pool name, update `worker/railway.toml` and
-`worker/Dockerfile` to match — worker and agent pool names must agree.
+The worker claims `--pool default` (via `MONET_WORKER_POOL`). If your
+agents declare a different pool name, set `MONET_WORKER_POOL` on the
+worker service — worker and agent pool names must agree.
 
 ## Connect from your machine
 
@@ -120,6 +121,26 @@ Swap any managed service by changing the connection string:
 - **Postgres**: Railway plugin, Neon, Supabase, RDS, any Postgres 14+
 - **Redis**: Railway plugin, Upstash, ElastiCache, any Redis 7+
 - **Tracing**: Langfuse Cloud, self-hosted Langfuse, any OTLP endpoint
+
+## Split-plane validation (S5, one-time)
+
+`docker-compose.split-plane.yml` runs control plane (orchestration) and
+data plane (events/SSE) as separate server processes to validate that
+control → data routing works end-to-end.
+
+```bash
+cd examples/deployed
+docker compose -f docker-compose.split-plane.yml up
+
+# In another terminal:
+export MONET_API_KEY="<same as .env>"
+monet run "test topic" \
+  --url http://localhost:2026 \
+  --data-plane-url http://localhost:3000 \
+  --auto-approve
+```
+
+Tear it down after validation — day-to-day dev uses the unified server.
 
 ## Other setups
 

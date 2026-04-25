@@ -1,0 +1,114 @@
+# One-time S5 split-plane validation.
+# Runs control plane (orchestration) and data plane (events/SSE) as
+# separate server processes. Validates that control → data routing works
+# end-to-end before committing to a split deployment.
+#
+# Usage:
+#   docker compose -f docker-compose.split-plane.yml up
+#   # In another terminal:
+#   export MONET_API_KEY=<same as .env>
+#   monet run "test topic" \
+#     --url http://localhost:2026 \
+#     --data-plane-url http://localhost:3000 \
+#     --auto-approve
+
+services:
+  control:
+    build:
+      context: ../..
+      dockerfile: examples/deployed/server/Dockerfile
+    ports:
+      - "2026:2026"
+    environment:
+      DATABASE_URL: postgresql://monet:monet@postgres:5432/monet
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_QUEUE_BACKEND: redis
+      REDIS_URI: redis://redis:6379
+      MONET_DISTRIBUTED: "1"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    command: monet server --plane control --host 0.0.0.0 --port 2026
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:2026/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  data:
+    build:
+      context: ../..
+      dockerfile: examples/deployed/server/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://monet:monet@postgres:5432/monet
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_DISTRIBUTED: "1"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    command: monet server --plane data --host 0.0.0.0 --port 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: examples/deployed/worker/Dockerfile
+    environment:
+      MONET_SERVER_URL: http://control:2026
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_QUEUE_BACKEND: redis
+      REDIS_URI: redis://redis:6379
+      MONET_DISTRIBUTED: "1"
+      MONET_WORKER_POOL: default
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    depends_on:
+      control:
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: monet
+      POSTGRES_PASSWORD: monet
+      POSTGRES_DB: monet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

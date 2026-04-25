@@ -49,6 +49,24 @@ services:
       timeout: 3s
       retries: 5
 
+  worker:
+    build:
+      context: ../../..
+      dockerfile: examples/deployed/worker/Dockerfile
+    environment:
+      MONET_SERVER_URL: http://monet:2026
+      MONET_API_KEY: ${MONET_API_KEY:?MONET_API_KEY is required}
+      MONET_QUEUE_BACKEND: redis
+      REDIS_URI: redis://redis:6379
+      MONET_DISTRIBUTED: "1"
+      MONET_WORKER_POOL: ${MONET_WORKER_POOL:-default}
+      MONET_WORKER_CONCURRENCY: ${MONET_WORKER_CONCURRENCY:-10}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+    depends_on:
+      monet:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redisdata:
