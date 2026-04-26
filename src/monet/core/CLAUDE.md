@@ -8,8 +8,8 @@ Agent-side SDK machinery. The `@agent` decorator, registry, context injection, s
 
 | Module | Owns |
 |--------|------|
-| `engine.py` | `execute_task()` — single-task execution: ContextVar setup, OTel span, registry lookup, handler invocation with timeout, queue complete/fail. Also owns `_record_lifecycle`. Boundary: MUST NOT import from `monet.orchestration`, `monet.worker`, or `langgraph`. |
-| `decorator.py` | `@agent` decorator — registers into `default_registry`, injects context, dispatches command. Lifecycle events (agent_started, agent_completed, agent_failed, hitl_cause) stay here — they require agent exception taxonomy not visible to the engine. |
+| `engine.py` | `execute_task()` + `enter_agent_run()` — full agent runtime: ContextVar setup, lifecycle events (agent_started/completed/failed/hitl_cause), OTel spans, hooks, param injection, result wrapping, exception translation, timeout, queue complete/fail. Also owns `_record_lifecycle`, `_validate_signature`, `_inject_params`, `_wrap_result`, `_handle_exception`. Boundary: MUST NOT import from `monet.orchestration`, `monet.worker`, or `langgraph`. |
+| `decorator.py` | `Agent` class + `@agent` factory — `Agent` is a declaration object carrying config (agent_id, command, pool, allow_empty); `__call__` delegates to `enter_agent_run()`. `agent()` validates, builds `Agent`, registers in `default_registry`. No runtime logic here. |
 | `registry.py` | `AgentRegistry` — maps `agent_id → AgentDescriptor`. `default_registry` is the process singleton. |
 | `context.py` | `AgentContext` — typed context injected into agent functions. Run ID, trace ID, agent ID, artifact service. |
 | `context_resolver.py` | Resolves `AgentContext` from task record at invocation time |
