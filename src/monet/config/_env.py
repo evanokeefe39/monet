@@ -52,6 +52,7 @@ __all__ = [
     "MONET_DATA_PLANE_URL",
     "MONET_DISTRIBUTED",
     "MONET_ENV_VARS",
+    "MONET_PROGRESS_DSN",
     "MONET_QUEUE_BACKEND",
     "MONET_QUEUE_COMPLETION_TTL",
     "MONET_QUEUE_LEASE_TTL",
@@ -133,6 +134,7 @@ MONET_PROGRESS_DB: Final[str] = "MONET_PROGRESS_DB"
 MONET_PROGRESS_MAX_EVENTS: Final[str] = "MONET_PROGRESS_MAX_EVENTS"
 MONET_PROGRESS_TTL_DAYS: Final[str] = "MONET_PROGRESS_TTL_DAYS"
 MONET_PROGRESS_BACKEND: Final[str] = "MONET_PROGRESS_BACKEND"
+MONET_PROGRESS_DSN: Final[str] = "MONET_PROGRESS_DSN"
 
 #: Every fixed ``MONET_*`` name registered above. The test isolation
 #: fixture delenv's each of these between tests; the env-vars docs
@@ -166,6 +168,7 @@ MONET_ENV_VARS: Final[tuple[str, ...]] = (
     MONET_PROGRESS_MAX_EVENTS,
     MONET_PROGRESS_TTL_DAYS,
     MONET_PROGRESS_BACKEND,
+    MONET_PROGRESS_DSN,
 )
 
 

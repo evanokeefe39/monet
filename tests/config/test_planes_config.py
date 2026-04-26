@@ -27,7 +27,7 @@ def test_progress_config_load_returns_none_when_not_set(
 
 def test_progress_config_load_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MONET_PROGRESS_BACKEND", "sqlite")
-    monkeypatch.delenv("REDIS_URI", raising=False)
+    monkeypatch.delenv("MONET_PROGRESS_DSN", raising=False)
     cfg = ProgressConfig.load()
     assert cfg is not None
     assert cfg.backend == ProgressBackend.SQLITE
@@ -38,7 +38,7 @@ def test_progress_config_load_postgres_with_dsn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MONET_PROGRESS_BACKEND", "postgres")
-    monkeypatch.setenv("REDIS_URI", "postgresql://localhost/monet")
+    monkeypatch.setenv("MONET_PROGRESS_DSN", "postgresql://localhost/monet")
     cfg = ProgressConfig.load()
     assert cfg is not None
     assert cfg.backend == ProgressBackend.POSTGRES
