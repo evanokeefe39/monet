@@ -1,6 +1,6 @@
 """Graph exports for Aegra dev / serve.
 
-Configures infrastructure (tracing, artifacts, queue, worker) at import
+Configures infrastructure (tracing, artifacts, queue) at import
 time so the custom stack boots standalone. Imports the agents module for
 side-effect registration into monet's handler registry.
 
@@ -28,7 +28,6 @@ from monet.artifacts import artifacts_from_env, configure_artifacts
 from monet.core.tracing import configure_tracing
 from monet.orchestration import configure_queue
 from monet.queue import InMemoryTaskQueue
-from monet.server import configure_lazy_worker
 
 # --- Infrastructure init (runs at import time) ---
 configure_tracing()
@@ -36,7 +35,6 @@ configure_artifacts(artifacts_from_env())
 
 _queue = InMemoryTaskQueue()
 configure_queue(_queue)
-configure_lazy_worker(_queue)
 
 from myco.graphs.chat import build_chat_graph as _build_chat_graph  # noqa: E402
 from myco.graphs.pipeline import (  # noqa: E402

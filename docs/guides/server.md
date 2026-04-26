@@ -33,50 +33,7 @@ def create_app(
 
 ## Bootstrap
 
-For programmatic server setup (e.g. in tests or custom entrypoints), use `bootstrap()`:
-
-```python
-from monet.server import bootstrap
-
-worker_task = await bootstrap(
-    artifacts_root="/data/artifacts",
-    enable_tracing=True,
-    queue=my_queue,
-)
-```
-
-```python
-async def bootstrap(
-    *,
-    artifacts_root: str | Path | None = None,
-    enable_tracing: bool = True,
-    agents: list[AgentCapability] | None = None,
-    queue: TaskQueue | None = None,
-    lazy_worker: bool = False,
-) -> asyncio.Task[None] | None
-```
-
-Initialization order:
-
-1. **Tracing** -- configure OpenTelemetry (if `enable_tracing=True`)
-2. **Artifact Store** -- resolve root from parameter, `MONET_ARTIFACTS_DIR` env, or `.artifacts` default
-3. **Manifest** -- declare additional agent capabilities (if `agents` provided)
-4. **Queue** -- register task queue (defaults to `InMemoryTaskQueue`)
-5. **Worker** -- start background worker task, or defer to first enqueue if `lazy_worker=True`
-
-Returns the worker task (cancel on shutdown) or `None` if `lazy_worker=True`.
-
-## Lazy worker mode
-
-For `aegra dev` environments where the worker should not start until the first task:
-
-```python
-from monet.server import configure_lazy_worker
-
-configure_lazy_worker(queue)
-```
-
-This patches `queue.enqueue()` to start the worker on first call.
+Custom `server_graphs.py` files configure infrastructure at import time (`configure_tracing`, `configure_artifacts`, `configure_queue`) and export 0-arg graph factory functions. The Aegra lifespan calls `bootstrap_server()` from `monet.server.server_bootstrap`, which detects the registered queue and starts the in-process worker automatically. No explicit worker startup is needed in example or custom server graph files.
 
 ## Routes
 
