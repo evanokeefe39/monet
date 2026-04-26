@@ -29,9 +29,10 @@ from monet.types import (
 
 from .artifacts import _artifact_collector, _artifact_hashes, get_artifacts
 from .context import _agent_context
+from .engine import _record_lifecycle
 from .hooks import run_after_agent_hooks, run_before_agent_hooks
 from .registry import default_registry
-from .stubs import _current_task_id, _progress_writer_cv, _signal_collector
+from .stubs import _current_task_id, _signal_collector
 from .tracing import get_tracer
 
 # Default content limit for automatic offload (bytes).
@@ -232,37 +233,6 @@ def _handle_exception(
         trace_id=ctx.get("trace_id", ""),
         run_id=ctx.get("run_id", ""),
     )
-
-
-async def _record_lifecycle(
-    run_id: str,
-    task_id: str,
-    agent_id: str,
-    event_type_str: str,
-    payload: dict[str, Any] | None = None,
-) -> None:
-    """Record a lifecycle ProgressEvent. Best-effort — never raises."""
-    try:
-        import time as _time
-
-        pw = _progress_writer_cv.get()
-        if pw is None:
-            return
-        from monet.events import EventType, ProgressEvent
-
-        event: ProgressEvent = {
-            "event_id": 0,
-            "run_id": run_id,
-            "task_id": task_id,
-            "agent_id": agent_id,
-            "event_type": EventType(event_type_str),
-            "timestamp_ms": int(_time.time() * 1000),
-        }
-        if payload:
-            event["payload"] = payload
-        await pw.record(run_id, event)
-    except Exception:
-        pass
 
 
 @overload
