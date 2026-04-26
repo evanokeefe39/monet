@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from monet import get_artifacts
+from monet.core.artifacts import get_artifact_backend
 from monet.server._auth import require_api_key
 from monet.server.routes._common import _DAG_TASK_CHAR_BUDGET, ARTIFACT_LIST_MAX
 
@@ -47,9 +48,13 @@ async def count_artifacts_per_thread(
     ids = [t.strip() for t in thread_ids.split(",") if t.strip()]
     if not ids:
         return {}
-    store = get_artifacts()
+    from monet.artifacts.prebuilt._service import ArtifactService as _PrebuiltService
+
+    backend = get_artifact_backend()
+    if not isinstance(backend, _PrebuiltService):
+        return {}
     try:
-        result: dict[str, int] = await store.count_per_thread(ids)
+        result: dict[str, int] = await backend.count_per_thread(ids)
         return result
     except Exception as exc:
         _log.exception("artifact count failed")
@@ -63,11 +68,17 @@ async def list_artifacts(
     cursor: str | None = Query(default=None, description="ISO 8601 created_at cursor"),
 ) -> ArtifactListResponse:
     """List recent artifacts for a thread, newest-first."""
+    from monet.artifacts.prebuilt._service import ArtifactService as _PrebuiltService
+
+    backend = get_artifact_backend()
+    if not isinstance(backend, _PrebuiltService):
+        return ArtifactListResponse(artifacts=[], next_cursor=None)
+
     try:
         import asyncio as _asyncio
 
         rows = await _asyncio.wait_for(
-            get_artifacts().query_recent(
+            backend.query(
                 thread_id=thread_id,
                 since=cursor,
                 limit=limit + 1,

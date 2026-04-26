@@ -1,10 +1,10 @@
-"""Tests for the ``query_recent`` artifact-index surface."""
+"""Tests for the query_recent artifact-index surface."""
 
 from __future__ import annotations
 
-from monet.artifacts._index import SQLiteIndex
 from monet.artifacts._memory import InMemoryArtifactClient
-from monet.artifacts._metadata import ArtifactMetadata
+from monet.artifacts.prebuilt._index import SQLiteIndex
+from monet.artifacts.prebuilt._metadata import ArtifactMetadata
 
 
 def _meta(
@@ -115,10 +115,9 @@ async def test_query_recent_combined_filters() -> None:
     assert [r["artifact_id"] for r in rows] == ["match"]
 
 
-async def test_query_recent_in_memory_client() -> None:
+async def test_list_in_memory_client() -> None:
     client = InMemoryArtifactClient()
-    await client.write(
-        b"x", _meta(artifact_id="qr-1", created_at="2026-04-01T00:00:00Z")
-    )
-    rows = await client.query_recent()
-    assert len(rows) == 1
+    await client.write(b"x", artifact_id="qr-1", content_type="text/plain")
+    pointers = await client.list()
+    assert len(pointers) == 1
+    assert pointers[0]["artifact_id"] == "qr-1"

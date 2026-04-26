@@ -1,10 +1,4 @@
-"""Programmatic alembic runner for the artifact index.
-
-Shared entry point for both :meth:`SQLiteIndex.initialise` and the
-``monet db`` CLI. Always uses the package-shipped migrations under
-``monet._migrations`` so the correct revision set travels with the
-installed wheel.
-"""
+"""Programmatic alembic runner for the artifact index."""
 
 from __future__ import annotations
 
@@ -37,44 +31,19 @@ def _alembic_config(db_url: str | None = None) -> Config:
 
 
 def _sync_url(db_url: str) -> str:
-    """Return a sync SQLAlchemy URL for the given async URL.
-
-    Alembic-level checks use a synchronous connection; the async
-    driver suffix is stripped for that purpose only.
-    """
     return db_url.replace("+aiosqlite", "").replace("+asyncpg", "")
 
 
 def apply_migrations(db_url: str) -> None:
-    """Upgrade the target database to alembic head. Idempotent.
-
-    Always dispatches with a sync driver URL to avoid nested asyncio
-    loops when invoked from within an async context.
-
-    Detects the pre-alembic case — ``artifacts`` table present but no
-    ``alembic_version`` row — and auto-stamps the baseline before
-    running later revisions. Otherwise the baseline ``CREATE TABLE
-    artifacts`` would crash with ``table already exists`` every boot
-    on upgraded installs.
-    """
+    """Upgrade the target database to alembic head. Idempotent."""
     sync_url = _sync_url(db_url)
     cfg = _alembic_config(sync_url)
     if _is_pre_alembic(sync_url):
-        # Stamp the baseline revision so later revisions run on top
-        # of the existing legacy schema. Does not re-create tables.
         command.stamp(cfg, _BASELINE_REVISION)
     command.upgrade(cfg, "head")
 
 
 def _is_pre_alembic(sync_url: str) -> bool:
-    """True if the DB has an ``artifacts`` table but no recorded revision.
-
-    Covers two legacy cases seen in the wild:
-
-    - ``alembic_version`` table missing entirely (pre-alembic install).
-    - ``alembic_version`` present but empty (aborted / interrupted boot
-      before the first ``command.upgrade`` could insert a row).
-    """
     engine = create_engine(sync_url)
     try:
         inspector = inspect(engine)
@@ -114,10 +83,6 @@ def check_at_head(db_url: str) -> bool:
 
 
 def stamp_head(db_url: str) -> None:
-    """Mark the DB as being at head without running migrations.
-
-    Use this when adopting alembic on a pre-existing database that was
-    created by legacy ``Base.metadata.create_all``.
-    """
+    """Mark the DB as being at head without running migrations."""
     cfg = _alembic_config(_sync_url(db_url))
     command.stamp(cfg, "head")

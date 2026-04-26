@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from monet.core._agents_config import load_agents
+from monet.core._agent_loader import load_agents
 from monet.core.registry import default_registry
 
 

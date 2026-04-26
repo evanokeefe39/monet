@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 if TYPE_CHECKING:
-    from monet.artifacts._metadata import ArtifactMetadata
+    from monet.artifacts.prebuilt._metadata import ArtifactMetadata
 
 
 class Base(DeclarativeBase):
@@ -17,7 +17,7 @@ class Base(DeclarativeBase):
 
 
 class ArtifactRecord(Base):
-    """ORM model for the artifacts table. Distinct from ArtifactMetadata TypedDict."""
+    """ORM model for the artifacts table."""
 
     __tablename__ = "artifacts"
     artifact_id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -34,19 +34,6 @@ class ArtifactRecord(Base):
     tags: Mapped[str] = mapped_column(Text, default="{}")  # JSON string
     created_at: Mapped[str] = mapped_column(String)
 
-    # Secondary indexes for the catalogue query patterns. The composite
-    # on (run_id, created_at) supports "chronological artifacts for a
-    # run" without a filesort; the composite on (agent_id, created_at)
-    # supports ``query_recent(agent_id=..., since=..., limit=...)`` —
-    # the hot path for the ``data_analyst(score_agents)`` telemetry
-    # pipeline. ``ix_artifacts_created_at`` covers the unfiltered
-    # "most-recent overall" path.
-    #
-    # NOTE on tag filtering: ``query_recent(tag=...)`` uses ``LIKE`` on
-    # the JSON-serialised ``tags`` column. That is unindexed — acceptable
-    # while tag vocabularies stay small but a latent perf cliff at scale.
-    # The fix (if a workload surfaces it) is a child table or a SQLite
-    # expression index on ``json_extract(tags, '$.<key>')``.
     __table_args__ = (
         Index("ix_artifacts_run_id", "run_id"),
         Index("ix_artifacts_agent_id", "agent_id"),
@@ -64,35 +51,19 @@ def _is_in_memory(db_url: str) -> bool:
 
 
 class SQLiteIndex:
-    """SQLite-backed metadata index using async SQLAlchemy.
-
-    DB URL must use sqlite+aiosqlite:// scheme.
-    """
+    """SQLite-backed metadata index using async SQLAlchemy."""
 
     def __init__(self, db_url: str = "sqlite+aiosqlite:///.artifacts/index.db") -> None:
         self._db_url = db_url
         self._engine = create_async_engine(db_url)
 
     async def initialise(self) -> None:
-        """Bring the schema up to date, or fail fast.
-
-        In-memory SQLite databases (tests, ephemeral dev) are set up
-        directly via ``Base.metadata.create_all`` — migrations add no
-        value for DBs that do not survive a process restart.
-
-        Persistent databases must already be at alembic head before the
-        service starts. Migrations are applied out of band via
-        ``monet db migrate`` so the deploy pipeline controls when schema
-        changes land; ``initialise`` only verifies the DB is at head and
-        raises with an actionable message otherwise. This keeps the hot
-        boot path synchronous and avoids the nested-event-loop problem
-        of driving alembic from inside an asyncio coroutine.
-        """
+        """Bring the schema up to date, or fail fast."""
         if _is_in_memory(self._db_url):
             async with self._engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             return
-        from monet.artifacts._migrations import (
+        from monet.artifacts.prebuilt._migrations import (
             check_at_head,
             current_revision,
             head_revision,
@@ -109,14 +80,10 @@ class SQLiteIndex:
             )
 
     async def put(self, metadata: ArtifactMetadata) -> None:
-        """Insert artifact metadata into the index.
-
-        Receives an ArtifactMetadata TypedDict and maps it to an ArtifactRecord.
-        """
+        """Insert artifact metadata into the index."""
         import json
 
         record_data = dict(metadata)
-        # Convert tags dict to JSON string for storage
         record_data["tags"] = json.dumps(record_data.get("tags", {}))
         async with AsyncSession(self._engine) as session:
             session.add(ArtifactRecord(**record_data))
@@ -131,7 +98,6 @@ class SQLiteIndex:
             if result is None:
                 return None
             row_dict = {c.key: getattr(result, c.key) for c in result.__table__.columns}
-            # Convert tags JSON string back to dict
             row_dict["tags"] = json.loads(row_dict.get("tags", "{}"))
             return cast("ArtifactMetadata", row_dict)
 
@@ -158,13 +124,7 @@ class SQLiteIndex:
         since: str | None = None,
         limit: int = 100,
     ) -> list[ArtifactMetadata]:
-        """Query recent artifacts with optional agent/thread/tag/since filters.
-
-        Ordered by ``created_at`` descending. ``since`` is an ISO-8601
-        timestamp; lexicographic comparison matches the column's
-        ISO-8601 stored shape. ``tag`` matches tag *keys* via substring
-        on the stored JSON (small dict sizes, no index needed).
-        """
+        """Query recent artifacts with optional filters. Ordered by created_at desc."""
         import json
 
         clauses = []
