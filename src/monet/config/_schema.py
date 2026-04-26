@@ -33,7 +33,7 @@ from enum import StrEnum
 from pathlib import Path  # noqa: TC003 — pydantic needs this at runtime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from .._ports import STANDARD_DEV_PORT, STANDARD_LANGFUSE_PORT
 from ._env import (
@@ -56,6 +56,7 @@ from ._env import (
     MONET_DATA_PLANE_URL,
     MONET_DISTRIBUTED,
     MONET_PROGRESS_BACKEND,
+    MONET_PROGRESS_DSN,
     MONET_QUEUE_BACKEND,
     MONET_QUEUE_COMPLETION_TTL,
     MONET_QUEUE_LEASE_TTL,
@@ -682,7 +683,11 @@ class ProgressConfig(BaseModel):
         planes = read_toml_section("planes")
         progress_section = planes.get("progress", {})
         backend = ProgressBackend(raw)
-        dsn = read_str(REDIS_URI) if backend == ProgressBackend.POSTGRES else None
+        dsn = (
+            read_str(MONET_PROGRESS_DSN)
+            if backend == ProgressBackend.POSTGRES
+            else None
+        )
         if backend == ProgressBackend.POSTGRES and dsn is None:
             dsn = progress_section.get("dsn")
         return cls(backend=backend, dsn=dsn)
@@ -783,10 +788,6 @@ class CLIDevConfig(BaseModel):
             exa_api_key=read_str(EXA_API_KEY),
             tavily_api_key=read_str(TAVILY_API_KEY),
         )
-
-    @model_validator(mode="after")
-    def _at_least_one_llm_key_is_informational(self) -> CLIDevConfig:
-        return self
 
     def validate_for_boot(self) -> None:
         if not (self.gemini_api_key or self.groq_api_key):
