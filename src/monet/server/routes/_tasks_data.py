@@ -5,33 +5,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
-from monet.progress import ProgressReader, ProgressWriter
 from monet.queue import ProgressStore
 from monet.server._auth import require_api_key, require_task_auth
-from monet.server.routes._common import Queue, attach_trace_context
+from monet.server.routes._common import (
+    OptReader,
+    OptWriter,
+    Queue,
+    attach_trace_context,
+)
 
 _log = logging.getLogger("monet.server.routes.tasks_data")
 
 router = APIRouter()
-
-
-def _get_progress_writer(request: Request) -> ProgressWriter | None:
-    return getattr(request.app.state, "progress_writer", None)  # type: ignore[no-any-return]
-
-
-def _get_progress_reader(request: Request) -> ProgressReader | None:
-    return getattr(request.app.state, "progress_reader", None)  # type: ignore[no-any-return]
-
-
-OptWriter = Annotated[ProgressWriter | None, Depends(_get_progress_writer)]
-OptReader = Annotated[ProgressReader | None, Depends(_get_progress_reader)]
 
 
 # ---------------------------------------------------------------------------

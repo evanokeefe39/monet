@@ -241,6 +241,15 @@ class WorkerClient:
             logger=_log,
         )
 
+    async def publish_progress_event(
+        self, task_id: str, event: dict[str, Any], headers: dict[str, str]
+    ) -> None:
+        """POST a progress event to the server's progress endpoint."""
+        resp = await self._client.post(
+            f"/tasks/{task_id}/progress", headers=headers, json=event
+        )
+        resp.raise_for_status()
+
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
@@ -275,12 +284,8 @@ class RemoteQueue:
 
     async def publish_progress(self, task_id: str, event: dict[str, Any]) -> None:
         """POST a progress event to the server's progress endpoint."""
-        headers = _trace_headers()
         try:
-            resp = await self._client._client.post(
-                f"/tasks/{task_id}/progress", headers=headers, json=event
-            )
-            resp.raise_for_status()
+            await self._client.publish_progress_event(task_id, event, _trace_headers())
         except Exception:
             _log.debug("Failed to POST progress for task %s", task_id, exc_info=True)
 

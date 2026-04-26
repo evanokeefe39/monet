@@ -457,7 +457,7 @@ async def test_get_batch_progress_501_without_progress_store(
 
 
 def test_work_brief_dag_renders_mermaid_with_edges() -> None:
-    from monet.server._routes import _render_work_brief_dag
+    from monet.server.routes._artifacts import _render_work_brief_dag
 
     nodes = [
         {
@@ -501,7 +501,8 @@ def test_work_brief_dag_renders_mermaid_with_edges() -> None:
 
 
 def test_work_brief_dag_truncates_long_task() -> None:
-    from monet.server._routes import _DAG_TASK_CHAR_BUDGET, _render_work_brief_dag
+    from monet.server.routes._artifacts import _render_work_brief_dag
+    from monet.server.routes._common import _DAG_TASK_CHAR_BUDGET
 
     long = "x" * (_DAG_TASK_CHAR_BUDGET + 50)
     nodes = [
@@ -514,13 +515,13 @@ def test_work_brief_dag_truncates_long_task() -> None:
 
 
 def test_work_brief_dag_empty_when_no_nodes() -> None:
-    from monet.server._routes import _render_work_brief_dag
+    from monet.server.routes._artifacts import _render_work_brief_dag
 
     assert _render_work_brief_dag([]) == ""
 
 
 def test_work_brief_dag_escapes_quotes_in_labels() -> None:
-    from monet.server._routes import _render_work_brief_dag
+    from monet.server.routes._artifacts import _render_work_brief_dag
 
     nodes = [
         {"id": 'weird"id', "agent_id": "x", "command": "y", "depends_on": []},

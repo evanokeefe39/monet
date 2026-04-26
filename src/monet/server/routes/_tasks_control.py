@@ -4,28 +4,23 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+if TYPE_CHECKING:
+    from monet.progress import ProgressWriter
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from monet.events import EventType, ProgressEvent
-from monet.progress import ProgressWriter
 from monet.server._auth import require_api_key, require_task_auth
 from monet.server._event_router import EventPolicy, classify_event
-from monet.server.routes._common import CapIndex, Queue, attach_trace_context
+from monet.server.routes._common import CapIndex, OptWriter, Queue, attach_trace_context
 from monet.types import AgentResult, Signal, build_artifact_pointer
 
 _log = logging.getLogger("monet.server.routes.tasks_control")
 
 router = APIRouter()
-
-
-def _get_progress_writer(request: Request) -> ProgressWriter | None:
-    return getattr(request.app.state, "progress_writer", None)  # type: ignore[no-any-return]
-
-
-OptWriter = Annotated[ProgressWriter | None, Depends(_get_progress_writer)]
 
 
 async def _route_event(

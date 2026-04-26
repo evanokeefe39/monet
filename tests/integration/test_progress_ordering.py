@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from monet.queue.backends.sqlite_store import SqliteProgressStore
+from monet.progress.backends.sqlite_store import SqliteProgressStore
 from monet.server.routes._threads import TranscriptResponse, get_thread_transcript
 
 
