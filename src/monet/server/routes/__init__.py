@@ -6,6 +6,7 @@ from monet.server.routes import (
     _artifacts,
     _invocations,
     _ops,
+    _schedules,
     _tasks_control,
     _tasks_data,
     _threads,
@@ -21,5 +22,6 @@ router.include_router(_artifacts.router)
 router.include_router(_threads.router)
 router.include_router(_ops.router)
 router.include_router(_invocations.router)
+router.include_router(_schedules.router)
 
 __all__ = ["router"]

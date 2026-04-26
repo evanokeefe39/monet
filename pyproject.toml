@@ -35,6 +35,7 @@ dependencies = [
     "textual>=0.80",
     "python-dotenv>=1.2.2",
     "protobuf>=6.33.6",
+    "apscheduler>=3.10,<4",
 ]
 
 [project.scripts]
@@ -155,4 +156,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "redis.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
 ignore_missing_imports = true
