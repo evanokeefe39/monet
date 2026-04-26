@@ -49,10 +49,7 @@ async def count_artifacts_per_thread(
         return {}
     store = get_artifacts()
     try:
-        counter = getattr(store, "count_per_thread", None)
-        if counter is None:
-            return {}
-        result: dict[str, int] = await counter(ids)
+        result: dict[str, int] = await store.count_per_thread(ids)
         return result
     except Exception as exc:
         _log.exception("artifact count failed")

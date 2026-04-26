@@ -19,14 +19,28 @@ if TYPE_CHECKING:
 
 
 async def test_memory_write_read() -> None:
+    import uuid
+    from datetime import UTC, datetime
+
+    from monet.artifacts._metadata import ArtifactMetadata
+
     client = InMemoryArtifactClient()
-    ptr = await client.write(
-        b"hello",
+    metadata = ArtifactMetadata(
+        artifact_id=str(uuid.uuid4()),
         content_type="text/plain",
+        content_length=5,
         summary="test",
         confidence=0.9,
         completeness="complete",
+        sensitivity_label="internal",
+        agent_id=None,
+        run_id=None,
+        trace_id=None,
+        thread_id=None,
+        tags={},
+        created_at=datetime.now(tz=UTC).isoformat(),
     )
+    ptr = await client.write(b"hello", metadata)
     assert ptr["artifact_id"]
     content, meta = await client.read(ptr["artifact_id"])
     assert content == b"hello"
@@ -164,24 +178,39 @@ async def test_index_query_by_run() -> None:
 
 
 async def test_service_write_read(tmp_path: Path) -> None:
+    import uuid
+    from datetime import UTC, datetime
+
+    from monet.artifacts._metadata import ArtifactMetadata
+
     storage = FilesystemStorage(tmp_path)
     index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
     await index.initialise()
     service = ArtifactService(storage, index)
 
-    ptr = await service.write(
-        b"artifact store content",
+    body = b"artifact store content"
+    metadata = ArtifactMetadata(
+        artifact_id=str(uuid.uuid4()),
         content_type="text/plain",
+        content_length=len(body),
         summary="test",
         confidence=0.9,
         completeness="complete",
+        sensitivity_label="internal",
+        agent_id=None,
+        run_id=None,
+        trace_id=None,
+        thread_id=None,
+        tags={},
+        created_at=datetime.now(tz=UTC).isoformat(),
     )
+    ptr = await service.write(body, metadata)
     assert ptr["artifact_id"]
     assert ptr["url"]
 
     content, meta = await service.read(ptr["artifact_id"])
-    assert content == b"artifact store content"
-    assert meta["content_length"] == len(b"artifact store content")
+    assert content == body
+    assert meta["content_length"] == len(body)
 
 
 # --- Regression: no blocking syscalls on the artifact store hot path ---
@@ -265,30 +294,38 @@ async def test_filesystem_read_corrupt_meta_json(tmp_path: Path) -> None:
 # --- Artifact store service exception narrowing ---
 
 
-async def test_service_write_propagates_unexpected_exceptions(tmp_path: Path) -> None:
-    """ArtifactService.write does not swallow unexpected exceptions from
+async def test_store_write_propagates_unexpected_exceptions(tmp_path: Path) -> None:
+    """ArtifactStore.write does not swallow unexpected exceptions from
     get_run_context — only LookupError and RuntimeError are caught."""
     from unittest.mock import patch
 
-    storage = FilesystemStorage(tmp_path)
-    index = SQLiteIndex("sqlite+aiosqlite:///:memory:")
-    await index.initialise()
-    service = ArtifactService(storage, index)
+    import pytest
 
-    with patch(
-        "monet.core.context.get_run_context",
-        side_effect=TypeError("unexpected"),
-    ):
-        import pytest
+    from monet.artifacts import configure_artifacts
+    from monet.core.artifacts import get_artifacts
 
-        with pytest.raises(TypeError, match="unexpected"):
-            await service.write(
+    service = ArtifactService(
+        FilesystemStorage(tmp_path),
+        SQLiteIndex("sqlite+aiosqlite:///:memory:"),
+    )
+    configure_artifacts(service)
+    try:
+        with (
+            patch(
+                "monet.core.context.get_run_context",
+                side_effect=TypeError("unexpected"),
+            ),
+            pytest.raises(TypeError, match="unexpected"),
+        ):
+            await get_artifacts().write(
                 b"test",
                 content_type="text/plain",
                 summary="test",
                 confidence=0.9,
                 completeness="complete",
             )
+    finally:
+        configure_artifacts(None)
 
 
 # --- Regression: relative roots must not leak into file:// URIs ---
@@ -328,14 +365,29 @@ async def test_artifacts_from_env_default_root_produces_absolute_uri(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MONET_ARTIFACTS_DIR", raising=False)
 
+    import uuid
+    from datetime import UTC, datetime
+
+    from monet.artifacts._metadata import ArtifactMetadata
+
     service = artifacts_from_env()
-    ptr = await service.write(
-        b"hello",
+    body = b"hello"
+    metadata = ArtifactMetadata(
+        artifact_id=str(uuid.uuid4()),
         content_type="text/plain",
+        content_length=len(body),
         summary="regression",
         confidence=1.0,
         completeness="complete",
+        sensitivity_label="internal",
+        agent_id=None,
+        run_id=None,
+        trace_id=None,
+        thread_id=None,
+        tags={},
+        created_at=datetime.now(tz=UTC).isoformat(),
     )
+    ptr = await service.write(body, metadata)
 
     assert ptr["url"].startswith("file://")
     # The URL must round-trip back to an existing file on disk.

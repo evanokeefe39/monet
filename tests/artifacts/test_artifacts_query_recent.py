@@ -118,11 +118,7 @@ async def test_query_recent_combined_filters() -> None:
 async def test_query_recent_in_memory_client() -> None:
     client = InMemoryArtifactClient()
     await client.write(
-        b"x",
-        content_type="text/plain",
-        summary="",
-        confidence=1.0,
-        completeness="complete",
+        b"x", _meta(artifact_id="qr-1", created_at="2026-04-01T00:00:00Z")
     )
     rows = await client.query_recent()
     assert len(rows) == 1

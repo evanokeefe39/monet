@@ -157,7 +157,7 @@ async def _wrap_result(
         output_str = str(return_value)
         output = output_str
         if len(output_str) > content_limit:
-            from .artifacts import _artifact_backend
+            from .artifacts import has_backend
 
             encoded = output_str.encode()
             already_written = hashlib.sha256(encoded).hexdigest() in written_hashes
@@ -169,7 +169,7 @@ async def _wrap_result(
                 # expects to see. Large payloads are the agent's own
                 # responsibility to shrink (e.g. by returning a summary).
                 output = output_str
-            elif _artifact_backend is not None:
+            elif has_backend():
                 try:
                     # write() appends to _artifact_collector (same list as `artifacts`)
                     await get_artifacts().write(

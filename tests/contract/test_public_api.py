@@ -12,6 +12,7 @@ def test_monet_root_exports() -> None:
         "AgentResult",
         "AgentRunContext",
         "ArtifactPointer",
+        "ArtifactStore",
         "ArtifactStoreHandle",
         "GraphHookRegistry",
         "HookRegistry",
@@ -47,12 +48,19 @@ def test_monet_artifacts_exports() -> None:
     import monet.artifacts as cat
 
     expected = {
-        "ArtifactMetadata",
         "ArtifactClient",
+        "ArtifactMetadata",
+        "ArtifactQueryable",
+        "ArtifactReader",
         "ArtifactService",
+        "ArtifactStore",
+        "ArtifactStoreHandle",
+        "ArtifactWriter",
         "FilesystemStorage",
         "InMemoryArtifactClient",
+        "MetadataIndex",
         "SQLiteIndex",
+        "StorageBackend",
         "artifacts_from_env",
         "configure_artifacts",
     }
