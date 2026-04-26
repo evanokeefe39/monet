@@ -23,7 +23,6 @@ from monet.artifacts import artifacts_from_env, configure_artifacts
 from monet.core.tracing import configure_tracing
 from monet.orchestration import configure_queue
 from monet.queue import InMemoryTaskQueue
-from monet.server import configure_lazy_worker
 from monet.server.server_bootstrap import (
     build_default_graph as _build_default_graph,
 )
@@ -36,7 +35,6 @@ configure_artifacts(artifacts_from_env())
 
 _queue = InMemoryTaskQueue()
 configure_queue(_queue)
-configure_lazy_worker(_queue)
 
 
 def build_default_graph() -> CompiledStateGraph:  # type: ignore[type-arg]

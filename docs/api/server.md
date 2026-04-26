@@ -68,42 +68,15 @@ Original unified factory. Loads pool topology from `monet.toml` at `config_path`
 
 `_create_data_plane()` requires `MONET_PROGRESS_BACKEND` to be set; raises `ConfigError` if absent.
 
-### `bootstrap`
+### `bootstrap_server`
 
 ```python
-from monet.server import bootstrap
+from monet.server.server_bootstrap import bootstrap_server
 
-async def bootstrap(
-    *,
-    artifacts_root: str | Path | None = None,
-    enable_tracing: bool = True,
-    agents: list[AgentCapability] | None = None,
-    queue: TaskQueue | None = None,
-    lazy_worker: bool = False,
-) -> asyncio.Task[None] | None
+async def bootstrap_server() -> None
 ```
 
-One-call server initialization. Configures tracing, artifact store, manifest, queue, and worker in order.
-
-| Parameter | Default | Description |
-|---|---|---|
-| `artifacts_root` | `None` | Artifact Store directory. Falls back to `MONET_ARTIFACTS_DIR`, then `.artifacts` |
-| `enable_tracing` | `True` | Configure OpenTelemetry tracing |
-| `agents` | `None` | Additional capabilities to declare in manifest |
-| `queue` | `None` | Task queue. Defaults to `InMemoryTaskQueue` |
-| `lazy_worker` | `False` | Defer worker startup to first enqueue |
-
-Returns the worker `asyncio.Task` (cancel on shutdown), or `None` if `lazy_worker=True`.
-
-### `configure_lazy_worker`
-
-```python
-from monet.server import configure_lazy_worker
-
-def configure_lazy_worker(queue: TaskQueue) -> None
-```
-
-Patches `queue.enqueue()` to start the worker on first call. For `aegra dev` environments.
+Called once by the Aegra lifespan (`_aegra_routes._lifespan`). Detects an existing queue registered via `configure_queue` and starts `run_worker` in the background. Custom `server_graphs.py` files configure infrastructure at import time; the lifespan calls `bootstrap_server()` to start the worker automatically.
 
 ---
 

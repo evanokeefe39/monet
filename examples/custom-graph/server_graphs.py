@@ -1,6 +1,6 @@
 """Graph exports for Aegra dev / serve.
 
-Configures infrastructure (tracing, artifacts, queue, worker) at import
+Configures infrastructure (tracing, artifacts, queue) at import
 time — same pattern as monet's built-in ``server_bootstrap.py``. Imports
 the custom agents and hooks so they register into the handler registry
 and hook registry respectively.
@@ -34,7 +34,6 @@ from monet.artifacts import artifacts_from_env, configure_artifacts
 from monet.core.tracing import configure_tracing
 from monet.orchestration import configure_queue
 from monet.queue import InMemoryTaskQueue
-from monet.server import configure_lazy_worker
 
 # --- Infrastructure init (runs at import time) ---
 configure_tracing()
@@ -42,7 +41,6 @@ configure_artifacts(artifacts_from_env())
 
 _queue = InMemoryTaskQueue()
 configure_queue(_queue)
-configure_lazy_worker(_queue)
 
 from graphs.review_pipeline import (  # noqa: E402
     build_review_graph as _build_review_graph,
