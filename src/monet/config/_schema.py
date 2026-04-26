@@ -408,7 +408,7 @@ class OrchestrationConfig(BaseModel):
 # --- Chat -----------------------------------------------------------------
 
 
-_DEFAULT_CHAT_GRAPH = "monet.orchestration.chat_graph:build_chat_graph"
+_DEFAULT_CHAT_GRAPH = "monet.orchestration.prebuilt.chat_graph:build_chat_graph"
 _DEFAULT_CHAT_RESPOND_MODEL = "groq:llama-3.3-70b-versatile"
 _DEFAULT_CHAT_TRIAGE_MODEL = "groq:llama-3.3-70b-versatile"
 
@@ -418,7 +418,7 @@ class ChatConfig(BaseModel):
 
     ``graph`` is a dotted ``module.path:factory`` reference that Aegra
     invokes to build the chat ``StateGraph``. The default points at the
-    built-in implementation in :mod:`monet.orchestration.chat_graph`;
+    built-in implementation in :mod:`monet.orchestration.prebuilt.chat_graph`;
     users override it in ``monet.toml [chat]`` or via
     ``MONET_CHAT_GRAPH`` to swap in an agentic variant that delegates
     response generation to a ``conversationalist`` agent.

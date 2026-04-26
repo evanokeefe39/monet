@@ -119,7 +119,7 @@ async def test_compound_graph_approves_and_drives_execution() -> None:
     assert result.get("plan_approved") is True
     assert result.get("abort_reason") is None
     assert result.get("wave_results"), "expected execution to produce wave_results"
-    assert result["wave_results"][0]["node_id"] == "draft"
+    assert result["wave_results"][0]["id"] == "draft"
 
 
 async def test_compound_graph_ends_on_plan_rejection() -> None:

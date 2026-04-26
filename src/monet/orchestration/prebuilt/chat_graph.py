@@ -10,7 +10,7 @@ This module is intentionally a *flat file* that uses only *absolute*
 imports, so Aegra can load it safely via the file-path mechanism.
 
 ``ChatConfig._DEFAULT_CHAT_GRAPH`` points here, not at
-``monet.orchestration.chat.__init__`` (which uses relative imports).
+``monet.orchestration.prebuilt.chat.__init__`` (which uses relative imports).
 Custom graph implementations supplied via ``MONET_CHAT_GRAPH`` or
 ``[chat] graph`` in ``monet.toml`` must observe the same constraint:
 their entry module must use absolute imports only.
@@ -20,7 +20,7 @@ Do NOT convert these imports to relative — that is the whole point.
 
 from __future__ import annotations
 
-from monet.orchestration.chat import (
+from monet.orchestration.prebuilt.chat import (
     MAX_FOLLOWUP_ATTEMPTS,
     ChatState,
     ChatTriageResult,

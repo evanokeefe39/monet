@@ -7,6 +7,6 @@ before the claim loop begins.
 
 from __future__ import annotations
 
-from . import plan_context  # noqa: F401 — imports for side-effects
+from .prebuilt import plan_context  # noqa: F401 — imports for side-effects
 
 __all__: list[str] = []

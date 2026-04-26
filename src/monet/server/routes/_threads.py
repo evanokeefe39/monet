@@ -149,6 +149,7 @@ async def get_thread_transcript(
 
     # B. Normalize messages (de-duplicated by ID)
     seen_msg_ids: set[str] = set()
+    seen_user_content: set[tuple[int, str]] = set()
     for s_idx, snapshot in enumerate(reversed(list(history))):
         # Handle both dict-like and object-like snapshots from different SDK versions
         _snap: Any = snapshot
@@ -177,13 +178,27 @@ async def get_thread_transcript(
             try:
                 mid = m.get("id") if isinstance(m, dict) else getattr(m, "id", None)
 
-                # Use a stable identity: prefer server-assigned ID, fall back to
-                # position. Position-based fallback is safe because LangGraph history
-                # is append-only.
                 identity = mid or f"pos-{m_idx}"
                 if identity in seen_msg_ids:
                     continue
                 seen_msg_ids.add(identity)
+
+                # Content-based dedup for user messages: update_state and
+                # the subsequent graph run can assign different IDs to the
+                # same user message, producing duplicates in the timeline.
+                m_role = (
+                    m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+                )
+                m_content = (
+                    m.get("content")
+                    if isinstance(m, dict)
+                    else getattr(m, "content", "")
+                )
+                if m_role == "user" and isinstance(m_content, str):
+                    content_key = (m_idx, m_content)
+                    if content_key in seen_user_content:
+                        continue
+                    seen_user_content.add(content_key)
 
                 # Robust dict conversion
                 if isinstance(m, dict):

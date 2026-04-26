@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from monet.orchestration.execution_graph import build_execution_subgraph
-from monet.orchestration.planning_graph import build_planning_subgraph
-
+from ..execution_graph import build_execution_subgraph
+from ..planning_graph import build_planning_subgraph
 from ._format import execution_summary_node
 from ._parse import _route_after_parse, parse_command_node
 from ._respond import respond_node

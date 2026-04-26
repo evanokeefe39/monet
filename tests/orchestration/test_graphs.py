@@ -175,7 +175,7 @@ async def test_execution_graph_runs_dag() -> None:
     assert result.get("abort_reason") is None
     assert "draft" in (result.get("completed_node_ids") or [])
     assert len(result.get("wave_results") or []) == 1
-    assert result["wave_results"][0]["node_id"] == "draft"
+    assert result["wave_results"][0]["id"] == "draft"
     assert result["wave_results"][0]["success"] is True
 
 

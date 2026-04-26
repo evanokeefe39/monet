@@ -4,26 +4,50 @@
 
 Two-graph pipeline (planning + execution) plus chat graph. Owns graph construction, state management, agent dispatch, signal routing, HITL interrupt nodes.
 
-## Key modules
+## Directory structure
+
+```
+orchestration/
+  _invoke.py          invoke_agent() — enqueues task, awaits result, routes signals
+  _state.py           Core only: _append_reducer, AgentInvocationResult
+  _signal_router.py   Maps signal types to graph transitions
+  _retry_budget.py    Per-run retry budget tracking
+  _result_parser.py   Parse AgentResult from queue into typed graph events
+  prebuilt/           monet's shipped graph implementations (see below)
+```
+
+## Core modules (`orchestration/`)
+
+These are stable utilities any custom graph may import from `monet.orchestration`:
+
+| Module | Owns |
+|--------|------|
+| `_invoke.py` | `invoke_agent()` |
+| `_state.py` | `_append_reducer`, `AgentInvocationResult` |
+| `_signal_router.py` | Signal routing |
+| `_retry_budget.py` | Retry budget |
+| `_result_parser.py` | Parse AgentResult from queue into typed graph events |
+
+`AgentInvocationResult` is the universal shape returned by `invoke_agent()`. The `id` field is caller-assigned; the prebuilt execution graph sets it to `RoutingNode.id`.
+
+## Prebuilt subpackage (`orchestration/prebuilt/`)
+
+monet's default planning/execution/chat implementations. Custom graphs import from the core modules above, not from `prebuilt/`.
 
 | Module | Owns |
 |--------|------|
 | `planning_graph.py` | Planning subgraph — LLM planner, HITL revision loop (MAX_REVISIONS=3), emits `work_brief_pointer` + `RoutingSkeleton` |
-| `execution_graph.py` | Execution subgraph — DAG traversal via `completed_node_ids`, dispatches `RoutingNode` to queue |
+| `execution_graph.py` | Execution subgraph — DAG traversal via `completed_node_ids`, fans out via Send |
 | `default_graph.py` | Compound graph: planning → execution |
-| `chat_graph.py` | Thin Aegra-compatible entry point — absolute imports only (Aegra re-executes under synthetic namespace); delegates to `chat/` subpackage |
+| `chat_graph.py` | Thin Aegra-compatible entry point — **absolute imports only** (Aegra re-executes under synthetic namespace); delegates to `chat/` |
 | `chat/` | monet's default chat implementation — private subpackage, see below |
-| `_invoke.py` | `invoke_agent()` — builds `TaskRecord`, enqueues, awaits result, routes signals |
-| `_state.py` | `OrchestrationState` TypedDict — pointer-only, no content |
-| `_signal_router.py` | Maps signal types to graph transitions |
-| `_retry_budget.py` | Per-run retry budget tracking |
-| `_result_parser.py` | Parse `AgentResult` from queue into typed graph events |
-| `_planner_outcome.py` | Parse planner structured output into `RoutingSkeleton` |
-| `_forms.py` | HITL form schema (`Form`, `Field`) for interrupt payloads |
+| `_state.py` | All prebuilt TypedDicts: RoutingNode, RoutingSkeleton, WorkBrief, WorkBriefNode, RunState, PlanningState, SignalsSummary, ExecutionState, WaveItem |
+| `_planner_outcome.py` | Parse planner structured output into RoutingSkeleton |
+| `_forms.py` | HITL form-schema builders for plan-approval and execution interrupts |
 
-## Chat subpackage (`chat/`)
+## Chat subpackage (`prebuilt/chat/`)
 
-monet's default chat graph implementation. All modules are private (`_*.py`). Neither the client nor the TUI imports from this package — the contract between the chat graph and its callers is protocol-based, not type-based.
+monet's default chat graph implementation. All modules are private (`_*.py`). Neither the client nor the TUI imports from this package — the contract is protocol-based, not type-based.
 
 | Module | Owns |
 |--------|------|

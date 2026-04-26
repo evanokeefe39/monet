@@ -1,7 +1,7 @@
 import logging
 
 from monet.config import ChatConfig
-from monet.orchestration.chat._lc import _load_model
+from monet.orchestration.prebuilt.chat._lc import _load_model
 
 _log = logging.getLogger("monet.server.smoke")
 

@@ -18,7 +18,7 @@ pytest.importorskip("langgraph")
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from monet.orchestration.planning_graph import (
+from monet.orchestration.prebuilt.planning_graph import (
     MAX_REVISIONS,
     build_planning_subgraph,
     human_approval_node,
@@ -73,7 +73,7 @@ def _plan_result(goal: str = "Do it", artifact_id: str = "brief-1") -> MagicMock
 
 async def test_planner_node_writes_pointer_and_skeleton_on_plan() -> None:
     with patch(
-        "monet.orchestration.planning_graph.invoke_agent",
+        "monet.orchestration.prebuilt.planning_graph.invoke_agent",
         return_value=_plan_result(goal="p"),
     ):
         out = await planner_node({"task": "plan a thing"}, {})  # type: ignore[arg-type]
@@ -86,7 +86,7 @@ async def test_planner_node_writes_pointer_and_skeleton_on_plan() -> None:
 async def test_planner_node_failure_writes_error_pipeline_mode() -> None:
     """Pipeline default (max_followup_attempts=0): questions = failure."""
     with patch(
-        "monet.orchestration.planning_graph.invoke_agent",
+        "monet.orchestration.prebuilt.planning_graph.invoke_agent",
         return_value=_result(
             output={"kind": "questions", "questions": ["scope?"]},
             signals=[
@@ -108,7 +108,7 @@ async def test_planner_node_failure_writes_error_pipeline_mode() -> None:
 
 async def test_planner_node_invoke_failure_surfaces_reason() -> None:
     with patch(
-        "monet.orchestration.planning_graph.invoke_agent",
+        "monet.orchestration.prebuilt.planning_graph.invoke_agent",
         return_value=_result(
             success=False,
             signals=[{"type": "FAILURE", "reason": "boom", "metadata": None}],
@@ -144,7 +144,7 @@ async def test_approval_approve_writes_plan_approved() -> None:
         "routing_skeleton": {"goal": "g", "nodes": []},
     }
     with patch(
-        "monet.orchestration.planning_graph.interrupt",
+        "monet.orchestration.prebuilt.planning_graph.interrupt",
         return_value={"action": "approve"},
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
@@ -180,7 +180,9 @@ async def test_approval_form_prompt_renders_plan_summary() -> None:
             ],
         },
     }
-    with patch("monet.orchestration.planning_graph.interrupt", side_effect=capture):
+    with patch(
+        "monet.orchestration.prebuilt.planning_graph.interrupt", side_effect=capture
+    ):
         await human_approval_node(state)  # type: ignore[arg-type]
     prompt = captured["payload"]["prompt"]
     assert "Research AI trends in healthcare" in prompt
@@ -196,7 +198,7 @@ async def test_approval_reject_writes_plan_approved_false() -> None:
         "work_brief_pointer": {"artifact_id": "b", "url": "/b"},
     }
     with patch(
-        "monet.orchestration.planning_graph.interrupt",
+        "monet.orchestration.prebuilt.planning_graph.interrupt",
         return_value={"action": "reject"},
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
@@ -210,7 +212,7 @@ async def test_approval_revise_with_feedback_under_budget() -> None:
         "revision_count": 0,
     }
     with patch(
-        "monet.orchestration.planning_graph.interrupt",
+        "monet.orchestration.prebuilt.planning_graph.interrupt",
         return_value={"action": "revise", "feedback": "tighter scope"},
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
@@ -225,7 +227,7 @@ async def test_approval_revise_at_max_budget_falls_through_to_false() -> None:
         "revision_count": MAX_REVISIONS,
     }
     with patch(
-        "monet.orchestration.planning_graph.interrupt",
+        "monet.orchestration.prebuilt.planning_graph.interrupt",
         return_value={"action": "revise", "feedback": "again"},
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
@@ -249,7 +251,7 @@ def test_route_from_approval_approved_ends() -> None:
 
 async def test_questionnaire_interrupts_and_bumps_attempts() -> None:
     with patch(
-        "monet.orchestration.planning_graph.interrupt",
+        "monet.orchestration.prebuilt.planning_graph.interrupt",
         return_value={"q0": "small scope", "q1": "__skip__"},
     ):
         out = await questionnaire_node(
@@ -303,11 +305,11 @@ async def test_subgraph_with_questionnaire_round_then_plan() -> None:
 
     with (
         patch(
-            "monet.orchestration.planning_graph.invoke_agent",
+            "monet.orchestration.prebuilt.planning_graph.invoke_agent",
             side_effect=fake_invoke,
         ),
         patch(
-            "monet.orchestration.planning_graph.interrupt",
+            "monet.orchestration.prebuilt.planning_graph.interrupt",
             side_effect=fake_interrupt,
         ),
     ):
@@ -326,7 +328,7 @@ async def test_subgraph_with_questionnaire_round_then_plan() -> None:
 async def test_subgraph_pipeline_mode_fails_on_questions() -> None:
     """max_followup_attempts=0: questions = failure, no interrupt."""
     with patch(
-        "monet.orchestration.planning_graph.invoke_agent",
+        "monet.orchestration.prebuilt.planning_graph.invoke_agent",
         return_value=_result(
             output={"kind": "questions", "questions": ["scope?"]},
             signals=[
@@ -376,11 +378,11 @@ async def test_subgraph_force_plan_after_budget() -> None:
 
     with (
         patch(
-            "monet.orchestration.planning_graph.invoke_agent",
+            "monet.orchestration.prebuilt.planning_graph.invoke_agent",
             side_effect=fake_invoke,
         ),
         patch(
-            "monet.orchestration.planning_graph.interrupt",
+            "monet.orchestration.prebuilt.planning_graph.interrupt",
             side_effect=fake_interrupt,
         ),
     ):
