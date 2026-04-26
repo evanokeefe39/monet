@@ -188,9 +188,8 @@ async def _run_remote(
     import contextlib
 
     from monet.core.registry import default_registry
-    from monet.core.worker_client import RemoteQueue, WorkerClient
     from monet.server._capabilities import Capability
-    from monet.worker import run_worker
+    from monet.worker import RemoteQueue, WorkerClient, run_worker
 
     pool = cfg.pool
 

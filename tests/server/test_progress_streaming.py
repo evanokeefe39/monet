@@ -155,7 +155,7 @@ async def test_sleep_zero_flush_before_return() -> None:
 
 async def test_remote_queue_subscribe_raises() -> None:
     """RemoteQueue.subscribe_progress must raise NotImplementedError."""
-    from monet.core.worker_client import RemoteQueue, WorkerClient
+    from monet.worker import RemoteQueue, WorkerClient
 
     client = WorkerClient("http://example.com", "key")
     rq = RemoteQueue(client, pool="p")

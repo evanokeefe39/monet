@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from monet.core._retry import retry_with_backoff
+from monet.worker._retry import retry_with_backoff
 
 
 def _make_http_status_error(status_code: int) -> httpx.HTTPStatusError:
@@ -153,7 +153,7 @@ async def test_logs_on_retryable_status(caplog: pytest.LogCaptureFixture) -> Non
 
 async def test_heartbeat_tracking_counter_increments_on_transient() -> None:
     """Consecutive transient failures increment the counter."""
-    from monet.core.worker_client import WorkerClient
+    from monet.worker import WorkerClient
 
     client = WorkerClient("http://test", "key")
     client.heartbeat = AsyncMock(  # type: ignore[method-assign]
@@ -171,7 +171,7 @@ async def test_heartbeat_tracking_counter_increments_on_transient() -> None:
 
 async def test_heartbeat_tracking_counter_resets_on_success() -> None:
     """Counter resets to zero after a successful heartbeat."""
-    from monet.core.worker_client import WorkerClient
+    from monet.worker import WorkerClient
 
     client = WorkerClient("http://test", "key")
     # First call raises, second call returns None (success).
@@ -192,14 +192,14 @@ async def test_heartbeat_tracking_escalates_log_level(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Log level escalates from WARNING to ERROR at 3 consecutive failures."""
-    from monet.core.worker_client import WorkerClient
+    from monet.worker import WorkerClient
 
     client = WorkerClient("http://test", "key")
     client.heartbeat = AsyncMock(  # type: ignore[method-assign]
         side_effect=httpx.ConnectError("down")
     )
 
-    with caplog.at_level(logging.WARNING, logger="monet.core.worker_client"):
+    with caplog.at_level(logging.WARNING, logger="monet.worker._client"):
         for _ in range(3):
             await client.heartbeat_with_tracking("w1", "local")
 
@@ -212,7 +212,7 @@ async def test_heartbeat_tracking_escalates_log_level(
 
 async def test_heartbeat_tracking_propagates_4xx() -> None:
     """4xx status errors (e.g. 401 auth failure) propagate; counter not touched."""
-    from monet.core.worker_client import WorkerClient
+    from monet.worker import WorkerClient
 
     client = WorkerClient("http://test", "key")
     client.heartbeat = AsyncMock(  # type: ignore[method-assign]
@@ -229,7 +229,7 @@ async def test_heartbeat_tracking_propagates_4xx() -> None:
 
 async def test_heartbeat_tracking_swallows_5xx() -> None:
     """5xx status errors are treated as transient and swallowed."""
-    from monet.core.worker_client import WorkerClient
+    from monet.worker import WorkerClient
 
     client = WorkerClient("http://test", "key")
     client.heartbeat = AsyncMock(  # type: ignore[method-assign]
