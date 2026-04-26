@@ -20,7 +20,7 @@ from monet import (
 )
 from monet.config._env import agent_model
 from monet.core.registry import default_registry
-from monet.orchestration._state import WorkBrief
+from monet.orchestration.prebuilt._state import WorkBrief
 
 from .._prompts import extract_text, make_env
 

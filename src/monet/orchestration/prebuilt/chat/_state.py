@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from monet.orchestration._state import PlanningState, _append_reducer
+from monet.orchestration._state import _append_reducer
+from monet.orchestration.prebuilt._state import PlanningState
 
 
 class ChatState(PlanningState, total=False):

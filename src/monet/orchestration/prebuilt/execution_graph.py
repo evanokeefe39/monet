@@ -30,11 +30,11 @@ from monet.core.tracing import (
     get_tracer,
     inject_trace_context,
 )
+from monet.orchestration._invoke import invoke_agent
+from monet.orchestration._signal_router import EXECUTION_ROUTER
 from monet.types import ArtifactPointer  # noqa: TC001 — runtime type for TypedDict
 
 from ._forms import build_execution_interrupt_form
-from ._invoke import invoke_agent
-from ._signal_router import EXECUTION_ROUTER
 from ._state import ExecutionState, RoutingSkeleton, SignalsSummary
 
 if TYPE_CHECKING:
@@ -145,7 +145,7 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
     pointer = state["work_brief_pointer"]
     trace_carrier = dict(state.get("trace_carrier") or {})
     wave_results = state.get("wave_results") or []
-    results_by_id = {r["node_id"]: r for r in wave_results}
+    results_by_id = {r["id"]: r for r in wave_results}
     deps_by_id = {n.id: list(n.depends_on) for n in skeleton.nodes}
     thread_id = state.get("thread_id", "") or ""
     return [
@@ -203,7 +203,7 @@ def _upstream_entries(
         entries.append(
             {
                 "type": "upstream_result",
-                "node_id": result.get("node_id", ancestor_id),
+                "node_id": result.get("id", ancestor_id),
                 "agent_id": result.get("agent_id", ""),
                 "command": result.get("command", ""),
                 "summary": summary,
@@ -242,7 +242,7 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
     artifacts_data = [dict(a) for a in result.artifacts]
 
     entry: dict[str, Any] = {
-        "node_id": item["node_id"],
+        "id": item["node_id"],
         "agent_id": item["agent_id"],
         "command": item["command"],
         "output": result.output,
@@ -258,11 +258,9 @@ async def collect_batch(state: ExecutionState) -> dict[str, Any]:
     all_results = state.get("wave_results") or []
     completed = set(state.get("completed_node_ids") or [])
     # "New" results are those not yet reflected in completed_node_ids.
-    new_results = [
-        r for r in all_results if r.get("node_id") and r["node_id"] not in completed
-    ]
+    new_results = [r for r in all_results if r.get("id") and r["id"] not in completed]
 
-    newly_completed = [r["node_id"] for r in new_results if r.get("success")]
+    newly_completed = [r["id"] for r in new_results if r.get("success")]
     all_completed = list(completed | set(newly_completed))
 
     all_signals = [s for r in new_results for s in r.get("signals", [])]
@@ -283,7 +281,7 @@ async def collect_batch(state: ExecutionState) -> dict[str, Any]:
     failures = [r for r in new_results if not r.get("success")]
     if failures and summary["route_action"] != "interrupt":
         reasons = "; ".join(
-            f"{r['node_id']}: {(r.get('signals') or [{}])[0].get('reason', '')}"[:200]
+            f"{r['id']}: {(r.get('signals') or [{}])[0].get('reason', '')}"[:200]
             for r in failures
         )
         update["abort_reason"] = f"Node failure: {reasons}"

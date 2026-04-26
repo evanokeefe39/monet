@@ -29,7 +29,7 @@ pytest.importorskip("langgraph")
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from monet.orchestration.chat import build_chat_graph
+from monet.orchestration.prebuilt.chat import build_chat_graph
 
 
 def _result(
@@ -111,19 +111,19 @@ async def test_plan_approve_flow_pins_subgraph_name_matching() -> None:
 
     with (
         patch(
-            "monet.orchestration.chat._lc._load_model",
+            "monet.orchestration.prebuilt.chat._lc._load_model",
             return_value=triage_llm,
         ),
         patch(
-            "monet.orchestration.planning_graph.invoke_agent",
+            "monet.orchestration.prebuilt.planning_graph.invoke_agent",
             side_effect=fake_planning_invoke,
         ),
         patch(
-            "monet.orchestration.execution_graph.invoke_agent",
+            "monet.orchestration.prebuilt.execution_graph.invoke_agent",
             side_effect=fake_exec_invoke,
         ),
         patch(
-            "monet.orchestration.planning_graph.interrupt",
+            "monet.orchestration.prebuilt.planning_graph.interrupt",
             return_value={"action": "approve"},
         ),
     ):
@@ -160,19 +160,19 @@ async def test_plan_reject_flow_skips_execution() -> None:
 
     with (
         patch(
-            "monet.orchestration.chat._lc._load_model",
+            "monet.orchestration.prebuilt.chat._lc._load_model",
             return_value=triage_llm,
         ),
         patch(
-            "monet.orchestration.planning_graph.invoke_agent",
+            "monet.orchestration.prebuilt.planning_graph.invoke_agent",
             side_effect=fake_planning_invoke,
         ),
         patch(
-            "monet.orchestration.execution_graph.invoke_agent",
+            "monet.orchestration.prebuilt.execution_graph.invoke_agent",
             side_effect=exec_invoke,
         ),
         patch(
-            "monet.orchestration.planning_graph.interrupt",
+            "monet.orchestration.prebuilt.planning_graph.interrupt",
             return_value={"action": "reject"},
         ),
     ):
@@ -232,7 +232,7 @@ def test_cli_does_not_import_chat_internals() -> None:
 
 def test_chat_subpackage_importable() -> None:
     """Sanity: the chat subpackage advertises its public surface."""
-    from monet.orchestration import chat
+    from monet.orchestration.prebuilt import chat
 
     assert hasattr(chat, "build_chat_graph")
     assert hasattr(chat, "ChatState")
@@ -264,7 +264,7 @@ def test_chat_graph_shim_loads_via_file_path() -> None:
     """
     import importlib.util
 
-    from monet.orchestration import chat_graph
+    from monet.orchestration.prebuilt import chat_graph
 
     assert chat_graph.__file__ is not None
     spec = importlib.util.spec_from_file_location(

@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.registry import default_registry
 from monet.orchestration import build_planning_subgraph
-from monet.orchestration.planning_graph import route_from_planner
+from monet.orchestration.prebuilt.planning_graph import route_from_planner
 from monet.types import ArtifactPointer
 
 
@@ -148,7 +148,7 @@ async def test_planning_failed_emits_otel_span(_reset: Any) -> None:
     exporter = InMemorySpanExporter()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     # Swap the tracer used by the module.
-    from monet.orchestration import planning_graph as pg
+    from monet.orchestration.prebuilt import planning_graph as pg
 
     original_tracer = pg._tracer
     pg._tracer = provider.get_tracer("monet.orchestration.planning")

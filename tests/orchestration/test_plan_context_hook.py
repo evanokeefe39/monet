@@ -9,8 +9,8 @@ from pydantic import ValidationError
 
 from monet import get_artifacts
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
-from monet.hooks.plan_context import inject_plan_context
-from monet.orchestration._state import WorkBrief, WorkBriefNode
+from monet.hooks.prebuilt.plan_context import inject_plan_context
+from monet.orchestration.prebuilt._state import WorkBrief, WorkBriefNode
 
 
 @pytest.fixture

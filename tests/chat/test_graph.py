@@ -19,12 +19,19 @@ pytest.importorskip("langgraph")
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
-from monet.orchestration.chat import ChatState, ChatTriageResult, build_chat_graph
-from monet.orchestration.chat._format import execution_summary_node
-from monet.orchestration.chat._parse import _parse_slash, parse_command_node
-from monet.orchestration.chat._respond import respond_node
-from monet.orchestration.chat._specialist import _build_context, specialist_node
-from monet.orchestration.chat._triage import triage_node
+from monet.orchestration.prebuilt.chat import (
+    ChatState,
+    ChatTriageResult,
+    build_chat_graph,
+)
+from monet.orchestration.prebuilt.chat._format import execution_summary_node
+from monet.orchestration.prebuilt.chat._parse import _parse_slash, parse_command_node
+from monet.orchestration.prebuilt.chat._respond import respond_node
+from monet.orchestration.prebuilt.chat._specialist import (
+    _build_context,
+    specialist_node,
+)
+from monet.orchestration.prebuilt.chat._triage import triage_node
 from monet.signals import SignalType
 
 # --- parse_command_node ---------------------------------------------------
@@ -108,7 +115,7 @@ def _fake_triage_model(result: ChatTriageResult) -> MagicMock:
 
 async def test_triage_node_routes_chat() -> None:
     fake = _fake_triage_model(ChatTriageResult(route="chat", confidence=0.9))
-    with patch("monet.orchestration.chat._lc._load_model", return_value=fake):
+    with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake):
         out = await triage_node({"messages": [{"role": "user", "content": "hi"}]})
     assert out["route"] == "chat"
 
@@ -116,7 +123,7 @@ async def test_triage_node_routes_chat() -> None:
 async def test_triage_node_routes_plan_to_planning_edge() -> None:
     """Triage returns route='plan'; the graph edge name is 'planning'."""
     fake = _fake_triage_model(ChatTriageResult(route="plan", confidence=0.9))
-    with patch("monet.orchestration.chat._lc._load_model", return_value=fake):
+    with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake):
         out = await triage_node(
             {"messages": [{"role": "user", "content": "plan a feature"}]}
         )
@@ -134,7 +141,7 @@ async def test_triage_node_clarification_routes_chat() -> None:
             clarification_prompt="Be more specific about the scope.",
         )
     )
-    with patch("monet.orchestration.chat._lc._load_model", return_value=fake):
+    with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake):
         out = await triage_node(
             {"messages": [{"role": "user", "content": "do the thing"}]}
         )
@@ -147,7 +154,7 @@ async def test_triage_node_llm_exception_falls_back_to_chat() -> None:
     structured.ainvoke = AsyncMock(side_effect=RuntimeError("provider down"))
     model = MagicMock()
     model.with_structured_output = MagicMock(return_value=structured)
-    with patch("monet.orchestration.chat._lc._load_model", return_value=model):
+    with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=model):
         out = await triage_node({"messages": [{"role": "user", "content": "hi"}]})
     assert out["route"] == "chat"
 
@@ -159,8 +166,12 @@ async def test_respond_node_calls_llm_directly_no_invoke_agent() -> None:
     fake_model = MagicMock()
     fake_model.ainvoke = AsyncMock(return_value=AIMessage(content="hello back"))
     with (
-        patch("monet.orchestration.chat._lc._load_model", return_value=fake_model),
-        patch("monet.orchestration.chat._specialist.invoke_agent") as invoke_mock,
+        patch(
+            "monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake_model
+        ),
+        patch(
+            "monet.orchestration.prebuilt.chat._specialist.invoke_agent"
+        ) as invoke_mock,
     ):
         out = await respond_node({"messages": [{"role": "user", "content": "hi"}]})
     assert invoke_mock.call_count == 0
@@ -170,7 +181,9 @@ async def test_respond_node_calls_llm_directly_no_invoke_agent() -> None:
 async def test_respond_node_unknown_command_renders_inline_error_without_llm() -> None:
     fake_model = MagicMock()
     fake_model.ainvoke = AsyncMock()
-    with patch("monet.orchestration.chat._lc._load_model", return_value=fake_model):
+    with patch(
+        "monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake_model
+    ):
         out = await respond_node(
             {
                 "messages": [{"role": "user", "content": "/what"}],
@@ -190,7 +203,9 @@ async def test_respond_node_clarification_prepends_system_message() -> None:
 
     fake_model = MagicMock()
     fake_model.ainvoke = AsyncMock(side_effect=capture)
-    with patch("monet.orchestration.chat._lc._load_model", return_value=fake_model):
+    with patch(
+        "monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake_model
+    ):
         await respond_node(
             {
                 "messages": [{"role": "user", "content": "do thing"}],
@@ -257,7 +272,8 @@ async def test_specialist_node_invokes_named_agent_and_mode() -> None:
         return _result(output="deep result")
 
     with patch(
-        "monet.orchestration.chat._specialist.invoke_agent", side_effect=fake_invoke
+        "monet.orchestration.prebuilt.chat._specialist.invoke_agent",
+        side_effect=fake_invoke,
     ):
         await specialist_node(
             {
@@ -283,7 +299,8 @@ async def test_specialist_node_surfaces_artifact_links() -> None:
 
     meta = {"specialist": "researcher", "mode": "deep", "task": "x"}
     with patch(
-        "monet.orchestration.chat._specialist.invoke_agent", side_effect=fake_invoke
+        "monet.orchestration.prebuilt.chat._specialist.invoke_agent",
+        side_effect=fake_invoke,
     ):
         out = await specialist_node(
             {
@@ -303,7 +320,8 @@ async def test_specialist_node_missing_capability_inline_message() -> None:
         raise ValueError("Agent 'unknown/fast' not found in manifest.")
 
     with patch(
-        "monet.orchestration.chat._specialist.invoke_agent", side_effect=fake_invoke
+        "monet.orchestration.prebuilt.chat._specialist.invoke_agent",
+        side_effect=fake_invoke,
     ):
         out = await specialist_node(
             {
@@ -322,13 +340,13 @@ async def test_execution_summary_node_renders_wave_results() -> None:
     state: dict[str, Any] = {
         "wave_results": [
             {
-                "node_id": "research_topic",
+                "id": "research_topic",
                 "agent_id": "researcher",
                 "success": True,
                 "artifacts": [{"artifact_id": "abc-123", "url": "/v1/abc-123"}],
             },
             {
-                "node_id": "qa_report",
+                "id": "qa_report",
                 "agent_id": "qa",
                 "success": False,
                 "artifacts": [],
@@ -363,7 +381,7 @@ async def test_compiled_graph_free_form_triage_routes_to_respond() -> None:
             return triage_llm
         return fake_respond
 
-    with patch("monet.orchestration.chat._lc._load_model", side_effect=pick):
+    with patch("monet.orchestration.prebuilt.chat._lc._load_model", side_effect=pick):
         graph = build_chat_graph().compile(checkpointer=MemorySaver())
         out = await graph.ainvoke(
             {"messages": [{"role": "user", "content": "hello"}]},
@@ -387,17 +405,19 @@ async def test_compiled_graph_slash_plan_approve_flow() -> None:
         return _result(output=f"{agent_id} ran")
 
     with (
-        patch("monet.orchestration.chat._lc._load_model", return_value=triage_llm),
         patch(
-            "monet.orchestration.planning_graph.invoke_agent",
+            "monet.orchestration.prebuilt.chat._lc._load_model", return_value=triage_llm
+        ),
+        patch(
+            "monet.orchestration.prebuilt.planning_graph.invoke_agent",
             side_effect=fake_planning_invoke,
         ),
         patch(
-            "monet.orchestration.execution_graph.invoke_agent",
+            "monet.orchestration.prebuilt.execution_graph.invoke_agent",
             side_effect=fake_exec_invoke,
         ),
         patch(
-            "monet.orchestration.planning_graph.interrupt",
+            "monet.orchestration.prebuilt.planning_graph.interrupt",
             return_value={"action": "approve"},
         ),
     ):
@@ -445,16 +465,20 @@ async def test_compiled_graph_questionnaire_then_plan_flow() -> None:
         return _result(output=f"{agent_id} ran")
 
     with (
-        patch("monet.orchestration.chat._lc._load_model", return_value=triage_llm),
         patch(
-            "monet.orchestration.planning_graph.invoke_agent", side_effect=fake_invoke
+            "monet.orchestration.prebuilt.chat._lc._load_model", return_value=triage_llm
         ),
         patch(
-            "monet.orchestration.execution_graph.invoke_agent",
+            "monet.orchestration.prebuilt.planning_graph.invoke_agent",
+            side_effect=fake_invoke,
+        ),
+        patch(
+            "monet.orchestration.prebuilt.execution_graph.invoke_agent",
             side_effect=fake_exec_invoke,
         ),
         patch(
-            "monet.orchestration.planning_graph.interrupt", side_effect=fake_interrupt
+            "monet.orchestration.prebuilt.planning_graph.interrupt",
+            side_effect=fake_interrupt,
         ),
     ):
         graph = build_chat_graph().compile(checkpointer=MemorySaver())
@@ -470,7 +494,9 @@ async def test_compiled_graph_unknown_slash_inline_error() -> None:
     fake_llm = MagicMock()
     fake_llm.ainvoke = AsyncMock()
     fake_llm.with_structured_output = MagicMock(return_value=fake_llm)
-    with patch("monet.orchestration.chat._lc._load_model", return_value=fake_llm):
+    with patch(
+        "monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake_llm
+    ):
         graph = build_chat_graph().compile(checkpointer=MemorySaver())
         out = await graph.ainvoke(
             {"messages": [{"role": "user", "content": "/what"}]},

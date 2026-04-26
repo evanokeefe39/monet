@@ -20,7 +20,7 @@ from monet import agent, get_artifacts
 from monet.artifacts import InMemoryArtifactClient, configure_artifacts
 from monet.core.registry import default_registry
 from monet.orchestration import build_execution_subgraph
-from monet.orchestration._state import WorkBrief, WorkBriefNode
+from monet.orchestration.prebuilt._state import WorkBrief, WorkBriefNode
 
 
 async def test_execution_runs_frozen_brief_without_planning() -> None:
@@ -67,7 +67,7 @@ async def test_execution_runs_frozen_brief_without_planning() -> None:
             )
             assert state.get("abort_reason") is None
             assert state["completed_node_ids"] == ["only"]
-            assert any(r["node_id"] == "only" for r in state["wave_results"])
+            assert any(r["id"] == "only" for r in state["wave_results"])
     finally:
         configure_artifacts(None)
 

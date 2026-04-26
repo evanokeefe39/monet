@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 
 from monet import AgentMeta, AgentRunContext, get_artifacts, on_hook
-from monet.orchestration._state import WorkBrief
+from monet.orchestration.prebuilt._state import WorkBrief
 
 __all__ = ["inject_plan_context"]
 

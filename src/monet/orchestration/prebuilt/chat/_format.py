@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from monet._ports import artifact_view_url as _artifact_url
-from monet.orchestration._planner_outcome import format_signal_reasons
 
+from .._planner_outcome import format_signal_reasons
 from ._state import (
     ChatState,  # noqa: TC001 — runtime import for LangGraph get_type_hints()
 )
@@ -119,7 +119,7 @@ async def execution_summary_node(state: ChatState) -> dict[str, Any]:
     for entry in waves:
         if not isinstance(entry, dict):
             continue
-        node_id = str(entry.get("node_id") or "?")
+        node_id = str(entry.get("id") or "?")
         agent_id = str(entry.get("agent_id") or "?")
         success = bool(entry.get("success", True))
         artifacts = entry.get("artifacts") or []
@@ -134,5 +134,14 @@ async def execution_summary_node(state: ChatState) -> dict[str, Any]:
         if success:
             lines.append(f"- ok `{node_id}` ({agent_id}){artifact_link}")
         else:
-            lines.append(f"- **fail** `{node_id}` ({agent_id})")
+            reason = ""
+            signals = entry.get("signals") or []
+            if signals:
+                reason = "; ".join(format_signal_reasons(signals))
+            if not reason:
+                output = entry.get("output")
+                if isinstance(output, str) and output.strip():
+                    reason = output.strip()[:200]
+            suffix = f": {reason}" if reason else ""
+            lines.append(f"- **fail** `{node_id}` ({agent_id}){suffix}")
     return {"messages": [{"role": "assistant", "content": "\n".join(lines)}]}
