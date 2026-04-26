@@ -52,8 +52,7 @@ class AutoGrowTextArea(TextArea):
             self.insert("\n")
 
     def _on_text_area_changed(self, event: TextArea.Changed) -> None:
-        # TextArea with soft_wrap handles multi-line display via CSS overflow.
-        # This handler is intentionally a no-op — Textual's TextArea widget
-        # already provides visual multi-line wrapping without explicit height
-        # management, so the per-keystroke line_count check is unnecessary.
-        pass
+        # Force a visual refresh on every content change. Without this, paste
+        # (bracketed paste, no terminal key event) won't redraw when the
+        # wrapped line count stays the same and virtual_size doesn't change.
+        self.refresh(layout=True)

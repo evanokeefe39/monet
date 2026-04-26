@@ -150,6 +150,7 @@ async def get_thread_transcript(
     # B. Normalize messages (de-duplicated by ID)
     seen_msg_ids: set[str] = set()
     seen_user_content: set[tuple[int, str]] = set()
+    _msg_seq = 0
     for s_idx, snapshot in enumerate(reversed(list(history))):
         # Handle both dict-like and object-like snapshots from different SDK versions
         _snap: Any = snapshot
@@ -220,12 +221,13 @@ async def get_thread_transcript(
                         "type": "message",
                         "timestamp_ms": ts_ms,
                         "priority": _get_priority("message", m_dict),
-                        "sequence": f"msg-{ts_ms}-{m_idx}",
+                        "sequence": f"msg-{_msg_seq:06d}",
                         "call_id": None,
                         "parent_call_id": None,
                         "data": m_dict,
                     }
                 )
+                _msg_seq += 1
             except Exception as m_exc:
                 _log.warning(
                     "Skipping malformed message at index %d in snapshot %d: %s",
@@ -235,19 +237,25 @@ async def get_thread_transcript(
                 )
                 continue
 
-    # 3. Global Windowed Sort
-    # A 60-second window ensures that all telemetry belonging to a single user
-    # turn is grouped together, even if the first node (which commits the user
-    # message) is slow or checkpointing is delayed.
-    window = 60000
-    events.sort(
-        key=lambda x: (
-            x["timestamp_ms"] // window,
-            x["priority"],
-            x["timestamp_ms"],
-            x["sequence"],
-        )
-    )
+    # 3. Causal merge: messages keep checkpoint order; interleave telemetry by timestamp
+    msg_events = [e for e in events if e["type"] == "message"]
+    tel_events = [e for e in events if e["type"] == "telemetry"]
+    tel_events.sort(key=lambda x: (x["timestamp_ms"], x["priority"], x["sequence"]))
+
+    merged: list[UnifiedEvent] = []
+    tel_idx = 0
+    for msg in msg_events:
+        while (
+            tel_idx < len(tel_events)
+            and tel_events[tel_idx]["timestamp_ms"] < msg["timestamp_ms"]
+        ):
+            merged.append(tel_events[tel_idx])
+            tel_idx += 1
+        merged.append(msg)
+    while tel_idx < len(tel_events):
+        merged.append(tel_events[tel_idx])
+        tel_idx += 1
+    events = merged
 
     # 4. API Response
     entries = [

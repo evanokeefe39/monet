@@ -44,7 +44,7 @@ WELCOME_COMMANDS: tuple[tuple[str, str], ...] = (
 SLASH_SUGGEST_DEBOUNCE = 0.05
 
 #: Spinner animation tick interval (seconds). Only active during runs.
-SPINNER_INTERVAL = 0.4
+SPINNER_INTERVAL = 0.1
 
 #: Max slash-suggest entries shown in dropdown.
 SLASH_SUGGEST_MAX_OPTIONS = 20
