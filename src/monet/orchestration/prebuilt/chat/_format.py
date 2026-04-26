@@ -106,6 +106,13 @@ async def execution_summary_node(state: ChatState) -> dict[str, Any]:
     what just happened.
     """
     waves = state.get("wave_results") or []
+    current_run_id = state.get("run_id") or ""
+    if current_run_id:
+        waves = [
+            w
+            for w in waves
+            if isinstance(w, dict) and w.get("run_id") == current_run_id
+        ]
     current_node_ids: set[str] | None = None
     skeleton_raw = state.get("routing_skeleton")
     if isinstance(skeleton_raw, dict):

@@ -149,7 +149,10 @@ async def test_approval_approve_writes_plan_approved() -> None:
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
     assert out["plan_approved"] is True
-    assert out["messages"] == [{"role": "user", "content": "action=approve"}]
+    assert out["messages"] == [
+        {"role": "assistant", "content": "[planner] Plan ready — g (0 steps)"},
+        {"role": "user", "content": "action=approve"},
+    ]
 
 
 async def test_approval_form_prompt_renders_plan_summary() -> None:
@@ -203,7 +206,10 @@ async def test_approval_reject_writes_plan_approved_false() -> None:
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
     assert out["plan_approved"] is False
-    assert out["messages"] == [{"role": "user", "content": "action=reject"}]
+    assert out["messages"] == [
+        {"role": "assistant", "content": "[planner] Plan ready for approval."},
+        {"role": "user", "content": "action=reject"},
+    ]
 
 
 async def test_approval_revise_with_feedback_under_budget() -> None:
@@ -232,7 +238,10 @@ async def test_approval_revise_at_max_budget_falls_through_to_false() -> None:
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
     assert out["plan_approved"] is False
-    assert out["messages"] == [{"role": "user", "content": "action=revise"}]
+    assert out["messages"] == [
+        {"role": "assistant", "content": "[planner] Plan ready for approval."},
+        {"role": "user", "content": "action=revise"},
+    ]
 
 
 def test_route_from_approval_revise_loops_back_under_budget() -> None:

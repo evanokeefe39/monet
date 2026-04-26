@@ -241,11 +241,16 @@ async def questionnaire_node(state: PlanningState) -> dict[str, Any]:
             msg_parts.append(f"q{idx}={text}")
 
     msg_content = ", ".join(msg_parts) or "(submitted)"
+    q_lines = [f"  {idx + 1}. {q}" for idx, q in enumerate(questions)]
+    assistant_content = "[planner] Follow-up questions:\n" + "\n".join(q_lines)
     return {
         "pending_questions": None,
         "followup_attempts": attempts + 1,
         "followup_answers": answers,
-        "messages": [{"role": "user", "content": msg_content}],
+        "messages": [
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": msg_content},
+        ],
     }
 
 
@@ -294,10 +299,23 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
         )
     )
 
+    skeleton_raw = state.get("routing_skeleton")
+    if isinstance(skeleton_raw, dict):
+        goal = skeleton_raw.get("goal", "")
+        nodes_list = skeleton_raw.get("nodes", [])
+        n = len(nodes_list) if isinstance(nodes_list, list) else 0
+        step_word = "steps" if n != 1 else "step"
+        assistant_content = f"[planner] Plan ready — {goal} ({n} {step_word})"
+    else:
+        assistant_content = "[planner] Plan ready for approval."
+
     if decision.action == "approve":
         return {
             "plan_approved": True,
-            "messages": [{"role": "user", "content": "action=approve"}],
+            "messages": [
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": "action=approve"},
+            ],
         }
     if (
         decision.action == "revise"
@@ -308,17 +326,21 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
             "plan_approved": False,
             "human_feedback": decision.feedback,
             "messages": [
+                {"role": "assistant", "content": assistant_content},
                 {
                     "role": "user",
                     "content": f"action=revise, feedback={decision.feedback}",
-                }
+                },
             ],
             **increment_budget(state),
         }
     msg = f"action={decision.action}" if decision.action else "action=reject"
     return {
         "plan_approved": False,
-        "messages": [{"role": "user", "content": msg}],
+        "messages": [
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": msg},
+        ],
     }
 
 
