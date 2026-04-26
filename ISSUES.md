@@ -24,7 +24,7 @@ Systemic issue: many data shapes that cross process boundaries (HTTP, Redis, SSE
 
 ### High severity
 
-- **AgentResult** — dataclass hand-serialized via `serialize_result()` / `deserialize_result()` in `core/_serialization.py`. Crosses Redis (`result:{task_id}`), HTTP (`POST /tasks/{id}/complete`), and is nested inside schema-versioned `TaskRecord` without its own schema version. No shared type between worker client (`worker_client.py:199` hand-builds dict) and server (`TaskCompleteRequest` with `artifacts: list[dict[str, Any]]`).
+- **AgentResult** — dataclass hand-serialized via `serialize_result()` / `deserialize_result()` in `core/serialization.py`. Crosses Redis (`result:{task_id}`), HTTP (`POST /tasks/{id}/complete`), and is nested inside schema-versioned `TaskRecord` without its own schema version. No shared type between worker client (`worker_client.py:199` hand-builds dict) and server (`TaskCompleteRequest` with `artifacts: list[dict[str, Any]]`).
 - **Progress events** — Redis Streams `phist:*` uses `dict[str, Any]` with no schema. `POST /tasks/{id}/progress` accepts `body: dict[str, Any]`. Key name mismatch: agents emit `agent`, client types expect `agent_id`.
 - **AgentStream protocol** — 5 event types (`progress`, `signal`, `artifact`, `result`, `error`) across subprocess/SSE/HTTP transports in `streams.py`. Protocol defined only in comments and runtime string checks.
 

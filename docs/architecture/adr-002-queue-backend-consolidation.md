@@ -185,7 +185,7 @@ Six methods. No `wait_completion` (consumed by exactly one in-process caller, li
 
 ### Message envelope
 
-Stream entries and `result:{task_id}` strings carry a `serialize_result`-encoded `TaskRecord` / `AgentResult` (via the existing `src/monet/core/_serialization.py` helpers). Preserves typed round-trip for `tuple[Signal, ...]`, provenance fields (`agent_id`, `command`, `trace_id`, `run_id`, `created_at`), and `ArtifactPointer` for any large content.
+Stream entries and `result:{task_id}` strings carry a `serialize_result`-encoded `TaskRecord` / `AgentResult` (via the existing `src/monet/core/serialization.py` helpers). Preserves typed round-trip for `tuple[Signal, ...]`, provenance fields (`agent_id`, `command`, `trace_id`, `run_id`, `created_at`), and `ArtifactPointer` for any large content.
 
 `MAX_INLINE_PAYLOAD_BYTES = 950_000` (95% of Upstash's 1MB entry limit) constant in `src/monet/_ports.py`. `enqueue` enforces this — payloads above it must reference an `ArtifactPointer` or are rejected at the boundary. Test pins the limit.
 
