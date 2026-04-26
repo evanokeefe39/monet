@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Agent-side SDK machinery. The `@agent` decorator, registry, context injection, serialization, auth, worker-side hooks, OTel tracing, and the RemoteQueue adapter.
+Agent-side SDK machinery. The `@agent` decorator, registry, context injection, serialization, auth, worker-side hooks, and OTel tracing.
 
 ## Key modules
 
@@ -17,9 +17,7 @@ Agent-side SDK machinery. The `@agent` decorator, registry, context injection, s
 | `auth.py` | API key token generation + verification |
 | `hooks.py` | `@on_hook("before_agent" | "after_agent")` — worker-process hooks registry |
 | `tracing.py` | OTel span helpers, trace continuity across queue hops |
-| `worker_client.py` | `RemoteQueue` — implements `TaskQueue` protocol over HTTP for `monet worker` |
 | `artifacts.py` | `write_artifact()` / `read_artifact()` — agent-callable helpers, auto-inject context |
-| `_retry.py` | Per-agent retry logic with backoff |
 | `stubs.py` | Test stubs for agent invocation |
 
 ## Signals

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from opentelemetry import propagate as _propagate
 
-from monet.core._retry import retry_with_backoff
+from monet.worker._retry import retry_with_backoff
 
 if TYPE_CHECKING:
     from monet.events import TaskRecord
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 __all__ = ["RemoteQueue", "WorkerClient", "_trace_headers"]
 
-_log = logging.getLogger("monet.core.worker_client")
+_log = logging.getLogger("monet.worker._client")
 
 
 def _trace_headers() -> dict[str, str]:

@@ -10,8 +10,8 @@ from opentelemetry import context as _ot_context
 from opentelemetry import propagate, trace
 
 from monet.core.tracing import configure_tracing, get_tracer
-from monet.core.worker_client import WorkerClient, _trace_headers
 from monet.server.routes._common import attach_trace_context
+from monet.worker._client import WorkerClient, _trace_headers
 
 
 @pytest.fixture(autouse=True)
