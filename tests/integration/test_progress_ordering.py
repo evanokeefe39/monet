@@ -136,9 +136,9 @@ async def test_transcript_synthesis_priority_tiebreak(tmp_path):
 @pytest.mark.asyncio
 async def test_transcript_synthesis_drift_correction(tmp_path):
     """
-    Verifies that if telemetry arrives slightly BEFORE the user message
-    (due to clock drift or late checkpointing), it is still sorted after
-    the user message because they are in the same WINDOW.
+    Verifies that telemetry with an earlier timestamp than the message checkpoint
+    correctly appears before the message in the causal timeline.
+    (Replaces the old windowed-sort drift-correction test.)
     """
     db_path = tmp_path / "progress_drift.db"
     store = SqliteProgressStore(db_path)
@@ -174,14 +174,15 @@ async def test_transcript_synthesis_drift_correction(tmp_path):
     with patch("langgraph_sdk.get_client", return_value=mock_lg_client):
         resp = await get_thread_transcript(thread_id, store)
 
-    # User message (priority 0) should be before agent:started (priority 1)
-    # even though User was 10s later, because WINDOW=60000ms.
+    # Causal merge: telemetry at t=10000 precedes message checkpoint at t=20000,
+    # so telemetry appears first in the timeline.
     types = [e.type for e in resp.entries]
-    assert types == ["message", "telemetry"], (
-        f"Drift correction failed: expected [message, telemetry], got {types}"
+    assert types == ["telemetry", "message"], (
+        f"Causal ordering failed: expected [telemetry, message], got {types}"
     )
     print(
-        "[PASSED] 10s drift correction correctly grouped and prioritised user message."
+        "[PASSED] Causal merge correctly places earlier-timestamped telemetry"
+        " before later checkpoint."
     )
 
 
