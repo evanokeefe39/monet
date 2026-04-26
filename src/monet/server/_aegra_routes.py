@@ -62,9 +62,13 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ``bootstrap_server()`` is idempotent and is never called from the
     file-path path.
     """
+    import os
     import time as _time
+    from datetime import UTC, datetime
 
     from monet.config import QueueConfig
+    from monet.schedule._apscheduler import APSchedulerBackend
+    from monet.schedule.backends.sqlite import SqliteScheduleStore
     from monet.server.server_bootstrap import bootstrap_server
 
     _app.state.start_time = _time.monotonic()
@@ -72,6 +76,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _app.state.queue = queue
 
     await _deployments.initialize()
+
+    _schedule_db_path = os.environ.get("MONET_SCHEDULE_DB", ".monet/schedules.db")
+    schedule_store = SqliteScheduleStore(db_path=_schedule_db_path)
+    await schedule_store.initialize()
+    _app.state.schedule_store = schedule_store
+    scheduler = APSchedulerBackend()
 
     cfg = QueueConfig.load()
 
@@ -124,6 +134,29 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ]
     _capability_index.upsert_worker(in_proc_worker_id, "local", capabilities)
 
+    from monet._ports import STANDARD_DEV_PORT
+    from monet.client import MonetClient
+    from monet.config import MONET_SERVER_URL
+    from monet.schedule._protocol import ScheduleRecord  # noqa: TC001
+
+    _self_url = os.environ.get(
+        MONET_SERVER_URL, f"http://localhost:{STANDARD_DEV_PORT}"
+    )
+
+    async def _fire(record: ScheduleRecord) -> None:
+        client = MonetClient(_self_url)
+        try:
+            async for _ in client.run(record["graph_id"], record["input"]):
+                pass
+            await schedule_store.update_last_run(
+                record["schedule_id"], datetime.now(UTC).isoformat()
+            )
+        except Exception:
+            logger.exception("Scheduled run failed: %s", record["schedule_id"])
+
+    await scheduler.start(schedule_store, _fire)
+    _app.state.scheduler = scheduler
+
     sweeper_task = asyncio.create_task(_sweep_loop())
     reclaim_task = asyncio.create_task(_reclaim_loop())
     worker_task = asyncio.create_task(
@@ -141,6 +174,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        await scheduler.shutdown()
+        await schedule_store.close()
         await _deployments.close()
 
 

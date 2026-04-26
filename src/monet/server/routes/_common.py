@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from monet.progress import ProgressReader, ProgressWriter
 from monet.queue import TaskQueue
+from monet.schedule._protocol import Scheduler, ScheduleStore
 from monet.server._capabilities import CapabilityIndex
 from monet.server._deployment import DeploymentStore
 
@@ -64,12 +65,22 @@ def _get_progress_reader(request: Request) -> ProgressReader | None:
     return getattr(request.app.state, "progress_reader", None)  # type: ignore[no-any-return]
 
 
+def _get_schedule_store(request: Request) -> ScheduleStore | None:
+    return getattr(request.app.state, "schedule_store", None)  # type: ignore[no-any-return]
+
+
+def _get_scheduler(request: Request) -> Scheduler | None:
+    return getattr(request.app.state, "scheduler", None)  # type: ignore[no-any-return]
+
+
 # Type aliases for annotated dependencies
 Queue = Annotated[TaskQueue, Depends(get_queue)]
 Deployments = Annotated[DeploymentStore, Depends(get_deployments)]
 CapIndex = Annotated[CapabilityIndex, Depends(get_capability_index)]
 OptWriter = Annotated[ProgressWriter | None, Depends(_get_progress_writer)]
 OptReader = Annotated[ProgressReader | None, Depends(_get_progress_reader)]
+OptScheduleStore = Annotated[ScheduleStore | None, Depends(_get_schedule_store)]
+OptScheduler = Annotated[Scheduler | None, Depends(_get_scheduler)]
 
 
 # -- Common Schemas ---------------------------------------------------------
