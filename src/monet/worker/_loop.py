@@ -13,8 +13,6 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from opentelemetry import trace
-
 if TYPE_CHECKING:
     from monet.core.registry import LocalRegistry
     from monet.events import ClaimedTask, TaskRecord
@@ -30,7 +28,6 @@ _PROGRESS_QUEUE_SIZE = 64
 # Per-publish timeout during drain-on-cancellation, so shutdown does not
 # hang on a flaky backend.
 _DRAIN_PUBLISH_TIMEOUT = 1.0
-_tracer = trace.get_tracer("monet.worker")
 
 
 async def run_worker(
@@ -139,8 +136,6 @@ async def run_worker(
                 )
 
     async def _execute(record: TaskRecord) -> None:
-        from monet.core.stubs import _progress_publisher
-
         task_id = record["task_id"]
         agent_id = record["agent_id"]
         command = record["command"]
@@ -195,83 +190,20 @@ async def run_worker(
                 with contextlib.suppress(asyncio.CancelledError):
                     await drain_task
 
-            from monet.core.stubs import _current_task_id, _progress_writer_cv
+            from monet.core.engine import execute_task
 
-            token = _progress_publisher.set(_publisher)
-            writer_token = _progress_writer_cv.set(writer)
-            task_id_token = _current_task_id.set(task_id)
             try:
-                with _tracer.start_as_current_span(
-                    f"worker.execute.{agent_id}.{command}",
-                    attributes={
-                        "agent.id": agent_id,
-                        "agent.command": command,
-                        "worker.pool": pool,
-                        "task.id": task_id,
-                    },
-                ):
-                    handler = registry.lookup(agent_id, command)
-                    if handler is None:
-                        logger.warning(
-                            "worker: no handler for %s/%s (task %s)",
-                            agent_id,
-                            command,
-                            task_id,
-                        )
-                        await queue.fail(
-                            task_id,
-                            f"No handler for {agent_id}/{command} in worker registry",
-                        )
-                        return
-                    logger.info(
-                        "worker: executing %s/%s task=%s pool=%s",
-                        agent_id,
-                        command,
-                        task_id,
-                        pool,
-                    )
-                    try:
-                        result = await asyncio.wait_for(
-                            handler(record["context"]),
-                            timeout=task_timeout,
-                        )
-                        # Flush progress BEFORE completing so subscribers
-                        # see all events — completing the task triggers
-                        # wait_completion cleanup which terminates subscriptions.
-                        await _flush_drain()
-                        await queue.complete(task_id, result)
-                        logger.info(
-                            "worker: completed %s/%s task=%s success=%s",
-                            agent_id,
-                            command,
-                            task_id,
-                            getattr(result, "success", True),
-                        )
-                    except TimeoutError:
-                        logger.warning(
-                            "worker: task %s timed out after %ss (%s/%s)",
-                            task_id,
-                            task_timeout,
-                            agent_id,
-                            command,
-                        )
-                        await _flush_drain()
-                        await queue.fail(
-                            task_id,
-                            f"Task execution timed out after {task_timeout}s",
-                        )
-                    except Exception as exc:
-                        logger.exception(
-                            "Worker: unhandled exception executing %s/%s",
-                            agent_id,
-                            command,
-                        )
-                        await _flush_drain()
-                        await queue.fail(task_id, f"{type(exc).__name__}: {exc}")
+                await execute_task(
+                    record,
+                    registry,
+                    queue,
+                    publisher=_publisher,
+                    writer=writer,
+                    pool=pool,
+                    task_timeout=task_timeout,
+                    on_before_complete=_flush_drain,
+                )
             finally:
-                _progress_publisher.reset(token)
-                _progress_writer_cv.reset(writer_token)
-                _current_task_id.reset(task_id_token)
                 if not drain_task.done():
                     await _flush_drain()
                 if heartbeat_task is not None and not heartbeat_task.done():
