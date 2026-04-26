@@ -166,7 +166,9 @@ async def test_evaluator_writes_comparative_review_artifact() -> None:
         ]
     )
     assert result.success is True
-    assert any(a.get("key") == "comparative_review" for a in result.artifacts)
-    rows = await get_artifacts().query_recent(tag="evaluator_compare")
-    assert len(rows) == 1
-    assert rows[0]["content_type"] == "application/json"
+    review_ptr = next(
+        (a for a in result.artifacts if a.get("key") == "comparative_review"), None
+    )
+    assert review_ptr is not None
+    _, meta = await get_artifacts().read(review_ptr["artifact_id"])
+    assert meta.get("content_type") == "application/json"

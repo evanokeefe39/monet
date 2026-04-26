@@ -13,7 +13,6 @@ def test_monet_root_exports() -> None:
         "AgentRunContext",
         "ArtifactPointer",
         "ArtifactStore",
-        "ArtifactStoreHandle",
         "GraphHookRegistry",
         "HookRegistry",
         "Signal",
@@ -49,18 +48,11 @@ def test_monet_artifacts_exports() -> None:
 
     expected = {
         "ArtifactClient",
-        "ArtifactMetadata",
-        "ArtifactQueryable",
         "ArtifactReader",
         "ArtifactService",
         "ArtifactStore",
-        "ArtifactStoreHandle",
         "ArtifactWriter",
-        "FilesystemStorage",
         "InMemoryArtifactClient",
-        "MetadataIndex",
-        "SQLiteIndex",
-        "StorageBackend",
         "artifacts_from_env",
         "configure_artifacts",
     }
@@ -163,7 +155,3 @@ def test_default_graph_public_api() -> None:
         build_execution_subgraph,
         build_planning_subgraph,
     )
-
-
-def test_artifact_store_handle_public() -> None:
-    from monet import ArtifactStoreHandle  # noqa: F401

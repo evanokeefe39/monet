@@ -11,7 +11,7 @@ from click.testing import CliRunner
 if TYPE_CHECKING:
     from pathlib import Path
 
-from monet.artifacts._migrations import (
+from monet.artifacts.prebuilt._migrations import (
     apply_migrations,
     check_at_head,
     current_revision,
@@ -67,8 +67,6 @@ def test_query_by_run_uses_index(tmp_path: Path) -> None:
     apply_migrations(_file_url(db_path))
     conn = sqlite3.connect(db_path)
     try:
-        # SQLite picks either the run_id-only or composite index for this query;
-        # either satisfies the rule.
         plan = conn.execute(
             "EXPLAIN QUERY PLAN SELECT * FROM artifacts WHERE run_id = 'x'"
         ).fetchall()
@@ -96,7 +94,6 @@ def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:
 
 def test_check_at_head_false_before_migrate(tmp_path: Path) -> None:
     db_path = tmp_path / "index.db"
-    # Create DB with legacy schema but no alembic_version table.
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("CREATE TABLE artifacts (artifact_id TEXT PRIMARY KEY)")
@@ -124,7 +121,7 @@ def test_stamp_head_marks_existing_db(tmp_path: Path) -> None:
 
 async def test_sqlite_index_initialise_in_memory_uses_create_all() -> None:
     """In-memory DBs bypass alembic — tests stay fast and isolated."""
-    from monet.artifacts._index import SQLiteIndex
+    from monet.artifacts.prebuilt._index import SQLiteIndex
 
     idx = SQLiteIndex("sqlite+aiosqlite:///:memory:")
     await idx.initialise()  # must not raise
@@ -134,10 +131,9 @@ async def test_sqlite_index_initialise_persistent_requires_migrations(
     tmp_path: Path,
 ) -> None:
     """Persistent DBs must be at head before initialise succeeds."""
-    from monet.artifacts._index import SQLiteIndex
+    from monet.artifacts.prebuilt._index import SQLiteIndex
 
     db_path = tmp_path / "index.db"
-    # Simulate a legacy DB with old schema and no alembic_version.
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("CREATE TABLE artifacts (artifact_id TEXT PRIMARY KEY)")
@@ -154,7 +150,7 @@ async def test_sqlite_index_initialise_persistent_passes_at_head(
     tmp_path: Path,
 ) -> None:
     """A migrated persistent DB initialises cleanly."""
-    from monet.artifacts._index import SQLiteIndex
+    from monet.artifacts.prebuilt._index import SQLiteIndex
 
     db_path = tmp_path / "index.db"
     url = _file_url(db_path)
@@ -179,7 +175,6 @@ def test_cli_migrate(tmp_path: Path) -> None:
 
 def test_cli_current_on_fresh_db_reports_none(tmp_path: Path) -> None:
     db_path = tmp_path / "index.db"
-    # Create empty file.
     sqlite3.connect(db_path).close()
     runner = CliRunner()
     result = runner.invoke(db, ["current", "--db-url", _file_url(db_path)])
@@ -222,7 +217,7 @@ def test_cli_stamp_then_check_passes(tmp_path: Path) -> None:
 
 def test_public_exports_stable() -> None:
     """Future plumbing changes must not break the public _migrations API."""
-    from monet.artifacts import _migrations
+    from monet.artifacts.prebuilt import _migrations
 
     for name in (
         "apply_migrations",
@@ -241,13 +236,7 @@ def test_apply_migrations_rejects_blank_url(bad_url: str) -> None:
 
 
 def test_apply_migrations_handles_empty_alembic_version(tmp_path: Path) -> None:
-    """DB with ``artifacts`` + empty ``alembic_version`` table.
-
-    Observed in the wild when a prior boot created the alembic_version
-    table but crashed before recording a revision. ``current_revision``
-    returns ``None`` despite the table existing, so the naive ``table
-    absent`` check misses this case.
-    """
+    """DB with artifacts + empty alembic_version table."""
     db_path = tmp_path / "halfmigrated.db"
     conn = sqlite3.connect(db_path)
     try:
@@ -281,12 +270,7 @@ def test_apply_migrations_handles_empty_alembic_version(tmp_path: Path) -> None:
 
 
 def test_apply_migrations_handles_pre_alembic_db(tmp_path: Path) -> None:
-    """Pre-alembic DB (artifacts present, alembic_version absent) auto-stamps.
-
-    Regression for I8 — existing installs from before the alembic tree
-    shipped would crash with ``table artifacts already exists`` every
-    boot because alembic tried to re-apply the baseline.
-    """
+    """Pre-alembic DB (artifacts present, alembic_version absent) auto-stamps."""
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
     try:

@@ -1,4 +1,4 @@
-"""Artifact metadata as a TypedDict."""
+"""Artifact metadata as a TypedDict. Internal to prebuilt."""
 
 from __future__ import annotations
 

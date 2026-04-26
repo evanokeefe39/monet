@@ -22,7 +22,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import Connection, engine_from_config, pool
 
-from monet.artifacts._index import Base
+from monet.artifacts.prebuilt._index import Base
 
 config = context.config
 

@@ -110,11 +110,7 @@ def emit_signal(signal: Signal) -> None:
 async def write_artifact(
     content: bytes,
     content_type: str,
-    summary: str,
-    confidence: float = 0.0,
-    completeness: str = "complete",
-    sensitivity_label: str = "internal",
-    key: str | None = None,
+    **kwargs: Any,
 ) -> ArtifactPointer:
     """Write content to the artifact store and register the pointer.
 
@@ -124,15 +120,6 @@ async def write_artifact(
     """
     from .artifacts import get_artifacts
 
-    kwargs: dict[str, str] = {}
-    if key is not None:
-        kwargs["key"] = key
     return await get_artifacts().write(
-        content=content,
-        content_type=content_type,
-        summary=summary,
-        confidence=confidence,
-        completeness=completeness,
-        sensitivity_label=sensitivity_label,
-        **kwargs,
+        content=content, content_type=content_type, **kwargs
     )

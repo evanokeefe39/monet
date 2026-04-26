@@ -1,6 +1,6 @@
 """Database migration commands.
 
-The ``monet db`` group wraps :mod:`monet.artifacts._migrations`. The
+The ``monet db`` group wraps :mod:`monet.artifacts.prebuilt._migrations`. The
 artifact index is the only monet-owned relational schema today; the
 deployments table (``server/_deployment.py``) is rebuilt each boot and
 does not yet have migration coverage.
@@ -12,7 +12,7 @@ import os
 
 import click
 
-from monet.artifacts._migrations import (
+from monet.artifacts.prebuilt._migrations import (
     apply_migrations,
     check_at_head,
     current_revision,
