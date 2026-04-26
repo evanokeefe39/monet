@@ -50,7 +50,7 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
     """
     if cfg.backend == "memory":
         from monet.config import read_int
-        from monet.queue.backends.sqlite_store import SqliteProgressStore
+        from monet.progress.backends.sqlite_store import SqliteProgressStore
 
         db_path = os.environ.get("MONET_PROGRESS_DB")
         store = None

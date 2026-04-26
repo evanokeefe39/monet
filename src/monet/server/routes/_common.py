@@ -10,6 +10,7 @@ from opentelemetry import context as _ot_context
 from opentelemetry import propagate as _propagate
 from pydantic import BaseModel
 
+from monet.progress import ProgressReader, ProgressWriter
 from monet.queue import TaskQueue
 from monet.server._capabilities import CapabilityIndex
 from monet.server._deployment import DeploymentStore
@@ -55,10 +56,20 @@ async def attach_trace_context(request: Request) -> AsyncIterator[None]:
         _ot_context.detach(token)
 
 
+def _get_progress_writer(request: Request) -> ProgressWriter | None:
+    return getattr(request.app.state, "progress_writer", None)  # type: ignore[no-any-return]
+
+
+def _get_progress_reader(request: Request) -> ProgressReader | None:
+    return getattr(request.app.state, "progress_reader", None)  # type: ignore[no-any-return]
+
+
 # Type aliases for annotated dependencies
 Queue = Annotated[TaskQueue, Depends(get_queue)]
 Deployments = Annotated[DeploymentStore, Depends(get_deployments)]
 CapIndex = Annotated[CapabilityIndex, Depends(get_capability_index)]
+OptWriter = Annotated[ProgressWriter | None, Depends(_get_progress_writer)]
+OptReader = Annotated[ProgressReader | None, Depends(_get_progress_reader)]
 
 
 # -- Common Schemas ---------------------------------------------------------

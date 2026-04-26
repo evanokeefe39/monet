@@ -52,7 +52,7 @@ from ._planner_outcome import (
 )
 from ._state import PlanningState
 
-MAX_REVISIONS = 3
+MAX_REVISIONS = 3  # not yet a builder parameter; tracked in ISSUES.md
 
 _tracer = trace.get_tracer("monet.orchestration.planning")
 

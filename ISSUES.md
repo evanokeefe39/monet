@@ -70,6 +70,24 @@ Added:
 - `monet.worker.push_providers.cloudrun.CloudRunDispatchBackend`
 - `run_worker(dispatch_backend=..., server_url=..., api_key=...)` params
 
+## Extensibility Gaps (Open-Closed)
+
+### Transport registry for agent_loader
+
+`core/agent_loader.py` dispatches on a hardcoded frozenset of transport types (`http`, `sse`, `cli`) via if/elif in `_build_stream()`. Third parties cannot register custom transports (e.g. gRPC, AMQP) without editing core. Fix: dict-dispatch registry with `register_transport(name, builder_fn)`. Trigger: first third-party transport request.
+
+### MAX_REVISIONS not configurable
+
+`orchestration/prebuilt/planning_graph.py` caps planning HITL loop at `MAX_REVISIONS = 3` as a module constant. Callers cannot tune iteration budget without patching. Fix: expose as parameter to `build_planning_subgraph(max_revisions=3)`. Trigger: any caller needing a non-default cap.
+
+### WorkerClient HTTP transport coupling
+
+`worker/_client.py` is tightly coupled to httpx. No protocol abstracts the HTTP layer, so swapping to gRPC or another transport requires rewriting the client. Fix: extract `HttpTransport` protocol, inject via constructor. Trigger: alternative transport need (unlikely near-term).
+
+### Redis key naming not overridable
+
+`queue/backends/redis_streams.py` uses module-level helpers (`_work_key`, `_result_key`, etc.) that hardcode Redis key shapes. No extension point if naming conventions need to change. Fix: promote to methods or a key-schema class. Trigger: multi-tenant key namespacing or Redis cluster migration.
+
 ## Known-Dead: LocalDispatchBackend subprocess module
 
 `monet.worker.push_providers.LocalDispatchBackend.submit()` spawns

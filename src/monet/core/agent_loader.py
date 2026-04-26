@@ -178,7 +178,12 @@ def _make_handler(
 
 
 def _build_stream(transport: dict[str, Any], payload: dict[str, Any]) -> Any:
-    """Dispatch to the appropriate ``AgentStream`` constructor."""
+    """Dispatch to the appropriate ``AgentStream`` constructor.
+
+    Extension point: add a new ``transport_type`` branch here to support
+    additional transports. There is no registry — each transport is a named
+    branch in this function.
+    """
     from monet.streams import AgentStream
 
     transport_type = transport["type"]
