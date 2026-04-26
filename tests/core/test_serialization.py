@@ -1,4 +1,4 @@
-"""Tests for shared serialization helpers in core/_serialization.py."""
+"""Tests for shared serialization helpers in core/serialization.py."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from monet.core._serialization import (
+from monet.core.serialization import (
     deserialize_result,
     now_iso,
     safe_parse_context,
@@ -131,7 +131,7 @@ def test_safe_parse_context_none_input() -> None:
 def test_safe_parse_context_invalid_json_returns_none(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.WARNING, logger="monet.core._serialization"):
+    with caplog.at_level(logging.WARNING, logger="monet.core.serialization"):
         result = safe_parse_context("{{broken", source="test")
     assert result is None
     assert "Corrupt context JSON" in caplog.text
@@ -141,7 +141,7 @@ def test_safe_parse_context_invalid_json_returns_none(
 def test_safe_parse_context_non_string_returns_none(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.WARNING, logger="monet.core._serialization"):
+    with caplog.at_level(logging.WARNING, logger="monet.core.serialization"):
         # type: ignore[arg-type]
         result = safe_parse_context(12345, source="test.non_string")  # type: ignore[arg-type]
     assert result is None

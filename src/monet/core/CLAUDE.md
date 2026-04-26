@@ -13,7 +13,7 @@ Agent-side SDK machinery. The `@agent` decorator, registry, context injection, s
 | `registry.py` | `AgentRegistry` — maps `agent_id → AgentDescriptor`. `default_registry` is the process singleton. |
 | `context.py` | `AgentContext` — typed context injected into agent functions. Run ID, trace ID, agent ID, artifact service. |
 | `context_resolver.py` | Resolves `AgentContext` from task record at invocation time |
-| `_serialization.py` | `TaskRecord` / `AgentResult` wire-format serialization. Schema-versioned. |
+| `serialization.py` | `TaskRecord` / `AgentResult` wire-format serialization. Schema-versioned. |
 | `auth.py` | API key token generation + verification |
 | `hooks.py` | `@on_hook("before_agent" | "after_agent")` — worker-process hooks registry |
 | `tracing.py` | OTel span helpers, trace continuity across queue hops |

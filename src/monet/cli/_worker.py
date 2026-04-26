@@ -140,7 +140,7 @@ def _import_agents(path: Path, cfg: WorkerConfig) -> None:
         spec.loader.exec_module(module)  # type: ignore[union-attr]
         logger.info("Imported %s", agent_file)
     if cfg.agents_toml is not None:
-        from monet.core._agent_loader import load_agents
+        from monet.core.agent_loader import load_agents
 
         count = load_agents(cfg.agents_toml)
         logger.info("Registered %d agent(s) from %s", count, cfg.agents_toml)
@@ -169,7 +169,7 @@ async def _run_worker(path: Path, cfg: WorkerConfig) -> None:
 
     # Load declarative agent config if provided.
     if cfg.agents_toml is not None:
-        from monet.core._agent_loader import load_agents
+        from monet.core.agent_loader import load_agents
 
         count = load_agents(cfg.agents_toml)
         logger.info("Registered %d agent(s) from %s", count, cfg.agents_toml)

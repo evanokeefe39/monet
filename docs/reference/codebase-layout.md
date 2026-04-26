@@ -39,7 +39,7 @@
 - `hooks.py` — `GraphHookRegistry`, `@on_hook`
 - `stubs.py` — `emit_progress` / `emit_signal` / `write_artifact`
 - `artifacts.py` — worker-side handle
-- `worker_client.py`, `_agents_config.py`, `_retry.py`, `_serialization.py`
+- `worker_client.py`, `agent_loader.py`, `_retry.py`, `serialization.py`
 
 **`cli/`** — click commands
 - `_dev.py` — `monet dev` as a group with `down` subcommand + auto-teardown

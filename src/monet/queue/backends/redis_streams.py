@@ -31,7 +31,7 @@ import socket
 from typing import TYPE_CHECKING, Any
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
-from monet.core._serialization import (
+from monet.core.serialization import (
     deserialize_result,
     deserialize_task_record,
     serialize_result,
