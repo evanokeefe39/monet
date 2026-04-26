@@ -5,12 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 
 from monet.config import ArtifactsConfig
-from monet.core.artifacts import _set_artifact_backend
+from monet.core.artifacts import (
+    ArtifactStore,
+    ArtifactStoreHandle,
+    _set_artifact_backend,
+)
 
 from ._index import SQLiteIndex
 from ._memory import InMemoryArtifactClient
 from ._metadata import ArtifactMetadata
-from ._protocol import ArtifactClient
+from ._protocol import (
+    ArtifactClient,
+    ArtifactQueryable,
+    ArtifactReader,
+    ArtifactWriter,
+    MetadataIndex,
+    StorageBackend,
+)
 from ._service import ArtifactService
 from ._storage import FilesystemStorage
 
@@ -72,10 +83,17 @@ def artifacts_from_env(*, default_root: Path | None = None) -> ArtifactService:
 __all__ = [
     "ArtifactClient",
     "ArtifactMetadata",
+    "ArtifactQueryable",
+    "ArtifactReader",
     "ArtifactService",
+    "ArtifactStore",
+    "ArtifactStoreHandle",
+    "ArtifactWriter",
     "FilesystemStorage",
     "InMemoryArtifactClient",
+    "MetadataIndex",
     "SQLiteIndex",
+    "StorageBackend",
     "artifacts_from_env",
     "configure_artifacts",
 ]
