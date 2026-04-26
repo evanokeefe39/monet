@@ -145,6 +145,11 @@ def dispatch_ready_nodes(state: ExecutionState) -> list[Send] | str:
     pointer = state["work_brief_pointer"]
     trace_carrier = dict(state.get("trace_carrier") or {})
     wave_results = state.get("wave_results") or []
+    current_run_id = state.get("run_id", "")
+    if current_run_id:
+        wave_results = [
+            r for r in wave_results if r.get("run_id", "") == current_run_id
+        ]
     results_by_id = {r["id"]: r for r in wave_results}
     deps_by_id = {n.id: list(n.depends_on) for n in skeleton.nodes}
     thread_id = state.get("thread_id", "") or ""
@@ -249,6 +254,7 @@ async def agent_node(item: NodeItem) -> dict[str, Any]:
         "artifacts": artifacts_data,
         "signals": signals_data,
         "success": result.success,
+        "run_id": item.get("run_id", ""),
     }
     return {"wave_results": [entry]}
 
