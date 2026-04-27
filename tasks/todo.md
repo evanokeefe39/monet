@@ -1,178 +1,114 @@
-# Refactor: orchestration/prebuilt + hooks/prebuilt separation
+# Fix: LangGraph state scoping for multi-run chat threads
+
+## Problem
+
+On same-thread multi-run conversations, stale execution state (wave_results, completed_node_ids) and duplicate messages leak across runs. Root cause: transient execution data lives in parent ChatState with append reducers instead of being scoped to the execution subgraph.
 
 ## Goal
-Separate `orchestration/` and `hooks/` into core vs `prebuilt/`. Core = protocols, utilities any graph/hook needs. Prebuilt = monet's shipped implementations. Follows same pattern as `queue/backends/`, `progress/backends/`.
 
-Additionally: introduce `AgentInvocationResult` as core type, retire `WaveResult`.
-
-## Classification
-
-### orchestration/
-
-**Core** (stays at package root):
-- `_state.py` — retains only `_append_reducer` and `AgentInvocationResult`
-- `_invoke.py` — queue-based agent invocation, configure_queue, get_queue
-- `_forms.py` — HITL form builders
-- `_signal_router.py` — declarative signal-to-action mapping
-- `_retry_budget.py` — shared retry counter
-- `_result_parser.py` — structured output parsing
-
-**Prebuilt** (moves to `prebuilt/`):
-- `_state.py` (new) — all prebuilt state schemas: `RoutingNode`, `RoutingSkeleton`, `WorkBrief`, `WorkBriefNode`, `RunState`, `PlanningState`, `ExecutionState`, `SignalsSummary`, `WaveItem`
-- `_planner_outcome.py` — planner result classification
-- `default_graph.py` — compound planning+execution graph
-- `planning_graph.py` — planning subgraph
-- `execution_graph.py` — execution subgraph
-- `chat_graph.py` — Aegra entry point (absolute imports)
-- `chat/` — entire subpackage (7 files)
-
-### hooks/
-
-- `core/hooks.py` — core (no move needed, already in place)
-- `hooks/plan_context.py` → `hooks/prebuilt/plan_context.py`
-
-## AgentInvocationResult
-
-New core TypedDict in `orchestration/_state.py`. Universal shape for a completed `invoke_agent()` call. Replaces `WaveResult` — prebuilt uses `AgentInvocationResult` directly with `id` set to `RoutingNode.id`.
-
-```python
-class AgentInvocationResult(TypedDict):
-    """Universal shape for a completed agent invocation.
-
-    Any graph calling invoke_agent() writes results in this shape.
-    ``id`` is caller-assigned — prebuilt sets it to RoutingNode.id,
-    custom graphs use whatever invocation identity they need.
-    """
-    id: str
-    agent_id: str
-    command: str
-    output: str | dict[str, Any] | None
-    artifacts: list[dict[str, Any]]
-    signals: list[dict[str, Any]]
-    success: bool
-```
-
-`WaveResult` is deleted. All references in prebuilt (`execution_graph.py`, `chat/_format.py`, tests) update to `AgentInvocationResult`.
+Align with LangGraph best practices:
+- Thread-scoped = `messages` only (using `add_messages` reducer)
+- Run-scoped transient data stays inside subgraphs
+- Parent graph only receives distilled output (messages)
 
 ## Checklist
 
-### Phase 0: Introduce AgentInvocationResult, delete WaveResult
-- [ ] Add `AgentInvocationResult` to `orchestration/_state.py`
-- [ ] Delete `WaveResult` from `orchestration/_state.py`
-- [ ] Update `orchestration/__init__.py` exports: `WaveResult` → `AgentInvocationResult`
-- [ ] Update all consumers of `WaveResult` (grep for it — execution_graph, chat/_format, tests)
-- [ ] Verify: `uv run mypy src/ && uv run pytest -q --ignore=tests/e2e --ignore=tests/compat --ignore=tests/chat 2>&1 | tail -60`
+### Phase 1: Move execution_summary_node into execution subgraph
 
-### Phase 1: Split _state.py
-- [ ] Create `orchestration/prebuilt/_state.py` with: `RoutingNode`, `RoutingSkeleton`, `WorkBrief`, `WorkBriefNode`, `RunState`, `PlanningState`, `ExecutionState`, `SignalsSummary`, `WaveItem`
-- [ ] Core `orchestration/_state.py` retains: `_append_reducer`, `AgentInvocationResult`
-- [ ] Prebuilt `_state.py` imports `_append_reducer` from core: `from monet.orchestration._state import _append_reducer`
-- [ ] Update all imports of moved schemas (grep each symbol name)
+This is the key structural fix. execution_summary_node currently lives in the chat graph and reads wave_results from ChatState. Moving it inside the execution subgraph means wave_results never needs to leave ExecutionState.
 
-### Phase 2: Create prebuilt/ and move graph files
-- [ ] Create `orchestration/prebuilt/__init__.py` — re-exports `build_chat_graph`, `build_default_graph`, `build_execution_subgraph`, `build_planning_subgraph`, `ChatState`, and prebuilt state schemas
-- [ ] Move `_planner_outcome.py` → `prebuilt/_planner_outcome.py`
-- [ ] Move `default_graph.py` → `prebuilt/default_graph.py`
-- [ ] Move `planning_graph.py` → `prebuilt/planning_graph.py`
-- [ ] Move `execution_graph.py` → `prebuilt/execution_graph.py`
-- [ ] Move `chat_graph.py` → `prebuilt/chat_graph.py`
-- [ ] Move `chat/` → `prebuilt/chat/`
+- [ ] Move `execution_summary_node` from `chat/_format.py` into `execution_graph.py` as the final node before END
+- [ ] Update execution subgraph topology: `collect_batch → (route_after_collect) → {dispatch | human_interrupt | END}` becomes `... → END → execution_summary` — actually: add edge from the END-bound route to a new "summarise" node, then that node → END
+- [ ] `execution_summary_node` writes to `messages` field (add `messages: Annotated[list, _append_reducer]` to ExecutionState if not present)
+- [ ] The summary message flows back to parent ChatState via name-matching on `messages`
+- [ ] Remove `execution_summary` node from chat graph (`_build.py`)
+- [ ] Remove edge `execution → execution_summary → END`, replace with `execution → END`
+- [ ] Verify: graph topology test still passes
 
-### Phase 3: Fix internal imports within prebuilt/
-Prebuilt→core: absolute (`from monet.orchestration._invoke import ...`)
-Prebuilt→prebuilt: relative (`from .planning_graph import ...`)
-Exception: `chat_graph.py` uses absolute (Aegra synthetic namespace)
+### Phase 2: Remove wave_results/wave_reflections from ChatState and RunState
 
-- [ ] `prebuilt/default_graph.py`: relative imports to sibling graph modules
-- [ ] `prebuilt/planning_graph.py`: relative to `._planner_outcome`, `._state`; absolute to core `monet.orchestration._invoke` etc.
-- [ ] `prebuilt/execution_graph.py`: same pattern
-- [ ] `prebuilt/chat/_build.py`: `from monet.orchestration.execution_graph` → `from ..execution_graph`
-- [ ] `prebuilt/chat/_format.py`: `from monet.orchestration._planner_outcome` → `from .._planner_outcome`
-- [ ] `prebuilt/chat/_state.py`: `from monet.orchestration._state` stays absolute (core)
-- [ ] `prebuilt/chat/_specialist.py`: `from monet.orchestration._invoke` stays absolute (core)
-- [ ] `prebuilt/chat_graph.py`: `from monet.orchestration.chat` → `from monet.orchestration.prebuilt.chat`
+Once execution_summary_node is inside the subgraph, parent graphs no longer need wave_results.
 
-### Phase 4: Fix external imports pointing at moved modules
-- [ ] `server/server_bootstrap.py`: update orchestration imports
-- [ ] `config/_schema.py`: `_DEFAULT_CHAT_GRAPH` path → `monet.orchestration.prebuilt.chat_graph:build_chat_graph`
-- [ ] `server/_smoke.py`: `from monet.orchestration.chat._lc` → `from monet.orchestration.prebuilt.chat._lc`
-- [ ] `hooks/plan_context.py`: `from monet.orchestration._state import WorkBrief` → `from monet.orchestration.prebuilt._state import WorkBrief`
-- [ ] `agents/planner/__init__.py`: same WorkBrief import update
-- [ ] Test files: grep and update any direct imports of moved modules
+- [ ] Remove `wave_results` and `wave_reflections` from `ChatState` (chat/_state.py)
+- [ ] Remove `wave_results` and `wave_reflections` from `RunState` (prebuilt/_state.py)
+- [ ] Keep them in `ExecutionState` — they're correctly scoped there
+- [ ] Remove `completed_node_ids` from `ChatState` (it's already only in ExecutionState + the parse reset)
+- [ ] Remove the `completed_node_ids` reset from `parse_command_node` (no longer needed)
+- [ ] Remove `wave_results`/`wave_reflections` resets from `parse_command_node`
+- [ ] Verify: mypy passes, tests pass
 
-### Phase 5: Update orchestration/__init__.py
-- [ ] Rewrite imports: core from local `._*`, prebuilt chain from `.prebuilt`
-- [ ] `__all__` updated: `WaveResult` → `AgentInvocationResult`, rest unchanged
-- [ ] Update module docstring to document core vs prebuilt split
+### Phase 3: Switch messages to add_messages reducer
 
-### Phase 6: hooks/prebuilt separation
-- [ ] Create `hooks/prebuilt/__init__.py` — imports `plan_context` for side-effect registration
-- [ ] Move `hooks/plan_context.py` → `hooks/prebuilt/plan_context.py`
-- [ ] Update `hooks/__init__.py`: `from . import plan_context` → `from .prebuilt import plan_context`
-- [ ] `hooks/prebuilt/plan_context.py`: WorkBrief import already updated in Phase 4
+Replace `_append_reducer` on messages with LangGraph's `add_messages` which deduplicates by message ID and prevents the double-user-message bug.
 
-### Phase 7: Update CLAUDE.md files
-- [ ] `orchestration/CLAUDE.md` — reflect core vs prebuilt split, new directory structure
-- [ ] `hooks/CLAUDE.md` — reflect prebuilt/ subdirectory
+- [ ] Import `add_messages` from `langgraph.graph.message`
+- [ ] Replace `Annotated[list[dict[str, Any]], _append_reducer]` with `Annotated[list, add_messages]` for the `messages` field in `PlanningState`
+- [ ] Ensure all message dicts emitted by nodes include an `id` field (or use LangChain message objects)
+- [ ] If `add_messages` expects LangChain BaseMessage objects, evaluate whether to keep dict messages with a custom ID-aware reducer instead
+- [ ] Alternative: write a `_dedup_messages_reducer` that deduplicates by content hash for dict-based messages (simpler, no BaseMessage dependency)
+- [ ] Test: sending same message twice on same thread doesn't produce duplicate in state
+- [ ] Remove the `update_state` + `input={}` double-write pattern in `send_message` if add_messages handles it, OR ensure message IDs prevent duplication
 
-### Phase 8: Verify
+### Phase 4: Reset planning_context at planning entry
+
+`planning_context` uses append reducer and grows across runs. Each new plan on the same thread shouldn't inherit old context entries from unrelated previous plans.
+
+- [ ] In the planner node (or a new `initialise_planning` entry node), reset `planning_context` to `[]` at the start of each planning invocation
+- [ ] OR: change `planning_context` from append reducer to plain list (overwritten each run)
+- [ ] Evaluate: is there a case where carrying forward old context is desired? (e.g., "plan something similar to before") — if yes, keep append but scope to the current `task`
+- [ ] Decision: likely reset is correct — the planner gets conversation history via `messages`, it doesn't need raw planning_context from prior unrelated plans
+
+### Phase 5: Remove client-side workarounds
+
+Once state scoping is correct, the band-aids can go.
+
+- [ ] Remove the `seen_content` pre-seed from `_stream_chat_with_input` in `chat.py` (no stale messages in stream)
+- [ ] Remove `plan_approved`, `work_brief_pointer`, `routing_skeleton` resets from `parse_command_node` (these are overwritten by the planning subgraph each run anyway; the issue was wave_results leaking)
+- [ ] Evaluate: keep the parse resets as defense-in-depth? Costs nothing, prevents future bugs if someone adds a new conditional edge that reads old state. Decision: keep them, they're cheap.
+- [ ] Remove the `_subgraph_parents` dedup logic in `stream_run` only if parent echoes no longer carry stale messages — test this empirically
+
+### Phase 6: Verify end-to-end
+
 - [ ] `uv run ruff check .`
-- [ ] `uv run ruff format .`
+- [ ] `uv run ruff format .`  
 - [ ] `uv run mypy src/`
-- [ ] `uv run pytest tests/orchestration/ -q 2>&1 | tail -60`
-- [ ] `uv run pytest -q --ignore=tests/e2e --ignore=tests/compat --ignore=tests/chat 2>&1 | tail -60`
+- [ ] `uv run pytest tests/chat/ tests/orchestration/ -q --ignore=tests/e2e --ignore=tests/compat 2>&1 | tail -60`
+- [ ] Manual test: run two different plans on same chat thread, verify no duplicate "Execution finished"
+- [ ] Manual test: verify wave_results don't carry old entries into new execution
+- [ ] Manual test: verify conversation history displays correctly in TUI after multiple runs
 
-## Import strategy
+## Architecture after changes
 
-Prebuilt→core: **absolute** (`from monet.orchestration._invoke import ...`). Core is stable, absolute is explicit.
+```
+ChatState (parent):
+  messages: Annotated[list, add_messages]   # thread-scoped, deduped
+  route: str | None                         # run-scoped (overwritten by parse)
+  command_meta: dict                        # run-scoped
+  task: str                                 # run-scoped
+  + PlanningState fields (plan_approved, routing_skeleton, etc.)
 
-Prebuilt→prebuilt: **relative** (`from .planning_graph import ...`). Siblings in same subpackage.
+PlanningState (subgraph):
+  messages: Annotated[list, add_messages]   # flows to parent
+  task, work_brief_pointer, routing_skeleton, plan_approved, ...
+  planning_context: list[dict]              # run-scoped (reset at entry)
 
-Exception: `chat_graph.py` must use absolute imports (Aegra re-executes under synthetic namespace).
+ExecutionState (subgraph):
+  messages: Annotated[list, add_messages]   # execution_summary writes here → flows to parent
+  wave_results: Annotated[list, _append_reducer]   # stays here, never leaves
+  wave_reflections: Annotated[list, _append_reducer]  # stays here
+  completed_node_ids: list[str]             # stays here
+  routing_skeleton, work_brief_pointer, ...
+```
+
+State flow:
+- ChatState.messages ←(name-match)→ PlanningState.messages ←(name-match)→ ExecutionState.messages
+- wave_results only exists in ExecutionState — scoped to one execution run
+- execution_summary_node runs inside execution subgraph, writes to messages
+- Parent chat graph receives the summary as a message, never sees raw wave_results
 
 ## Risk items
 
-1. **Aegra path resolution** — `server_bootstrap.py` is what Aegra sees, not `chat_graph.py` directly. Only `server_bootstrap.py` import paths change. Low risk.
-
-2. **`_DEFAULT_CHAT_GRAPH` in config** — default string literal changes. Users who hardcoded `monet.orchestration.chat_graph:build_chat_graph` in `monet.toml` would break — but this was never documented as stable API. The `[chat] graph` config key is the contract.
-
-3. **WaveResult deletion** — any user code referencing `WaveResult` by name breaks. Acceptable: it was a TypedDict in a private module, and `AgentInvocationResult` is a direct superset (adds `id`, otherwise same fields minus `node_id`).
-
-4. **Test imports** — grep in Phase 4 catches these.
-
-## Target directory structure
-
-```
-orchestration/
-├── __init__.py              # re-exports core + prebuilt public API
-├── _state.py                # core: _append_reducer, AgentInvocationResult
-├── _invoke.py               # core
-├── _forms.py                # core
-├── _signal_router.py        # core
-├── _retry_budget.py         # core
-├── _result_parser.py        # core
-├── prebuilt/
-│   ├── __init__.py          # re-exports build_* functions + prebuilt state
-│   ├── _state.py            # RoutingNode, RoutingSkeleton, WorkBrief, RunState, etc.
-│   ├── _planner_outcome.py
-│   ├── default_graph.py
-│   ├── planning_graph.py
-│   ├── execution_graph.py
-│   ├── chat_graph.py
-│   └── chat/
-│       ├── __init__.py
-│       ├── _state.py
-│       ├── _build.py
-│       ├── _parse.py
-│       ├── _triage.py
-│       ├── _respond.py
-│       ├── _specialist.py
-│       ├── _format.py
-│       └── _lc.py
-
-hooks/
-├── __init__.py              # side-effect import chain
-├── prebuilt/
-│   ├── __init__.py
-│   └── plan_context.py
-```
+1. `add_messages` expects LangChain BaseMessage objects with `id` fields — if monet uses plain dicts, need either a custom reducer or conversion layer
+2. Moving execution_summary_node changes the stream event namespace — client may need update to where it expects the summary event
+3. `default_graph.py` (pipeline, non-chat) also has wave_results in RunState — same fix applies there
+4. Tests that assert on wave_results in ChatState output will break — update to check messages instead

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from monet.core.hooks import GraphHookRegistry
 
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
 )
@@ -42,6 +43,7 @@ from opentelemetry import trace
 from monet.core.tracing import attached_trace, extract_carrier_from_config
 from monet.orchestration._invoke import invoke_agent
 from monet.orchestration._retry_budget import check_budget, increment_budget
+from monet.orchestration._state import _RESET
 
 from ._forms import build_plan_approval_form, parse_approval_decision
 from ._planner_outcome import (
@@ -201,13 +203,6 @@ def _make_planner_node(
     return planner_node
 
 
-# Legacy module-level binding: equivalent to ``max_followup_attempts=0``.
-# Preserved so existing imports (``default_graph``, tests) keep working.
-async def planner_node(state: PlanningState, config: RunnableConfig) -> dict[str, Any]:
-    """Call planner/plan, store pointer + skeleton. Never read artifact content."""
-    return await _invoke_planner(state, config, force_plan=False)
-
-
 async def questionnaire_node(state: PlanningState) -> dict[str, Any]:
     """Render pending planner questions as a form, interrupt, collect answers.
 
@@ -248,8 +243,8 @@ async def questionnaire_node(state: PlanningState) -> dict[str, Any]:
         "followup_attempts": attempts + 1,
         "followup_answers": answers,
         "messages": [
-            {"role": "assistant", "content": assistant_content},
-            {"role": "user", "content": msg_content},
+            AIMessage(content=assistant_content),
+            HumanMessage(content=msg_content),
         ],
     }
 
@@ -313,8 +308,8 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
         return {
             "plan_approved": True,
             "messages": [
-                {"role": "assistant", "content": assistant_content},
-                {"role": "user", "content": "action=approve"},
+                AIMessage(content=assistant_content),
+                HumanMessage(content="action=approve"),
             ],
         }
     if (
@@ -326,11 +321,8 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
             "plan_approved": False,
             "human_feedback": decision.feedback,
             "messages": [
-                {"role": "assistant", "content": assistant_content},
-                {
-                    "role": "user",
-                    "content": f"action=revise, feedback={decision.feedback}",
-                },
+                AIMessage(content=assistant_content),
+                HumanMessage(content=f"action=revise, feedback={decision.feedback}"),
             ],
             **increment_budget(state),
         }
@@ -338,8 +330,8 @@ async def human_approval_node(state: PlanningState) -> dict[str, Any]:
     return {
         "plan_approved": False,
         "messages": [
-            {"role": "assistant", "content": assistant_content},
-            {"role": "user", "content": msg},
+            AIMessage(content=assistant_content),
+            HumanMessage(content=msg),
         ],
     }
 
@@ -419,7 +411,12 @@ def build_planning_subgraph(
 
     planner: Any = _planner_with_hooks if hooks else planner_inner
 
+    async def initialise_planning(state: PlanningState) -> dict[str, Any]:
+        """Reset run-scoped fields so previous runs don't leak context."""
+        return {"planning_context": _RESET}
+
     graph = StateGraph(PlanningState)
+    graph.add_node("initialise_planning", initialise_planning)
     graph.add_node("planner", planner)
     graph.add_node("human_approval", human_approval_node)
     graph.add_node("planning_failed", planning_failed_node)
@@ -431,7 +428,8 @@ def build_planning_subgraph(
         graph.add_node("questionnaire", questionnaire_node)
         graph.add_edge("questionnaire", "planner")
         branches["questionnaire"] = "questionnaire"
-    graph.set_entry_point("planner")
+    graph.set_entry_point("initialise_planning")
+    graph.add_edge("initialise_planning", "planner")
     graph.add_conditional_edges("planner", route_planner, branches)
     graph.add_conditional_edges(
         "human_approval", route_from_approval, {"planner": "planner", END: END}

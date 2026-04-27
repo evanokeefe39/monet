@@ -12,12 +12,22 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+_RESET: list[dict[str, Any]] = []
+
 
 def _append_reducer(
     existing: list[dict[str, Any]] | None,
     new: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Reducer that appends new entries to existing list."""
+    """Reducer that appends new entries to existing list.
+
+    Passing the ``_RESET`` sentinel (empty list singleton from this module)
+    clears the accumulated state. Normal empty lists created elsewhere
+    are identity-compared so ``[]`` from other call sites still appends
+    nothing (preserving existing behaviour).
+    """
+    if new is _RESET:
+        return []
     return (existing or []) + new
 
 

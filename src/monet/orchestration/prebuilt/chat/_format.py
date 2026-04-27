@@ -4,18 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import AIMessage
+
 from monet._ports import artifact_view_url as _artifact_url
 
 from .._planner_outcome import format_signal_reasons
-from ._state import (
-    ChatState,  # noqa: TC001 — runtime import for LangGraph get_type_hints()
-)
 
 
-def _format_agent_result(result: Any, *, label: str) -> dict[str, str]:
+def _format_agent_result(result: Any, *, label: str) -> AIMessage:
     """Render an :class:`AgentResult` as an assistant chat message."""
     if result is None:
-        return {"role": "assistant", "content": f"[{label}] no result."}
+        return AIMessage(content=f"[{label}] no result.")
     success = getattr(result, "success", True)
     output = getattr(result, "output", None)
     artifacts = getattr(result, "artifacts", ()) or ()
@@ -25,20 +24,14 @@ def _format_agent_result(result: Any, *, label: str) -> dict[str, str]:
         content = f"[{label}] failed"
         if reason:
             content += f": {reason}"
-        return {
-            "role": "assistant",
-            "content": _append_artifact_links(content, artifacts),
-        }
+        return AIMessage(content=_append_artifact_links(content, artifacts))
     if output is None:
         body = f"[{label}] complete."
     elif isinstance(output, dict):
         body = _summarise_dict_output(label, output)
     else:
         body = f"[{label}] {output}"
-    return {
-        "role": "assistant",
-        "content": _append_artifact_links(body, artifacts),
-    }
+    return AIMessage(content=_append_artifact_links(body, artifacts))
 
 
 def _append_artifact_links(content: str, artifacts: Any) -> str:
@@ -51,7 +44,7 @@ def _append_artifact_links(content: str, artifacts: Any) -> str:
         if not artifact_id:
             continue
         key = str(artifact.get("key") or "").strip() or artifact_id[:8]
-        links.append(f"- [{key}]({_artifact_url(artifact_id)})")
+        links.append(f"\u2192 artifact ({key}): {_artifact_url(artifact_id)}")
     if not links:
         return content
     return content + "\n\n" + "\n".join(links)
@@ -95,72 +88,3 @@ def _summarise_dict_output(label: str, output: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         rendered = str(output)
     return f"[{label}]\n{rendered}"
-
-
-async def execution_summary_node(state: ChatState) -> dict[str, Any]:
-    """Render the execution subgraph's ``wave_results`` as one chat message.
-
-    Without this the user sees only ``[progress]`` lines while
-    execution runs and silence at the end. The summary lists each
-    completed node's agent + status so the chat transcript records
-    what just happened.
-    """
-    waves = state.get("wave_results") or []
-    current_run_id = state.get("run_id") or ""
-    if current_run_id:
-        waves = [
-            w
-            for w in waves
-            if isinstance(w, dict) and w.get("run_id") == current_run_id
-        ]
-    current_node_ids: set[str] | None = None
-    skeleton_raw = state.get("routing_skeleton")
-    if isinstance(skeleton_raw, dict):
-        nodes = skeleton_raw.get("nodes")
-        if isinstance(nodes, list):
-            current_node_ids = {
-                n["id"] for n in nodes if isinstance(n, dict) and "id" in n
-            }
-    if current_node_ids is not None:
-        waves = [
-            w for w in waves if isinstance(w, dict) and w.get("id") in current_node_ids
-        ]
-    if not waves:
-        return {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": "**Execution finished** — no results recorded.",
-                }
-            ]
-        }
-    lines = ["**Execution finished:**"]
-    for entry in waves:
-        if not isinstance(entry, dict):
-            continue
-        node_id = str(entry.get("id") or "?")
-        agent_id = str(entry.get("agent_id") or "?")
-        success = bool(entry.get("success", True))
-        artifacts = entry.get("artifacts") or []
-        artifact_link = ""
-        if isinstance(artifacts, list | tuple):
-            for a in artifacts:
-                if isinstance(a, dict) and a.get("artifact_id"):
-                    aid = str(a["artifact_id"])
-                    key = str(a.get("key") or "").strip() or aid[:8]
-                    artifact_link = f" — [{key}]({_artifact_url(aid)})"
-                    break
-        if success:
-            lines.append(f"- ok `{node_id}` ({agent_id}){artifact_link}")
-        else:
-            reason = ""
-            signals = entry.get("signals") or []
-            if signals:
-                reason = "; ".join(format_signal_reasons(signals))
-            if not reason:
-                output = entry.get("output")
-                if isinstance(output, str) and output.strip():
-                    reason = output.strip()[:200]
-            suffix = f": {reason}" if reason else ""
-            lines.append(f"- **fail** `{node_id}` ({agent_id}){suffix}")
-    return {"messages": [{"role": "assistant", "content": "\n".join(lines)}]}

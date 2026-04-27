@@ -205,10 +205,18 @@ async def drain_stream(
         log.exception("get_chat_history failed")
         return True
     for msg in reversed(history):
-        if isinstance(msg, dict) and msg.get("role") == "assistant":
+        content: str = ""
+        is_assistant = False
+        if isinstance(msg, dict):
+            is_assistant = msg.get("role") == "assistant" or msg.get("type") == "ai"
             content = str(msg.get("content") or "").strip()
-            if content:
-                writer(f"[assistant] {content}")
+        elif hasattr(msg, "content"):
+            from langchain_core.messages import AIMessage
+
+            is_assistant = isinstance(msg, AIMessage)
+            content = str(msg.content or "").strip()
+        if is_assistant and content:
+            writer(f"[assistant] {content}")
             return True
     return False
 

@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 
 pytest.importorskip("langgraph")
 
@@ -20,14 +21,17 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from monet.orchestration.prebuilt.planning_graph import (
     MAX_REVISIONS,
+    _make_planner_node,
     build_planning_subgraph,
     human_approval_node,
-    planner_node,
     questionnaire_node,
     route_from_approval,
     route_from_planner,
 )
 from monet.signals import SignalType
+
+# Pipeline-mode planner (max_followup_attempts=0, force_plan=False on first call)
+_planner_node = _make_planner_node(0)
 
 
 def _result(
@@ -76,7 +80,7 @@ async def test_planner_node_writes_pointer_and_skeleton_on_plan() -> None:
         "monet.orchestration.prebuilt.planning_graph.invoke_agent",
         return_value=_plan_result(goal="p"),
     ):
-        out = await planner_node({"task": "plan a thing"}, {})  # type: ignore[arg-type]
+        out = await _planner_node({"task": "plan a thing"}, {})  # type: ignore[arg-type]
     assert out["work_brief_pointer"]["artifact_id"] == "brief-1"
     assert out["routing_skeleton"]["goal"] == "p"
     assert out["planner_error"] is None
@@ -98,10 +102,10 @@ async def test_planner_node_failure_writes_error_pipeline_mode() -> None:
             ],
         ),
     ):
-        out = await planner_node({"task": "x"}, {})  # type: ignore[arg-type]
-    # Legacy module-level planner_node wraps _invoke_planner with
-    # force_plan=False — questions path still populates pending_questions
-    # but the default router treats missing pointer as planning_failed.
+        out = await _planner_node({"task": "x"}, {})  # type: ignore[arg-type]
+    # Pipeline-mode planner (max_followup_attempts=0) has force_plan=False
+    # — questions path still populates pending_questions but the default
+    # router treats missing pointer as planning_failed.
     assert out["pending_questions"] == ["scope?"]
     assert out["work_brief_pointer"] is None
 
@@ -114,7 +118,7 @@ async def test_planner_node_invoke_failure_surfaces_reason() -> None:
             signals=[{"type": "FAILURE", "reason": "boom", "metadata": None}],
         ),
     ):
-        out = await planner_node({"task": "x"}, {})  # type: ignore[arg-type]
+        out = await _planner_node({"task": "x"}, {})  # type: ignore[arg-type]
     assert out["planner_error"] and "boom" in out["planner_error"]
     assert out["work_brief_pointer"] is None
 
@@ -149,10 +153,11 @@ async def test_approval_approve_writes_plan_approved() -> None:
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
     assert out["plan_approved"] is True
-    assert out["messages"] == [
-        {"role": "assistant", "content": "[planner] Plan ready — g (0 steps)"},
-        {"role": "user", "content": "action=approve"},
-    ]
+    assert len(out["messages"]) == 2
+    assert isinstance(out["messages"][0], AIMessage)
+    assert out["messages"][0].content == "[planner] Plan ready — g (0 steps)"
+    assert isinstance(out["messages"][1], HumanMessage)
+    assert out["messages"][1].content == "action=approve"
 
 
 async def test_approval_form_prompt_renders_plan_summary() -> None:
@@ -206,10 +211,11 @@ async def test_approval_reject_writes_plan_approved_false() -> None:
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
     assert out["plan_approved"] is False
-    assert out["messages"] == [
-        {"role": "assistant", "content": "[planner] Plan ready for approval."},
-        {"role": "user", "content": "action=reject"},
-    ]
+    assert len(out["messages"]) == 2
+    assert isinstance(out["messages"][0], AIMessage)
+    assert out["messages"][0].content == "[planner] Plan ready for approval."
+    assert isinstance(out["messages"][1], HumanMessage)
+    assert out["messages"][1].content == "action=reject"
 
 
 async def test_approval_revise_with_feedback_under_budget() -> None:
@@ -238,10 +244,11 @@ async def test_approval_revise_at_max_budget_falls_through_to_false() -> None:
     ):
         out = await human_approval_node(state)  # type: ignore[arg-type]
     assert out["plan_approved"] is False
-    assert out["messages"] == [
-        {"role": "assistant", "content": "[planner] Plan ready for approval."},
-        {"role": "user", "content": "action=revise"},
-    ]
+    assert len(out["messages"]) == 2
+    assert isinstance(out["messages"][0], AIMessage)
+    assert out["messages"][0].content == "[planner] Plan ready for approval."
+    assert isinstance(out["messages"][1], HumanMessage)
+    assert out["messages"][1].content == "action=revise"
 
 
 def test_route_from_approval_revise_loops_back_under_budget() -> None:
