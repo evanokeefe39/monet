@@ -16,15 +16,15 @@ import pytest
 
 pytest.importorskip("langgraph")
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from monet.orchestration.prebuilt.chat import (
     ChatState,
     ChatTriageResult,
+    TriageError,
     build_chat_graph,
 )
-from monet.orchestration.prebuilt.chat._format import execution_summary_node
 from monet.orchestration.prebuilt.chat._parse import _parse_slash, parse_command_node
 from monet.orchestration.prebuilt.chat._respond import respond_node
 from monet.orchestration.prebuilt.chat._specialist import (
@@ -32,6 +32,7 @@ from monet.orchestration.prebuilt.chat._specialist import (
     specialist_node,
 )
 from monet.orchestration.prebuilt.chat._triage import triage_node
+from monet.orchestration.prebuilt.execution_graph import execution_summary_node
 from monet.signals import SignalType
 
 # --- parse_command_node ---------------------------------------------------
@@ -66,9 +67,9 @@ def test_parse_slash_unknown_routes_chat_with_unknown_command() -> None:
 async def test_parse_command_node_reads_last_user_message() -> None:
     state: ChatState = {
         "messages": [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "hi"},
-            {"role": "user", "content": "/plan something"},
+            HumanMessage(content="first"),
+            AIMessage(content="hi"),
+            HumanMessage(content="/plan something"),
         ],
     }
     out = await parse_command_node(state)
@@ -79,10 +80,24 @@ async def test_parse_command_node_reads_last_user_message() -> None:
 
 
 async def test_parse_command_node_free_form_copies_task_without_route() -> None:
-    state: ChatState = {"messages": [{"role": "user", "content": "tell me a joke"}]}
+    state: ChatState = {"messages": [HumanMessage(content="tell me a joke")]}
     out = await parse_command_node(state)
     assert out["route"] is None
     assert out["task"] == "tell me a joke"
+
+
+async def test_parse_command_node_resets_stale_planning_state() -> None:
+    """Stale plan_approved / routing_skeleton from a prior run must not leak."""
+    state: ChatState = {
+        "messages": [HumanMessage(content="new topic")],
+        "plan_approved": True,
+        "work_brief_pointer": {"key": "old"},
+        "routing_skeleton": {"goal": "old", "nodes": []},
+    }
+    out = await parse_command_node(state)
+    assert out["plan_approved"] is None
+    assert out["work_brief_pointer"] is None
+    assert out["routing_skeleton"] is None
 
 
 # --- _build_context (no truncation) --------------------------------------
@@ -91,9 +106,9 @@ async def test_parse_command_node_free_form_copies_task_without_route() -> None:
 def test_build_context_excludes_last_message_and_does_not_truncate() -> None:
     big = "x" * 5000
     messages = [
-        {"role": "user", "content": big},
-        {"role": "assistant", "content": "short"},
-        {"role": "user", "content": "task"},
+        HumanMessage(content=big),
+        AIMessage(content="short"),
+        HumanMessage(content="task"),
     ]
     ctx = _build_context(messages)
     assert len(ctx) == 2
@@ -106,6 +121,7 @@ def test_build_context_excludes_last_message_and_does_not_truncate() -> None:
 
 
 def _fake_triage_model(result: ChatTriageResult) -> MagicMock:
+    """Build a mock that chains through .with_structured_output(method="json_mode")."""
     structured = MagicMock()
     structured.ainvoke = AsyncMock(return_value=result)
     model = MagicMock()
@@ -116,7 +132,7 @@ def _fake_triage_model(result: ChatTriageResult) -> MagicMock:
 async def test_triage_node_routes_chat() -> None:
     fake = _fake_triage_model(ChatTriageResult(route="chat", confidence=0.9))
     with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake):
-        out = await triage_node({"messages": [{"role": "user", "content": "hi"}]})
+        out = await triage_node({"messages": [HumanMessage(content="hi")]})
     assert out["route"] == "chat"
 
 
@@ -124,9 +140,7 @@ async def test_triage_node_routes_plan_to_planning_edge() -> None:
     """Triage returns route='plan'; the graph edge name is 'planning'."""
     fake = _fake_triage_model(ChatTriageResult(route="plan", confidence=0.9))
     with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake):
-        out = await triage_node(
-            {"messages": [{"role": "user", "content": "plan a feature"}]}
-        )
+        out = await triage_node({"messages": [HumanMessage(content="plan a feature")]})
     assert out["route"] == "planning"
     assert out["command_meta"]["task"] == "plan a feature"
     assert out["task"] == "plan a feature"
@@ -142,21 +156,33 @@ async def test_triage_node_clarification_routes_chat() -> None:
         )
     )
     with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=fake):
-        out = await triage_node(
-            {"messages": [{"role": "user", "content": "do the thing"}]}
-        )
+        out = await triage_node({"messages": [HumanMessage(content="do the thing")]})
     assert out["route"] == "chat"
     assert "clarification_prompt" in out["command_meta"]
 
 
-async def test_triage_node_llm_exception_falls_back_to_chat() -> None:
+async def test_triage_node_llm_exception_raises_triage_error() -> None:
     structured = MagicMock()
     structured.ainvoke = AsyncMock(side_effect=RuntimeError("provider down"))
     model = MagicMock()
     model.with_structured_output = MagicMock(return_value=structured)
-    with patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=model):
-        out = await triage_node({"messages": [{"role": "user", "content": "hi"}]})
-    assert out["route"] == "chat"
+    with (
+        patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=model),
+        pytest.raises(TriageError, match="provider down"),
+    ):
+        await triage_node({"messages": [HumanMessage(content="hi")]})
+
+
+async def test_triage_node_unexpected_type_raises_triage_error() -> None:
+    structured = MagicMock()
+    structured.ainvoke = AsyncMock(return_value="not a ChatTriageResult")
+    model = MagicMock()
+    model.with_structured_output = MagicMock(return_value=structured)
+    with (
+        patch("monet.orchestration.prebuilt.chat._lc._load_model", return_value=model),
+        pytest.raises(TriageError, match="unexpected type"),
+    ):
+        await triage_node({"messages": [HumanMessage(content="hi")]})
 
 
 # --- respond_node --------------------------------------------------------
@@ -173,9 +199,9 @@ async def test_respond_node_calls_llm_directly_no_invoke_agent() -> None:
             "monet.orchestration.prebuilt.chat._specialist.invoke_agent"
         ) as invoke_mock,
     ):
-        out = await respond_node({"messages": [{"role": "user", "content": "hi"}]})
+        out = await respond_node({"messages": [HumanMessage(content="hi")]})
     assert invoke_mock.call_count == 0
-    assert out["messages"][0]["content"] == "hello back"
+    assert out["messages"][0].content == "hello back"
 
 
 async def test_respond_node_unknown_command_renders_inline_error_without_llm() -> None:
@@ -186,15 +212,17 @@ async def test_respond_node_unknown_command_renders_inline_error_without_llm() -
     ):
         out = await respond_node(
             {
-                "messages": [{"role": "user", "content": "/what"}],
+                "messages": [HumanMessage(content="/what")],
                 "command_meta": {"unknown_command": "/what"},
             }
         )
-    assert "Unknown command" in out["messages"][0]["content"]
+    assert "Unknown command" in out["messages"][0].content
     assert fake_model.ainvoke.call_count == 0
 
 
 async def test_respond_node_clarification_prepends_system_message() -> None:
+    from langchain_core.messages import SystemMessage
+
     captured: dict[str, Any] = {}
 
     async def capture(payload: Any, /) -> AIMessage:
@@ -208,12 +236,12 @@ async def test_respond_node_clarification_prepends_system_message() -> None:
     ):
         await respond_node(
             {
-                "messages": [{"role": "user", "content": "do thing"}],
+                "messages": [HumanMessage(content="do thing")],
                 "command_meta": {"clarification_prompt": "Ask for scope."},
             }
         )
-    assert captured["payload"][0]["role"] == "system"
-    assert captured["payload"][0]["content"] == "Ask for scope."
+    assert isinstance(captured["payload"][0], SystemMessage)
+    assert captured["payload"][0].content == "Ask for scope."
 
 
 # --- helpers for planner+execution mocks --------------------------------
@@ -277,7 +305,7 @@ async def test_specialist_node_invokes_named_agent_and_mode() -> None:
     ):
         await specialist_node(
             {
-                "messages": [{"role": "user", "content": "/researcher:deep x"}],
+                "messages": [HumanMessage(content="/researcher:deep x")],
                 "command_meta": {
                     "specialist": "researcher",
                     "mode": "deep",
@@ -304,12 +332,12 @@ async def test_specialist_node_surfaces_artifact_links() -> None:
     ):
         out = await specialist_node(
             {
-                "messages": [{"role": "user", "content": "/researcher:deep x"}],
+                "messages": [HumanMessage(content="/researcher:deep x")],
                 "command_meta": meta,
             },
             {"configurable": {}},
         )
-    content = out["messages"][0]["content"]
+    content = out["messages"][0].content
     assert "deep research content" in content
     assert "→ artifact (report):" in content
     assert "abc123" in content
@@ -325,12 +353,12 @@ async def test_specialist_node_missing_capability_inline_message() -> None:
     ):
         out = await specialist_node(
             {
-                "messages": [{"role": "user", "content": "/unknown:fast x"}],
+                "messages": [HumanMessage(content="/unknown:fast x")],
                 "command_meta": {"specialist": "unknown", "mode": "fast", "task": "x"},
             },
             {"configurable": {}},
         )
-    assert "unavailable" in out["messages"][0]["content"].lower()
+    assert "unavailable" in out["messages"][0].content.lower()
 
 
 # --- execution_summary_node ---------------------------------------------
@@ -354,7 +382,7 @@ async def test_execution_summary_node_renders_wave_results() -> None:
         ]
     }
     out = await execution_summary_node(state)  # type: ignore[arg-type]
-    msg = out["messages"][0]["content"]
+    msg = out["messages"][0].content
     assert "Execution finished" in msg
     assert "ok research_topic (researcher) → " in msg
     assert "abc-123" in msg
@@ -363,7 +391,7 @@ async def test_execution_summary_node_renders_wave_results() -> None:
 
 async def test_execution_summary_node_no_results_one_line() -> None:
     out = await execution_summary_node({})  # type: ignore[arg-type]
-    assert "no results" in out["messages"][0]["content"].lower()
+    assert "no results" in out["messages"][0].content.lower()
 
 
 # --- compiled-graph routing integration ----------------------------------
@@ -377,7 +405,7 @@ async def test_compiled_graph_free_form_triage_routes_to_respond() -> None:
     fake_respond.ainvoke = AsyncMock(return_value=AIMessage(content="hi"))
 
     def pick(model_str: str) -> Any:
-        if "lite" in model_str:
+        if "8b-instant" in model_str:
             return triage_llm
         return fake_respond
 
@@ -387,7 +415,7 @@ async def test_compiled_graph_free_form_triage_routes_to_respond() -> None:
             {"messages": [{"role": "user", "content": "hello"}]},
             config={"configurable": {"thread_id": "chat-1"}},
         )
-    contents = [m["content"] for m in out["messages"]]
+    contents = [m.content for m in out["messages"]]
     assert "hi" in contents
 
 
@@ -428,7 +456,7 @@ async def test_compiled_graph_slash_plan_approve_flow() -> None:
         )
     assert triage_llm.with_structured_output.call_count == 0
     # Execution summary message shows the mounted execution subgraph ran.
-    assert any("Execution finished" in m["content"] for m in out["messages"])
+    assert any("Execution finished" in m.content for m in out["messages"])
 
 
 async def test_compiled_graph_questionnaire_then_plan_flow() -> None:
@@ -487,7 +515,7 @@ async def test_compiled_graph_questionnaire_then_plan_flow() -> None:
             config={"configurable": {"thread_id": "chat-q1"}},
         )
     assert invocations["count"] == 2  # first asked, second planned
-    assert any("Execution finished" in m["content"] for m in out["messages"])
+    assert any("Execution finished" in m.content for m in out["messages"])
 
 
 async def test_compiled_graph_unknown_slash_inline_error() -> None:
@@ -503,4 +531,4 @@ async def test_compiled_graph_unknown_slash_inline_error() -> None:
             config={"configurable": {"thread_id": "chat-3"}},
         )
     assert fake_llm.ainvoke.call_count == 0
-    assert any("Unknown command" in m["content"] for m in out["messages"])
+    assert any("Unknown command" in m.content for m in out["messages"])

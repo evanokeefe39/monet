@@ -142,11 +142,26 @@ async def stream_run(
         kwargs["metadata"] = metadata
 
     url = str(getattr(client, "http_url", "") or "")
+    # Track parent node names that already emitted via subgraph events.
+    # When Aegra streams with subgraphs=True, each update fires twice:
+    # once on the subgraph channel (updates|<ns>) and once on the
+    # parent channel (updates).  We keep the subgraph copy (which
+    # carries only current-node output) and strip the parent echo
+    # (which may carry accumulated state from prior runs).  ADR-006 F1.
+    _subgraph_parents: set[str] = set()
     try:
         async for chunk in client.runs.stream(thread_id, graph_id, **kwargs):
             event = getattr(chunk, "event", None) or ""
             data = getattr(chunk, "data", None)
             if event.startswith("updates"):
+                if "|" in event:
+                    ns = event.split("|", 1)[1]
+                    parent = ns.split(":", 1)[0] if ":" in ns else ns
+                    _subgraph_parents.add(parent)
+                elif isinstance(data, dict) and _subgraph_parents:
+                    data = {k: v for k, v in data.items() if k not in _subgraph_parents}
+                    if not data:
+                        continue
                 yield ("updates", data)
             elif event.startswith("custom"):
                 yield ("custom", data)

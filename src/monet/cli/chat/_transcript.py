@@ -126,10 +126,20 @@ class Transcript(Widget):
         self._lines = []
         self.query_one("#_log", RichLog).clear()
 
-    def load_history(self, messages: list[dict[str, Any]]) -> None:
+    def load_history(self, messages: list[Any]) -> None:
+        _type_to_role = {"ai": "assistant", "human": "user", "system": "system"}
         for msg in messages:
-            role = str(msg.get("role") or "user")
-            content = str(msg.get("content") or "")
+            if isinstance(msg, dict):
+                role = str(
+                    msg.get("role")
+                    or _type_to_role.get(str(msg.get("type") or ""), "user")
+                )
+                content = str(msg.get("content") or "")
+            elif hasattr(msg, "content"):
+                role = _type_to_role.get(getattr(msg, "type", ""), "user")
+                content = str(msg.content or "")
+            else:
+                continue
             line = f"[{role}] {content}"
             self._lines.append(line)
             if self._rich_log is not None:

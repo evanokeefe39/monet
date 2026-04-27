@@ -114,12 +114,7 @@ async def _cmd_switch(ctx: CommandContext, target: str) -> None:
     ctx.app.update_status(thread_name="")
     ctx.transcript.clear()
     ctx.transcript.append(f"[info] switched to {target}")
-    for msg in history:
-        role = str(msg.get("role") or "user")
-        content = str(msg.get("content") or "")
-        ctx.transcript.append(f"[{role}] {content}", markdown=(role == "assistant"))
-    if not history:
-        pass
+    ctx.transcript.load_history(history)
 
 
 async def _cmd_rename(ctx: CommandContext, name: str) -> None:

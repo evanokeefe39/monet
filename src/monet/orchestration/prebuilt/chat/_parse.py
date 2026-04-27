@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from ._state import (
     ChatState,  # noqa: TC001 — runtime import for LangGraph get_type_hints()
 )
 
 
-def _last_user_message(messages: list[dict[str, Any]]) -> str:
+def _last_user_message(messages: Sequence[BaseMessage | dict[str, Any]]) -> str:
     """Return the content of the last user message, or empty string."""
     for msg in reversed(messages):
-        if msg.get("role") == "user":
+        if isinstance(msg, HumanMessage):
+            return str(msg.content or "")
+        if isinstance(msg, dict) and msg.get("role") == "user":
             return str(msg.get("content") or "")
     return ""
 
@@ -60,12 +67,22 @@ async def parse_command_node(state: ChatState) -> dict[str, Any]:
     """Pure-string slash parser. No LLM call.
 
     Writes ``task`` into state so the planning subgraph picks it up.
+    Resets planning/execution state from prior runs so stale approvals
+    and skeletons never leak into a new turn.
     """
     last = _last_user_message(state.get("messages") or [])
     patch = _parse_slash(last)
     meta = patch.get("command_meta") or {}
     task = meta.get("task") or last
     patch["task"] = task  # type: ignore[typeddict-unknown-key]
+    patch["plan_approved"] = None  # type: ignore[typeddict-unknown-key]
+    patch["work_brief_pointer"] = None  # type: ignore[typeddict-unknown-key]
+    patch["routing_skeleton"] = None  # type: ignore[typeddict-unknown-key]
+    patch["revision_count"] = 0  # type: ignore[typeddict-unknown-key]
+    patch["followup_attempts"] = 0  # type: ignore[typeddict-unknown-key]
+    patch["pending_questions"] = None  # type: ignore[typeddict-unknown-key]
+    patch["followup_answers"] = None  # type: ignore[typeddict-unknown-key]
+    patch["planner_error"] = None  # type: ignore[typeddict-unknown-key]
     return patch
 
 

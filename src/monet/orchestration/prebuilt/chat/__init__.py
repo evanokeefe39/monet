@@ -8,11 +8,12 @@ result class. Per-node modules are private (``_parse``, ``_triage``,
 
 from ._build import MAX_FOLLOWUP_ATTEMPTS, build_chat_graph
 from ._state import ChatState
-from ._triage import ChatTriageResult
+from ._triage import ChatTriageResult, TriageError
 
 __all__ = [
     "MAX_FOLLOWUP_ATTEMPTS",
     "ChatState",
     "ChatTriageResult",
+    "TriageError",
     "build_chat_graph",
 ]

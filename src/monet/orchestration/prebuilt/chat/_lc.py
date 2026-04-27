@@ -18,13 +18,3 @@ def _load_model(model_string: str) -> Any:
         provider, model = model_string.split(":", 1)
         return init_chat_model(model, model_provider=provider)
     return init_chat_model(model_string)
-
-
-def _to_langchain(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Shape monet-style ``{role, content}`` dicts for a LangChain model."""
-    out: list[dict[str, Any]] = []
-    for msg in messages:
-        role = msg.get("role") or "user"
-        content = msg.get("content") or ""
-        out.append({"role": role, "content": content})
-    return out

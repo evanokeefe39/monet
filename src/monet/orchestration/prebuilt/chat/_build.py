@@ -6,7 +6,6 @@ from langgraph.graph import END, START, StateGraph
 
 from ..execution_graph import build_execution_subgraph
 from ..planning_graph import build_planning_subgraph
-from ._format import execution_summary_node
 from ._parse import _route_after_parse, parse_command_node
 from ._respond import respond_node
 from ._specialist import specialist_node
@@ -39,7 +38,7 @@ def build_chat_graph() -> StateGraph[ChatState]:
         START -> parse -> (triage | respond | planning | specialist)
         triage -> (respond | planning)
         planning -> (execution | END)
-        execution -> execution_summary -> END
+        execution -> END  (summary written inside execution subgraph)
         respond -> END
         specialist -> END
 
@@ -59,7 +58,6 @@ def build_chat_graph() -> StateGraph[ChatState]:
         build_planning_subgraph(max_followup_attempts=MAX_FOLLOWUP_ATTEMPTS).compile(),
     )
     graph.add_node("execution", build_execution_subgraph().compile())
-    graph.add_node("execution_summary", execution_summary_node)
 
     graph.add_edge(START, "parse")
     graph.add_conditional_edges(
@@ -88,8 +86,7 @@ def build_chat_graph() -> StateGraph[ChatState]:
             "__end__": END,
         },
     )
-    graph.add_edge("execution", "execution_summary")
-    graph.add_edge("execution_summary", END)
+    graph.add_edge("execution", END)
     graph.add_edge("respond", END)
     graph.add_edge("specialist", END)
     return graph

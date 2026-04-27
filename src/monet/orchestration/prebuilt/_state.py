@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any, TypedDict
 
+from langchain_core.messages import (
+    BaseMessage,  # noqa: TC002 — runtime for LangGraph get_type_hints()
+)
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, model_validator
 
 from monet.orchestration._state import (
@@ -217,7 +221,7 @@ class PlanningState(TypedDict, total=False):
     LangGraph's subgraph state name-matching.
     """
 
-    messages: Annotated[list[dict[str, Any]], _append_reducer]
+    messages: Annotated[list[BaseMessage], add_messages]
     task: str
     work_brief_pointer: ArtifactPointer | None
     routing_skeleton: dict[str, Any] | None  # RoutingSkeleton.model_dump()
@@ -270,6 +274,9 @@ class ExecutionState(TypedDict, total=False):
     # in ``initialise_execution``. Propagated into every ``invoke_agent``
     # call so artifacts written by agents carry thread provenance.
     thread_id: str
+    # Execution summary message written by execution_summary_node. Flows
+    # to parent (ChatState / RunState) via LangGraph subgraph name-matching.
+    messages: Annotated[list[BaseMessage], add_messages]
 
 
 class WaveItem(TypedDict, total=False):

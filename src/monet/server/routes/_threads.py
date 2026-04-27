@@ -54,6 +54,13 @@ def _parse_iso_ms(iso: str) -> int:
         return 0
 
 
+_MSG_TYPE_TO_ROLE: dict[str, str] = {
+    "ai": "assistant",
+    "human": "user",
+    "system": "system",
+}
+
+
 def _get_priority(e_type: str, data: dict[str, Any]) -> int:
     """Deterministic causal priority rules.
 
@@ -64,7 +71,9 @@ def _get_priority(e_type: str, data: dict[str, Any]) -> int:
     4 = Assistant Response
     """
     if e_type == "message":
-        role = data.get("role")
+        role = data.get("role") or _MSG_TYPE_TO_ROLE.get(
+            str(data.get("type") or ""), ""
+        )
         return 0 if role in ("user", "human") else 4
 
     # Telemetry
@@ -187,15 +196,19 @@ async def get_thread_transcript(
                 # Content-based dedup for user messages: update_state and
                 # the subsequent graph run can assign different IDs to the
                 # same user message, producing duplicates in the timeline.
-                m_role = (
+                _raw_role = (
                     m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
                 )
+                _raw_type = (
+                    m.get("type") if isinstance(m, dict) else getattr(m, "type", "")
+                )
+                m_role = _raw_role or _MSG_TYPE_TO_ROLE.get(str(_raw_type or ""), "")
                 m_content = (
                     m.get("content")
                     if isinstance(m, dict)
                     else getattr(m, "content", "")
                 )
-                if m_role == "user" and isinstance(m_content, str):
+                if m_role in ("user", "human") and isinstance(m_content, str):
                     content_key = (m_idx, m_content)
                     if content_key in seen_user_content:
                         continue

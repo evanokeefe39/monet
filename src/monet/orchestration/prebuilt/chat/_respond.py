@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import AIMessage, SystemMessage
+
 from monet.config import ChatConfig
 
 from . import _lc
@@ -21,19 +23,17 @@ async def respond_node(state: ChatState) -> dict[str, Any]:
             f"Unknown command `{cmd}`. Try `/plan <task>` or "
             f"`/<agent>:<command> <task>`."
         )
-        return {"messages": [{"role": "assistant", "content": content}]}
+        return {"messages": [AIMessage(content=content)]}
 
     cfg = ChatConfig.load()
-    messages = state.get("messages") or []
-    payload = _lc._to_langchain(messages)
+    messages = list(state.get("messages") or [])
     clarification = meta.get("clarification_prompt")
     if clarification:
-        payload = [
-            {"role": "system", "content": str(clarification)},
-            *payload,
-        ]
+        payload = [SystemMessage(content=str(clarification)), *messages]
+    else:
+        payload = messages
 
     llm = _lc._load_model(cfg.respond_model)
     reply = await llm.ainvoke(payload)
     content = getattr(reply, "content", None) or str(reply)
-    return {"messages": [{"role": "assistant", "content": content}]}
+    return {"messages": [AIMessage(content=content)]}

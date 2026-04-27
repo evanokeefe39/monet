@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — runtime import for LangGraph signature introspection
 )
@@ -19,22 +23,32 @@ from ._state import (
 
 _log = logging.getLogger(__name__)
 
+_MSG_TYPE_TO_ROLE: dict[str, str] = {
+    "ai": "assistant",
+    "human": "user",
+    "system": "system",
+}
 
-def _build_context(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+
+def _build_context(
+    messages: Sequence[BaseMessage | dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Pack the transcript (minus the last user message) as agent context.
 
     The receiving agent owns any truncation, summarisation, or filtering
     — the graph always forwards the full history so agent-side decisions
     are first-class, not framework-imposed.
     """
-    return [
-        {
-            "type": "chat_history",
-            "role": msg.get("role", "user"),
-            "content": msg.get("content", ""),
-        }
-        for msg in messages[:-1]
-    ]
+    entries: list[dict[str, Any]] = []
+    for msg in messages[:-1]:
+        if isinstance(msg, BaseMessage):
+            role = _MSG_TYPE_TO_ROLE.get(msg.type, "user")
+            content = str(msg.content or "")
+        else:
+            role = str(msg.get("role") or "user")
+            content = str(msg.get("content") or "")
+        entries.append({"type": "chat_history", "role": role, "content": content})
+    return entries
 
 
 async def specialist_node(state: ChatState, config: RunnableConfig) -> dict[str, Any]:
@@ -42,14 +56,7 @@ async def specialist_node(state: ChatState, config: RunnableConfig) -> dict[str,
     meta = state.get("command_meta") or {}
     agent_id = str(meta.get("specialist") or "").strip()
     if not agent_id:
-        return {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "content": "No specialist name provided.",
-                }
-            ]
-        }
+        return {"messages": [AIMessage(content="No specialist name provided.")]}
     mode = str(meta.get("mode") or "fast")
     task = str(meta.get("task") or _last_user_message(state.get("messages") or []))
     messages = state.get("messages") or []
@@ -83,10 +90,7 @@ async def specialist_node(state: ChatState, config: RunnableConfig) -> dict[str,
         )
         return {
             "messages": [
-                {
-                    "role": "assistant",
-                    "content": f"Agent `{agent_id}/{mode}` unavailable: {exc}",
-                }
+                AIMessage(content=f"Agent `{agent_id}/{mode}` unavailable: {exc}")
             ]
         }
     return {

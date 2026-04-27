@@ -157,6 +157,19 @@ class ChatClient:
         command: dict[str, Any] | None = None,
     ) -> AsyncIterator[str | AgentProgress]:
         active_run_id = ""
+        # Pre-seed with existing assistant messages so parent-level echoes
+        # that carry accumulated state from prior runs are deduplicated.
+        seen_content: set[str] = set()
+        try:
+            values, _ = await get_state_values(self._client, thread_id)
+            for msg in values.get("messages") or []:
+                if isinstance(msg, dict):
+                    is_asst = msg.get("role") == "assistant" or msg.get("type") == "ai"
+                    c = str(msg.get("content") or "")
+                    if is_asst and c:
+                        seen_content.add(c)
+        except Exception:
+            _log.debug("pre-seed seen_content failed for %s", thread_id, exc_info=True)
         async for mode, data in stream_run(
             self._client,
             thread_id,
@@ -193,9 +206,14 @@ class ChatClient:
                     if not isinstance(messages, list):
                         continue
                     for msg in messages:
-                        if isinstance(msg, dict) and msg.get("role") == "assistant":
-                            content = msg.get("content", "")
-                            if content:
+                        if isinstance(msg, dict):
+                            is_asst = (
+                                msg.get("role") == "assistant"
+                                or msg.get("type") == "ai"
+                            )
+                            content = str(msg.get("content") or "")
+                            if is_asst and content and content not in seen_content:
+                                seen_content.add(content)
                                 yield content
 
     async def get_chat_interrupt(self, thread_id: str) -> dict[str, Any] | None:
@@ -230,10 +248,18 @@ class ChatClient:
             if mode == "error":
                 raise ServerError(None, str(data))
 
-    async def get_chat_history(self, thread_id: str) -> list[dict[str, Any]]:
-        """Fetch the message history from a chat thread."""
+    async def get_chat_history(self, thread_id: str) -> list[Any]:
+        """Fetch the message history from a chat thread as BaseMessage objects."""
         values, _ = await get_state_values(self._client, thread_id)
-        return values.get("messages") or []
+        msgs: list[Any] = list(values.get("messages") or [])
+        if not msgs:
+            return msgs
+        try:
+            from langchain_core.messages import convert_to_messages
+
+            return convert_to_messages(msgs)
+        except Exception:
+            return msgs
 
     async def delete_chat(self, thread_id: str) -> None:
         """Delete a chat thread and all its history."""

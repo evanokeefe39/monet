@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import (
     RunnableConfig,  # noqa: TC002 — needed at runtime for LangGraph signature introspection
 )
@@ -23,6 +24,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Send, interrupt
 from pydantic import ValidationError
 
+from monet._ports import artifact_view_url as _artifact_url
 from monet.core.tracing import (
     EXECUTION_ROOT_SPAN_NAME,
     attached_trace,
@@ -32,9 +34,11 @@ from monet.core.tracing import (
 )
 from monet.orchestration._invoke import invoke_agent
 from monet.orchestration._signal_router import EXECUTION_ROUTER
+from monet.orchestration._state import _RESET
 from monet.types import ArtifactPointer  # noqa: TC001 — runtime type for TypedDict
 
 from ._forms import build_execution_interrupt_form
+from ._planner_outcome import format_signal_reasons
 from ._state import ExecutionState, RoutingSkeleton, SignalsSummary
 
 if TYPE_CHECKING:
@@ -114,8 +118,8 @@ async def initialise_execution(
 
     return {
         "completed_node_ids": [],
-        "wave_results": [],
-        "wave_reflections": [],
+        "wave_results": _RESET,
+        "wave_reflections": _RESET,
         "signals": None,
         "abort_reason": None,
         "trace_carrier": carrier,
@@ -305,7 +309,7 @@ def route_after_collect(state: ExecutionState) -> str:
     skeleton = RoutingSkeleton.model_validate(state["routing_skeleton"])
     completed = set(state.get("completed_node_ids") or [])
     if skeleton.is_complete(completed):
-        return END
+        return "execution_summary"
     return "dispatch"
 
 
@@ -325,6 +329,9 @@ async def human_interrupt(state: ExecutionState) -> dict[str, Any]:
         {"action": "retry" | "abort", "feedback": str | None}
     """
     results = state.get("wave_results") or []
+    current_run_id = state.get("run_id", "")
+    if current_run_id:
+        results = [r for r in results if r.get("run_id", "") == current_run_id]
     last = results[-1] if results else {}
     decision = interrupt(build_execution_interrupt_form(last_result=last))
     if isinstance(decision, dict) and decision.get("action") == "abort":
@@ -336,6 +343,69 @@ def route_after_interrupt(state: ExecutionState) -> str:
     if state.get("abort_reason"):
         return END
     return "dispatch"
+
+
+async def execution_summary_node(state: ExecutionState) -> dict[str, Any]:
+    """Render wave_results as a single assistant message.
+
+    Runs as the final node of the execution subgraph so wave_results
+    never need to leave ExecutionState. The message flows to the parent
+    graph (ChatState / RunState) via LangGraph subgraph name-matching on
+    the ``messages`` field.
+    """
+    waves = state.get("wave_results") or []
+    current_node_ids: set[str] | None = None
+    skeleton_raw = state.get("routing_skeleton")
+    if isinstance(skeleton_raw, dict):
+        nodes = skeleton_raw.get("nodes")
+        if isinstance(nodes, list):
+            current_node_ids = {
+                n["id"] for n in nodes if isinstance(n, dict) and "id" in n
+            }
+    if current_node_ids is not None:
+        waves = [
+            w for w in waves if isinstance(w, dict) and w.get("id") in current_node_ids
+        ]
+    run_id = state.get("run_id", "unknown")
+    if not waves:
+        return {
+            "messages": [
+                AIMessage(
+                    content="**Execution finished** — no results recorded.",
+                    id=f"exec-summary-{run_id}",
+                )
+            ]
+        }
+    lines = ["**Execution finished:**"]
+    for entry in waves:
+        if not isinstance(entry, dict):
+            continue
+        node_id = str(entry.get("id") or "?")
+        agent_id = str(entry.get("agent_id") or "?")
+        success = bool(entry.get("success", True))
+        artifacts = entry.get("artifacts") or []
+        artifact_link = ""
+        if isinstance(artifacts, list | tuple):
+            for a in artifacts:
+                if isinstance(a, dict) and a.get("artifact_id"):
+                    aid = str(a["artifact_id"])
+                    key = str(a.get("key") or "").strip() or aid[:8]
+                    artifact_link = f" \u2192 [{key}]({_artifact_url(aid)})"
+                    break
+        if success:
+            lines.append(f"- ok {node_id} ({agent_id}){artifact_link}")
+        else:
+            signals = entry.get("signals") or []
+            reason = "; ".join(format_signal_reasons(signals)) if signals else ""
+            if not reason:
+                output = entry.get("output")
+                if isinstance(output, str) and output.strip():
+                    reason = output.strip()[:200]
+            suffix = f": {reason}" if reason else ""
+            lines.append(f"- fail {node_id} ({agent_id}){suffix}")
+    return {
+        "messages": [AIMessage(content="\n".join(lines), id=f"exec-summary-{run_id}")]
+    }
 
 
 def build_execution_subgraph(
@@ -373,6 +443,7 @@ def build_execution_subgraph(
     graph.add_node("agent_node", agent_node)  # type: ignore[arg-type]
     graph.add_node("collect_batch", collect_wrap)
     graph.add_node("human_interrupt", human_interrupt)
+    graph.add_node("execution_summary", execution_summary_node)
 
     graph.set_entry_point("initialise_execution")
     graph.add_edge("initialise_execution", "dispatch")
@@ -384,6 +455,7 @@ def build_execution_subgraph(
         {
             "dispatch": "dispatch",
             "human_interrupt": "human_interrupt",
+            "execution_summary": "execution_summary",
             END: END,
         },
     )
@@ -392,4 +464,5 @@ def build_execution_subgraph(
         route_after_interrupt,
         {"dispatch": "dispatch", END: END},
     )
+    graph.add_edge("execution_summary", END)
     return graph
