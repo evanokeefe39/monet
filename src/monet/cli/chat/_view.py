@@ -7,20 +7,17 @@ from typing import TYPE_CHECKING
 
 from rich.text import Text
 
-from monet.cli.chat._themes import MONET_EMBER
+from monet.cli.chat._colors import ACCENT as _ACCENT
+from monet.cli.chat._colors import ERROR as _ERROR
+from monet.cli.chat._colors import MUTED as _MUTED
+from monet.cli.chat._colors import PRIMARY as _PRIMARY
+from monet.cli.chat._colors import SECONDARY as _SECONDARY
 
 if TYPE_CHECKING:
     from monet.client._events import AgentProgress
 
 _URL_RE = re.compile(r"https?://\S+")
 _AGENT_TAG_RE = re.compile(r"^\[[\w-]+:[\w-]+\]")
-
-_V = MONET_EMBER.variables
-_PRIMARY = MONET_EMBER.primary
-_ACCENT = MONET_EMBER.accent
-_ERROR = MONET_EMBER.error
-_SECONDARY = MONET_EMBER.secondary
-_MUTED = _V["text-muted"]
 
 TAG_STYLES: dict[str, str] = {
     "[user]": f"italic {_PRIMARY}",

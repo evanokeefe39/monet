@@ -229,7 +229,7 @@ async def test_chat_app_mounts_and_renders_history() -> None:
         client=client,
         thread_id="t1",
         slash_commands=["/plan"],
-        history=history,
+        transcript=history,
     )
     async with app.run_test() as pilot:
         await pilot.pause()

@@ -1,0 +1,37 @@
+Screen { background: black; overflow: hidden; }
+* {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 0;
+    scrollbar-background: black;
+    scrollbar-color: $accent 60%;
+    scrollbar-color-hover: $accent;
+}
+#main-body { height: 100%; layers: base overlay; }
+#slash-suggest {
+    layer: overlay;
+    dock: bottom;
+    height: auto;
+    max-height: 8;
+    margin-bottom: 5;
+    border: solid $primary;
+    background: black;
+    display: none;
+}
+#slash-suggest.visible { display: block; }
+#prompt-area {
+    dock: bottom;
+    height: 3;
+    max-height: 8;
+    margin-bottom: 1;
+    border: solid $surface;
+    background: black;
+    padding: 0;
+}
+#prompt-area:focus-within { border: solid $primary; }
+#prompt-glyph {
+    width: 2;
+    height: 1;
+    padding: 0;
+    color: $primary;
+    background: black;
+}

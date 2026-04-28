@@ -1,6 +1,6 @@
 """Transcript widget for the monet chat TUI.
 
-Wraps a RichLog and handles three content types:
+VerticalScroll of MessageBlock widgets. Three content types:
 1. Plain role-tagged lines (user, info, progress, error)
 2. Markdown-rendered assistant messages
 3. Inline HITL widgets mounted at the scroll bottom
@@ -11,19 +11,16 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from rich.markdown import Markdown
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import RichLog
 
-from monet.cli.chat._view import styled_line
-
-if TYPE_CHECKING:
-    from monet.cli.chat._messages import TranscriptAppend
+from monet.cli.chat._message_block import MessageBlock
 from monet.cli.chat._welcome import WelcomeOverlay
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
+
+    from monet.cli.chat._messages import TranscriptAppend
 
 _log = logging.getLogger("monet.cli.chat")
 
@@ -37,7 +34,7 @@ class Transcript(Widget):
         layers: base overlay;
     }
 
-    Transcript #_log {
+    Transcript #_scroll {
         height: 1fr;
         border: none;
         padding: 0 1;
@@ -52,44 +49,33 @@ class Transcript(Widget):
     }
     """
 
-    def __init__(
-        self,
-        *,
-        id: str = "transcript",
-    ) -> None:
+    def __init__(self, *, id: str = "transcript") -> None:
         super().__init__(id=id)
         self._lines: list[str] = []
         self._hitl_widget: Widget | None = None
-        self._rich_log: RichLog | None = None
         self._welcome_hidden: bool = False
         self._scroll_deferred: bool = False
         self._pending_scroll: bool = False
 
-    def on_mount(self) -> None:
-        self._rich_log = self.query_one("#_log", RichLog)
-
     def compose(self) -> ComposeResult:
         yield WelcomeOverlay(id="welcome")
-        yield RichLog(id="_log", wrap=True, markup=False, highlight=False)
+        yield VerticalScroll(id="_scroll")
         yield Vertical(id="_hitl-area")
+
+    def _scroll_view(self) -> VerticalScroll:
+        return self.query_one("#_scroll", VerticalScroll)
 
     def append(self, line: str, *, markdown: bool = False, scroll: bool = True) -> None:
         """Append a line to the transcript."""
         self._lines.append(line)
         self._hide_welcome()
-        rich_log = self._rich_log
-        if rich_log is None:
-            return
-        if markdown:
-            content = line.removeprefix("[assistant] ")
-            rich_log.write(Markdown(content))
-        else:
-            rich_log.write(styled_line(line))
+        block = MessageBlock(line, markdown=markdown)
+        self._scroll_view().mount(block)
         if scroll:
             if self._scroll_deferred:
                 self._pending_scroll = True
             else:
-                rich_log.scroll_end(animate=False)
+                self.call_after_refresh(self._scroll_view().scroll_end, animate=False)
 
     def defer_scroll(self) -> None:
         """Defer scrolling until flush_scroll is called."""
@@ -99,9 +85,9 @@ class Transcript(Widget):
     def flush_scroll(self) -> None:
         """Flush any pending scroll and resume per-call scrolling."""
         self._scroll_deferred = False
-        if self._pending_scroll and self._rich_log:
+        if self._pending_scroll:
             self._pending_scroll = False
-            self._rich_log.scroll_end(animate=False)
+            self.call_after_refresh(self._scroll_view().scroll_end, animate=False)
 
     def on_transcript_append(self, msg: TranscriptAppend) -> None:
         """Handle TranscriptAppend messages from workers."""
@@ -124,7 +110,7 @@ class Transcript(Widget):
     def clear(self) -> None:
         """Clear transcript content."""
         self._lines = []
-        self.query_one("#_log", RichLog).clear()
+        self._scroll_view().remove_children()
 
     def load_history(self, messages: list[Any]) -> None:
         _type_to_role = {"ai": "assistant", "human": "user", "system": "system"}
@@ -142,14 +128,10 @@ class Transcript(Widget):
                 continue
             line = f"[{role}] {content}"
             self._lines.append(line)
-            if self._rich_log is not None:
-                if role == "assistant":
-                    self._rich_log.write(Markdown(content))
-                else:
-                    self._rich_log.write(styled_line(line))
+            block = MessageBlock(line, markdown=(role == "assistant"))
+            self._scroll_view().mount(block)
         self._welcome_hidden = True
-        if self._rich_log is not None:
-            self._rich_log.scroll_end(animate=False)
+        self.call_after_refresh(self._scroll_view().scroll_end, animate=False)
 
     def get_text(self) -> str:
         """Plain text copy of all transcript lines."""

@@ -41,8 +41,6 @@ if TYPE_CHECKING:
 SubmitCallback = "Callable[[dict[str, Any] | None], None]"
 
 
-# Field types we render as widgets. Anything outside this set falls back
-# to a plain Input (text-like) so unknown-type envelopes still work.
 _WIDGET_TYPES = frozenset(
     {
         "text",
@@ -117,7 +115,6 @@ class InlinePicker(Vertical):
         self._envelope = envelope
         self._shape = shape
         self._on_submit = on_submit
-        # Carry-through values for hidden fields keyed by field name.
         self._hidden_values: dict[str, Any] = {}
         for f in envelope.fields:
             if f.type == "hidden" and f.name:
@@ -143,8 +140,6 @@ class InlinePicker(Vertical):
             )
 
     def on_mount(self) -> None:
-        # Focus the option list so arrow keys / Enter are immediately
-        # live without the user having to tab from the prompt.
         with contextlib.suppress(Exception):
             self.query_one("#picker-list", OptionList).focus()
 
@@ -158,8 +153,6 @@ class InlinePicker(Vertical):
         if event.input.id != "picker-text":
             return
         event.stop()
-        # Submit with whichever option is currently highlighted — if the
-        # user never moved the cursor, that's option 0.
         picker = self.query_one("#picker-list", OptionList)
         idx = picker.highlighted if picker.highlighted is not None else 0
         options = self._shape.radio.options
