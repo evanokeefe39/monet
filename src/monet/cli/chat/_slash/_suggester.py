@@ -1,4 +1,4 @@
-"""Slash-command completion for the monet chat TUI."""
+"""Slash-command completion — ghost-text suggester and command-palette provider."""
 
 from __future__ import annotations
 

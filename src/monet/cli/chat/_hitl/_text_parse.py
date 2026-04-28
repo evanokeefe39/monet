@@ -1,14 +1,4 @@
-"""HITL interrupt parsing for the monet chat TUI.
-
-The TUI renders any pending interrupt as transcript text and reads the
-user's next prompt submission as the resume payload. No modal, no focus
-games — the prompt Input is the one widget we trust to receive keystrokes
-reliably across terminals.
-
-Two form shapes are supported:
-- Approval form (approve / revise <feedback> / reject)
-- Single-field free-text form
-"""
+"""HITL interrupt parsing — form prompt rendering and reply parsing."""
 
 from __future__ import annotations
 
@@ -63,7 +53,6 @@ def format_form_prompt(form: dict[str, Any]) -> list[str]:
     if is_approval_form(form):
         lines.append("[info] Reply: approve | revise <feedback> | reject")
         return lines
-    # Guard: if no fields, fall back to generic prompt
     visible = _visible_fields(form)
     if not visible:
         lines.append("[info] graph paused — type your response")
