@@ -157,31 +157,18 @@ class ChatClient:
         command: dict[str, Any] | None = None,
     ) -> AsyncIterator[str | AgentProgress]:
         active_run_id = ""
-        # Pre-seed with existing assistant messages so parent-level echoes
-        # that carry accumulated state from prior runs are deduplicated.
-        seen_content: set[str] = set()
-        try:
-            values, _ = await get_state_values(self._client, thread_id)
-            for msg in values.get("messages") or []:
-                if isinstance(msg, dict):
-                    is_asst = msg.get("role") == "assistant" or msg.get("type") == "ai"
-                    c = str(msg.get("content") or "")
-                    if is_asst and c:
-                        seen_content.add(c)
-        except Exception:
-            _log.debug("pre-seed seen_content failed for %s", thread_id, exc_info=True)
         async for mode, data in stream_run(
             self._client,
             thread_id,
             self._chat_graph_id,
             input=input,
             command=command,
+            stream_mode=["messages", "custom"],
         ):
             if mode == "metadata":
                 if isinstance(data, dict):
                     active_run_id = data.get("run_id", "")
                 continue
-
             if mode == "error":
                 raise ServerError(None, str(data))
             if mode == "custom":
@@ -194,27 +181,18 @@ class ChatClient:
                     if progress is not None:
                         yield progress
                 continue
-            if mode == "updates" and isinstance(data, dict):
-                patches: list[Any] = []
-                if "messages" in data:
-                    patches.append(data)
-                patches.extend(
-                    value for value in data.values() if isinstance(value, dict)
-                )
-                for patch in patches:
-                    messages = patch.get("messages")
-                    if not isinstance(messages, list):
-                        continue
-                    for msg in messages:
-                        if isinstance(msg, dict):
-                            is_asst = (
-                                msg.get("role") == "assistant"
-                                or msg.get("type") == "ai"
-                            )
-                            content = str(msg.get("content") or "")
-                            if is_asst and content and content not in seen_content:
-                                seen_content.add(content)
-                                yield content
+            if mode == "messages":
+                # messages mode emits delta-only chunks — no accumulated state replay.
+                # SDK may wrap as (chunk, metadata) tuple or emit flat dict.
+                _log.debug("messages event: %r", data)
+                chunk_data = data[0] if isinstance(data, list | tuple) else data
+                if isinstance(chunk_data, dict):
+                    msg_type = chunk_data.get("type", "")
+                    if msg_type in ("ai", "AIMessageChunk"):
+                        content = str(chunk_data.get("content") or "")
+                        if content:
+                            yield content
+                continue
 
     async def get_chat_interrupt(self, thread_id: str) -> dict[str, Any] | None:
         """Return the pending interrupt payload for *thread_id*, or ``None``."""
