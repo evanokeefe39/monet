@@ -120,14 +120,18 @@ async def stream_run(
     input: dict[str, Any] | None = None,
     command: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    stream_mode: list[str] | None = None,
 ) -> AsyncIterator[tuple[str, Any]]:
     """Stream a run on *graph_id* and yield ``(mode, data)`` tuples.
 
     Pass either *input* (to start a new run) or *command* (to resume
-    an interrupt).
+    an interrupt). *stream_mode* defaults to ``["updates", "custom"]``
+    for backward compatibility; pass ``["messages", "custom"]`` from
+    the chat path to get delta-only tokens with no accumulated-state replay.
     """
+    modes = stream_mode if stream_mode is not None else ["updates", "custom"]
     kwargs: dict[str, Any] = {
-        "stream_mode": ["updates", "custom"],
+        "stream_mode": modes,
         # ``stream_subgraphs=True`` surfaces ``custom`` events emitted
         # inside subgraphs (e.g. ``emit_progress`` from agents running
         # under chat's execution subgraph). Without it, only top-level
@@ -148,6 +152,7 @@ async def stream_run(
     # parent channel (updates).  We keep the subgraph copy (which
     # carries only current-node output) and strip the parent echo
     # (which may carry accumulated state from prior runs).  ADR-006 F1.
+    # Inert when caller uses messages mode (no updates events arrive).
     _subgraph_parents: set[str] = set()
     try:
         async for chunk in client.runs.stream(thread_id, graph_id, **kwargs):
@@ -163,6 +168,8 @@ async def stream_run(
                     if not data:
                         continue
                 yield ("updates", data)
+            elif event.startswith("messages"):
+                yield ("messages", data)
             elif event.startswith("custom"):
                 yield ("custom", data)
             elif event.startswith("error"):

@@ -229,6 +229,9 @@ async def get_thread_transcript(
                             "id": mid,
                         }
 
+                if "role" not in m_dict:
+                    m_dict["role"] = m_role or "unknown"
+
                 events.append(
                     {
                         "type": "message",
