@@ -87,6 +87,44 @@ Trigger for reintroduction: a concrete need for library-only usage (notebook exa
 | S5 split-plane / SaaS | Vendor `create_control_app` + customer `create_data_app` | Customer-hosted `monet worker` | Shared `redis` / `upstash` | `MONET_API_KEY`; pluggable auth in downstream SaaS repo | Supported — three app constructors + dual-view client |
 | S6 embedded | — | — | — | — | Removed (see Deferred) |
 
+## Progressive adoption path
+
+The deployment scenarios above are not just options — they form a trust gradient. Each step is pulled by demonstrated success, not pushed by sales or assumption. Trust and blast radius grow together.
+
+### Step 1 — Personal worker (S1)
+
+Developer runs `monet dev` on their laptop. Agents run in hardened containers on the same machine. Blast radius: one person's laptop. Data never leaves. Entry cost: zero infrastructure.
+
+The developer builds a track record — weeks of OTel traces showing every tool call, every HITL decision, every artifact. This is the same risk profile as running the agent directly, but with structural safety and evidence accumulation.
+
+### Step 2 — Team workers (S2)
+
+Multiple developers, each running `monet worker` on their own machines, connecting to a shared server. Each person's worker only processes tasks routed to their pool. Blast radius: individual machine scope.
+
+The shared server sees pointers and skeletons only. A Langfuse dashboard shows every agent's track record side by side. Trust is no longer self-reported — it's observable by the team.
+
+### Step 3 — Orchestration SaaS (S5)
+
+Control plane hosted (self-hosted or vendor-hosted). Data plane stays on customer machines. Customer points OTel at their own Langfuse/Datadog/Splunk. Enterprise IT can audit without touching the control plane.
+
+The governance-containment gap disappears — you can both monitor and stop agents, because abort is a control-plane operation that kills the worker-side container.
+
+### Step 4 — Centralized fleet (S3)
+
+Track record justifies moving workers off laptops onto VPS or cloud. Push pools (ECS/Cloud Run dispatch) for centralized management. Security team manages the worker fleet with their preferred policy engine (Microsoft AGT, OPA, Cedar).
+
+Individual users submit work through the control plane. Blast radius is managed infrastructure with proper IAM, network boundaries, and fleet-level policy.
+
+### Transitions are configuration changes
+
+Each step is a config change, not a migration. Same code, same pipelines, same agents:
+
+- S1 → S2: add `MONET_SERVER_URL` to worker
+- S2 → S5: deploy server with `--plane control`, point workers at it
+- S5 → S3: add `dispatch = "ecs"` to `monet.toml`
+
+No rewrites at any step. The pipeline topology is the constant.
+
 ## Deployment-assumption defaults
 
 - `MONET_SERVER_URL` default `http://localhost:2026` across `cli/_run.py`, `cli/_chat.py`, `cli/_runs.py`, `cli/_worker.py`, `config/_schema.py`. All env-overridable for remote deployment.

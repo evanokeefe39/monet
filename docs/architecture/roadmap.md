@@ -92,7 +92,40 @@
 
 Items here are prioritized. Pick up as standalone plans. Triggers listed where applicable.
 
-### Priority 1 — SaaS enabling primitives
+### Priority 1 — Organizational harness MVP
+
+monet becomes the trust infrastructure for deploying untrusted agent runtimes. OpenClaw is the first tenant. Full design: `docs/architecture/openclaw-mvp.md`. Product framing: `docs/overview.md`.
+
+**New components:**
+- [ ] MCP tool bridge — translates monet SDK primitives (`write_artifact`, `emit_progress`, `emit_signal`) to MCP tools. Validates inputs against SDK types, logs every call to OTel. ~200 lines.
+- [ ] `ContainerRuntime` protocol + Docker implementation — spawn/kill/health for sandboxed agent containers. Behind protocol interface for future gVisor/E2B/Modal replacement.
+- [ ] `PolicyEvaluator` protocol + YAML implementation — `(tool_call, context) → allow | deny | escalate`. Default loads YAML allow/block list. Protocol enables Microsoft AGT, OPA, Cedar replacement.
+- [ ] Worker watchdog — monitors MCP bridge health, kills container on bridge death. Agent never runs unsupervised.
+- [ ] Demo pipeline — `email_fetcher` → `openclaw/triage` → `qa_validator` → HITL gate → `email_actor`. Mailpit for mock IMAP/SMTP. Synthetic emails including prompt injection.
+- [ ] SKILL.md templates — 4 skills teaching agents to use monet's artifact/progress/signal protocol.
+- [ ] `seccomp-profile.json` — custom syscall restrictions for sandboxed containers.
+- [ ] `monet init --template harness` — scaffolds complete harness setup.
+
+**Existing components stress-tested:** DAG execution, artifact store, signal routing, HITL interrupt/resume, OTel tracing, pool-based routing, `@agent` decorator, scheduler.
+
+**Demo narrative (three acts):**
+1. Capability — OpenClaw does real inbox cleanup through monet's pipeline
+2. Prompt injection — malicious email tries to hijack; QA catches, HITL blocks
+3. Context compaction — long session drops safety instructions; structural HITL can't be compacted
+
+**Extension protocols defined (Tier 2 — customer replaces):**
+
+| Protocol | Default | Replacements |
+|---|---|---|
+| `PolicyEvaluator` | YAML allow/block | Microsoft AGT, OPA, Cedar |
+| `ContainerRuntime` | Docker SDK | gVisor, Firecracker, E2B, Modal |
+| `AuditSink` | OTel stdout exporter | Langfuse, Datadog, Splunk |
+| `HITLTransport` | Telegram/Discord | Slack, PagerDuty, ServiceNow |
+| `ApprovalPolicy` | Gate all destructive | Risk-scored auto-approval |
+
+Estimated effort: 11-14 days. Trigger: now (addresses enterprise adoption blocker).
+
+### Priority 2 — SaaS enabling primitives
 
 SaaS platform (user management, accounts, billing, UI) lives in a separate downstream repo. This repo exposes only the primitives it needs. Scope: never grows a user model, billing logic, or customer-facing productization.
 
@@ -106,7 +139,7 @@ Queue plane already SaaS-compatible (all backends pull-only). Control-plane prim
 - **Tenant-scoped stream keys** (`work:{tenant}:{pool}`) — trigger: Priority 1 lands. Current `work:{pool}` maps cleanly, one segment insertion.
 - **Per-tenant rate limits on `/progress` and `/complete`** — trigger: Priority 1 lands.
 
-### Priority 2 — Cloud dispatch pools (shipped) + follow-ons
+### Priority 3 — Cloud dispatch pools (shipped) + follow-ons
 
 **Shipped:** `DispatchBackend` Protocol in `src/monet/queue/_dispatch.py`. Pool config carries optional `dispatch = "ecs"` / `"cloudrun"`. Dispatch worker polls `claim()`, submits outbound to AWS ECS or GCP Cloud Run via provider API, claims next — no inbound ports on any worker. Spawned containers run standard worker bootstrap: deserialise task, execute `@agent`, call `WorkerClient.complete()`/`fail()`, heartbeat lease directly. Replaces old webhook push model (`push_handler.py`, `_push_with_retry`) which required inbound HTTP on the worker.
 
@@ -116,7 +149,7 @@ Follow-ons (trigger-gated):
 - **Convenience provider extras** `monet[gcp]` / `monet[aws]` / `monet[azure]` / `monet[all-providers]`. Trigger: first user request for provider glue inside monet.
 - **Long-running job suspend pattern** — lease TTL covers the job window; dispatch worker has no keepalive. Trigger: job duration approaches `MONET_TASK_LEASE_TTL`.
 
-### Priority 3 — Scheduled runs
+### Priority 4 — Scheduled runs
 
 Cron-style triggers against configured entrypoints. Scope:
 

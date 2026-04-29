@@ -1,6 +1,8 @@
 # monet
 
-A multi-agent orchestration SDK for Python. monet provides a uniform agent interface, lean orchestration state, and automatic content management so you can build multi-agent systems without framework lock-in.
+A multi-agent orchestration SDK for Python. monet is the organizational harness where autonomous AI agents are sandboxed, untrusted tenants — deployed safely with structural HITL, credential isolation, and append-only audit trails that don't depend on the agent remembering to behave.
+
+For the full product overview, architecture, and extension model, see [What is monet?](overview.md).
 
 ## Key features
 
@@ -35,6 +37,7 @@ async def researcher_deep(task: str, context: list, effort: str = "high"):
 
 ## Documentation
 
+- [What is monet?](overview.md) -- product overview, extension model, progressive adoption
 - [Getting Started](getting-started.md) -- install, define your first agent, run it
 - **Guides**
     - [Defining Agents](guides/agents.md) -- the `@agent` decorator, commands, effort, signals
@@ -46,6 +49,8 @@ async def researcher_deep(task: str, context: list, effort: str = "high"):
     - [Observability](guides/observability.md) -- tracing, Langfuse
 - **[API Reference](api/core.md)** -- complete reference for all exports
 - **Architecture**
-    - [Design Principles](architecture/design-principles.md) -- philosophy and influences
-    - [Graph Topology](architecture/graph-topology.md) -- three-graph supervisor system (planned)
+    - [Design Principles](architecture/design-principles.md) -- philosophy, influences, harness model
+    - [Deployment Scenarios](architecture/deployment-scenarios.md) -- six shapes plus progressive adoption path
+    - [Harness MVP](architecture/openclaw-mvp.md) -- OpenClaw as first sandboxed tenant
+    - [Graph Topology](architecture/graph-topology.md) -- compound graph system
     - [Roadmap](architecture/roadmap.md) -- what is shipped, in progress, and planned
