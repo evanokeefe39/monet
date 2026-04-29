@@ -48,6 +48,45 @@ These architectural decisions apply across the system:
 - Preserve opacity -- agents are blackboxes with interfaces
 - The orchestrator's only opinion is that agents are blackboxes
 
+## The organizational harness
+
+monet is not an agent framework. It is the organizational harness where agents are sandboxed, untrusted tenants. The harness is agent-runtime-agnostic: OpenClaw today, CrewAI tomorrow, custom Python next quarter. The trust infrastructure persists across agent fashions.
+
+### Agents are untrusted by default
+
+Every agent -- whether a monet-native `@agent` function or an external runtime in a container -- is treated as an opaque, potentially hostile process. It can reason, classify, draft, and recommend. It cannot act on external systems. Acting happens in separate pipeline nodes with separate credentials, gated by structural checkpoints the agent doesn't control.
+
+This is not a trust judgment about any specific agent. It is a system property. The harness doesn't know whether the agent is trustworthy, and it doesn't need to.
+
+### Safety is topological, not behavioral
+
+Safety instructions that live in the agent's prompt can be compacted out, prompt-injected around, or disabled by the agent itself (CVE-2026-41349 demonstrated an LLM silently disabling its own execution approval). Policy interception that runs in the same trust boundary as the agent can be circumvented if the agent controls its own configuration.
+
+monet's safety properties are topological -- they emerge from the structure of the pipeline, not the behavior of the agent:
+
+- **Credential isolation**: the thinking agent has no credentials. The acting agent has scoped credentials. No single pipeline node has both reasoning capability and destructive authority.
+- **Structural HITL**: human-in-the-loop gates are pipeline nodes, not prompt instructions. They fire because the DAG says they fire, regardless of what the agent wants.
+- **Append-only audit**: the trace is emitted by the worker sidecar, outside the agent's process. The agent can't suppress, modify, or delete audit entries.
+- **Container kill as abort**: `abort(run_id)` kills the container. No prompt, no negotiation, no context window to be ignored.
+
+This aligns with Toyota P5 (jidoka) -- build quality in, don't inspect it in.
+
+### Progressive trust
+
+Trust and blast radius grow together. Each expansion is pulled by demonstrated success -- observable track record in the harness, never pushed by assumption. An agent earns trust through months of append-only audit data, not through its documentation or its own HITL claims.
+
+This maps to Toyota P3 (pull systems) applied to organizational trust. See `docs/overview.md` for the four-step adoption model.
+
+### The harness is the constant
+
+Agent runtimes are flavour of the month. 214k stars one quarter, 137 security advisories the next. The harness doesn't bet on any specific agent runtime. It provides:
+
+- Pipeline topology (Tier 1 -- not pluggable, this is what makes it a harness)
+- Default implementations with protocol interfaces (Tier 2 -- customer replaces)
+- Extension hooks for customer-specific layers (Tier 3 -- customer adds)
+
+See `docs/overview.md` for the full extension model.
+
 ## Agent quality ownership
 
 - The orchestrator cannot enforce agent output quality -- agents are potentially untrusted black boxes. It provides signal mechanisms for agents to communicate failure and quality concerns. QA agents are the semantic quality layer. If a user brings a research agent that hallucinates, monet's framework cannot fix this design flaw -- only surface it through QA reflection and human review gates
