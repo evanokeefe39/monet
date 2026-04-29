@@ -55,6 +55,7 @@ def test_monet_artifacts_exports() -> None:
         "InMemoryArtifactClient",
         "artifacts_from_env",
         "configure_artifacts",
+        "ArtifactQueryable",
     }
     assert set(cat.__all__) == expected
     for name in expected:

@@ -23,6 +23,7 @@ from monet.config import (
     LANGFUSE_SECRET_KEY,
     MONET_AGENT_TIMEOUT,
     MONET_API_KEY,
+    MONET_ARTIFACT_BACKEND,
     MONET_ARTIFACTS_DIR,
     MONET_DISTRIBUTED,
     MONET_ENV_VARS,
@@ -529,3 +530,236 @@ def test_env_vars_registry_covers_critical_names() -> None:
     assert MONET_API_KEY in MONET_ENV_VARS
     assert MONET_QUEUE_BACKEND in MONET_ENV_VARS
     assert MONET_DISTRIBUTED in MONET_ENV_VARS
+
+
+# ── ArtifactsConfig.validate_for_boot ─────────────────────────────────
+
+
+def test_artifacts_backend_none_passes_validation() -> None:
+    cfg = ArtifactsConfig(backend=None)
+    cfg.validate_for_boot()  # no exception
+
+
+def test_artifacts_backend_missing_colon_rejected() -> None:
+    cfg = ArtifactsConfig(backend="monet.artifacts.prebuilt._service")
+    with pytest.raises(ConfigError) as exc_info:
+        cfg.validate_for_boot()
+    assert exc_info.value.var == MONET_ARTIFACT_BACKEND
+
+
+def test_artifacts_backend_bad_module_rejected() -> None:
+    cfg = ArtifactsConfig(backend="monet.does_not_exist:factory")
+    with pytest.raises(ConfigError) as exc_info:
+        cfg.validate_for_boot()
+    assert exc_info.value.var == MONET_ARTIFACT_BACKEND
+
+
+def test_artifacts_backend_missing_factory_rejected() -> None:
+    cfg = ArtifactsConfig(backend="monet.artifacts.prebuilt._service:NoSuchFactory")
+    with pytest.raises(ConfigError) as exc_info:
+        cfg.validate_for_boot()
+    assert exc_info.value.var == MONET_ARTIFACT_BACKEND
+
+
+def test_artifacts_backend_valid_path_accepted() -> None:
+    cfg = ArtifactsConfig(backend="monet.artifacts.prebuilt._service:ArtifactService")
+    cfg.validate_for_boot()  # no exception
+
+
+def test_artifacts_backend_loaded_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        MONET_ARTIFACT_BACKEND,
+        "monet.artifacts.prebuilt._service:ArtifactService",
+    )
+    cfg = ArtifactsConfig.load()
+    assert cfg.backend == "monet.artifacts.prebuilt._service:ArtifactService"
+
+
+# ── validate_dotted_path ───────────────────────────────────────────────
+
+
+def test_validate_dotted_path_rejects_missing_colon() -> None:
+    from monet.config._resolve import validate_dotted_path
+
+    with pytest.raises(ConfigError) as exc_info:
+        validate_dotted_path("monet.artifacts._memory", "TEST_VAR")
+    assert exc_info.value.var == "TEST_VAR"
+
+
+def test_validate_dotted_path_rejects_empty_module() -> None:
+    from monet.config._resolve import validate_dotted_path
+
+    with pytest.raises(ConfigError):
+        validate_dotted_path(":factory", "TEST_VAR")
+
+
+def test_validate_dotted_path_rejects_bad_module() -> None:
+    from monet.config._resolve import validate_dotted_path
+
+    with pytest.raises(ConfigError) as exc_info:
+        validate_dotted_path("monet.does_not_exist:factory", "TEST_VAR")
+    assert "ModuleNotFoundError" in str(exc_info.value)
+
+
+def test_validate_dotted_path_rejects_missing_attr() -> None:
+    from monet.config._resolve import validate_dotted_path
+
+    with pytest.raises(ConfigError) as exc_info:
+        validate_dotted_path("monet.artifacts._memory:NoSuchThing", "TEST_VAR")
+    assert exc_info.value.var == "TEST_VAR"
+
+
+def test_validate_dotted_path_accepts_valid() -> None:
+    from monet.config._resolve import validate_dotted_path
+
+    validate_dotted_path("monet.artifacts._memory:InMemoryArtifactClient", "TEST_VAR")
+
+
+# ── resolve_backend ────────────────────────────────────────────────────
+
+
+def test_resolve_backend_calls_config_ref_factory() -> None:
+    from monet.artifacts._memory import InMemoryArtifactClient
+    from monet.config._resolve import resolve_backend
+
+    result = resolve_backend(
+        config_ref="monet.artifacts._memory:InMemoryArtifactClient",
+        env_var_name="TEST_VAR",
+        default_factory=lambda: None,
+    )
+    assert isinstance(result, InMemoryArtifactClient)
+
+
+def test_resolve_backend_calls_default_factory_when_no_ref() -> None:
+    sentinel = object()
+    from monet.config._resolve import resolve_backend
+
+    result = resolve_backend(
+        config_ref=None,
+        env_var_name="TEST_VAR",
+        default_factory=lambda: sentinel,
+    )
+    assert result is sentinel
+
+
+def test_resolve_backend_protocol_check_passes() -> None:
+    from monet.artifacts._memory import InMemoryArtifactClient
+    from monet.artifacts._protocol import ArtifactClient
+    from monet.config._resolve import resolve_backend
+
+    result = resolve_backend(
+        config_ref="monet.artifacts._memory:InMemoryArtifactClient",
+        env_var_name="TEST_VAR",
+        default_factory=lambda: None,
+        protocol=ArtifactClient,
+    )
+    assert isinstance(result, InMemoryArtifactClient)
+
+
+def test_resolve_backend_protocol_check_fails() -> None:
+    from monet.config._resolve import resolve_backend
+
+    with pytest.raises(ConfigError) as exc_info:
+        resolve_backend(
+            config_ref="monet.artifacts._memory:InMemoryArtifactClient",
+            env_var_name="TEST_VAR",
+            default_factory=lambda: None,
+            protocol=int,
+        )
+    assert exc_info.value.var == "TEST_VAR"
+
+
+# ── QueueConfig.custom_backend ─────────────────────────────────────────
+
+
+def test_queue_custom_backend_valid_path_accepted() -> None:
+    cfg = QueueConfig(custom_backend="monet.artifacts._memory:InMemoryArtifactClient")
+    cfg.validate_for_boot()  # validates the dotted path, not protocol
+
+
+def test_queue_custom_backend_bad_path_rejected() -> None:
+    cfg = QueueConfig(custom_backend="monet.does_not_exist:factory")
+    with pytest.raises(ConfigError):
+        cfg.validate_for_boot()
+
+
+def test_queue_custom_backend_missing_colon_rejected() -> None:
+    cfg = QueueConfig(custom_backend="monet.artifacts._memory")
+    with pytest.raises(ConfigError):
+        cfg.validate_for_boot()
+
+
+def test_queue_custom_backend_skips_redis_uri_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """custom_backend overrides built-in validation; redis URI is not required."""
+    monkeypatch.setenv(
+        "MONET_QUEUE_CUSTOM_BACKEND", "monet.artifacts._memory:InMemoryArtifactClient"
+    )
+    cfg = QueueConfig.load()
+    assert cfg.custom_backend == "monet.artifacts._memory:InMemoryArtifactClient"
+    cfg.validate_for_boot()  # must not raise even without REDIS_URI
+
+
+def test_queue_custom_backend_in_summary() -> None:
+    cfg = QueueConfig(custom_backend="some.module:factory")
+    summary = cfg.redacted_summary()
+    assert summary["custom_backend"] == "some.module:factory"
+
+
+# ── ProgressConfig.custom_backend ─────────────────────────────────────
+
+
+def test_progress_custom_backend_load_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from monet.config import ProgressConfig
+
+    monkeypatch.setenv(
+        "MONET_PROGRESS_CUSTOM_BACKEND",
+        "monet.artifacts._memory:InMemoryArtifactClient",
+    )
+    cfg = ProgressConfig.load()
+    assert cfg is not None
+    assert cfg.custom_backend == "monet.artifacts._memory:InMemoryArtifactClient"
+
+
+def test_progress_custom_backend_no_backend_env_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """custom_backend alone is sufficient; MONET_PROGRESS_BACKEND is not needed."""
+    from monet.config import ProgressConfig
+
+    monkeypatch.setenv(
+        "MONET_PROGRESS_CUSTOM_BACKEND",
+        "monet.artifacts._memory:InMemoryArtifactClient",
+    )
+    cfg = ProgressConfig.load()
+    assert cfg is not None
+    assert cfg.backend is None
+
+
+def test_progress_custom_backend_valid_path_accepted() -> None:
+    from monet.config import ProgressConfig
+
+    cfg = ProgressConfig(
+        custom_backend="monet.artifacts._memory:InMemoryArtifactClient"
+    )
+    cfg.validate_for_boot()  # no exception
+
+
+def test_progress_custom_backend_bad_path_rejected() -> None:
+    from monet.config import ProgressConfig
+
+    cfg = ProgressConfig(custom_backend="monet.does_not_exist:factory")
+    with pytest.raises(ConfigError):
+        cfg.validate_for_boot()
+
+
+def test_progress_load_returns_none_without_either_backend_env() -> None:
+    from monet.config import ProgressConfig
+
+    cfg = ProgressConfig.load()
+    assert cfg is None

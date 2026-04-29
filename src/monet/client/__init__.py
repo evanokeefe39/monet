@@ -20,12 +20,11 @@ Typical library usage::
 
 from __future__ import annotations
 
-import asyncio
-import logging
-import secrets
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
+from monet.client._artifacts import ArtifactClient, ArtifactSummary
+from monet.client._capabilities import CapabilitiesClient
+from monet.client._core import _ClientCore
 from monet.client._errors import (
     AlreadyResolved,
     AmbiguousInterrupt,
@@ -53,66 +52,16 @@ from monet.client._events import (
     RunSummary,
     SignalEmitted,
 )
+from monet.client._progress import ProgressClient
+from monet.client._run import RunClient, _build_agent_progress
 from monet.client._run_state import _RunStore
-from monet.client._wire import (
-    MONET_GRAPH_KEY,
-    MONET_RUN_ID_KEY,
-    create_thread,
-    get_state_values,
-    make_client,
-    stream_run,
-    task_input,
-)
+from monet.client._wire import make_client
 from monet.client.chat import ChatClient
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from langgraph_sdk.client import LangGraphClient
-
     from monet.events import ProgressEvent
-
-_log = logging.getLogger("monet.client")
-
-
-def _extract_interrupt_payload(state: Any) -> dict[str, Any]:
-    """Pull the first interrupt payload off a LangGraph state snapshot.
-
-    The payload lives on ``state.tasks[0].interrupts[0].value`` in the
-    LangGraph SDK response; it is not mirrored into
-    ``state.values["__interrupt__"]``. Tolerates both mapping-style and
-    attribute-style access because the SDK returns plain dicts for some
-    endpoints and pydantic-esque objects for others.
-    """
-
-    def _get(obj: Any, key: str) -> Any:
-        if isinstance(obj, dict):
-            return obj.get(key)
-        return getattr(obj, key, None)
-
-    tasks = _get(state, "tasks") or []
-    for task in tasks:
-        interrupts = _get(task, "interrupts") or []
-        for interrupt_item in interrupts:
-            value = _get(interrupt_item, "value")
-            if isinstance(value, dict):
-                return value
-    values = _get(state, "values") or {}
-    if isinstance(values, dict):
-        fallback = values.get("__interrupt__")
-        if isinstance(fallback, dict):
-            return fallback
-    return {}
-
-
-@dataclass
-class ArtifactSummary:
-    artifact_id: str
-    summary: str
-    kind: str
-    agent_id: str = ""
-    key: str = ""
-
 
 __all__ = [
     "AgentProgress",
@@ -141,47 +90,9 @@ __all__ = [
     "RunStarted",
     "RunSummary",
     "SignalEmitted",
+    "_build_agent_progress",
     "make_client",
 ]
-
-
-def _build_agent_progress(run_id: str, data: dict[str, Any]) -> AgentProgress | None:
-    """Convert a custom-stream wire dict into an :class:`AgentProgress`.
-
-    Returns ``None`` when the dict does not carry an ``agent`` field —
-    callers should skip such payloads rather than emit a malformed event.
-    """
-    agent = data.get("agent", "")
-    if not agent:
-        return None
-    return AgentProgress(
-        run_id=run_id,
-        agent_id=agent,
-        status=data.get("status", ""),
-        command=data.get("command", ""),
-        reasons=data.get("reasons", ""),
-    )
-
-
-def _build_signal_emitted(run_id: str, data: dict[str, Any]) -> SignalEmitted | None:
-    """Convert a custom-stream wire dict into a :class:`SignalEmitted`.
-
-    Monet's ``emit_signal`` writer produces dicts with at least
-    ``{"signal_type": ..., "agent": ..., ...}``. Returns ``None`` when
-    the dict doesn't look like a signal payload.
-    """
-    signal_type = data.get("signal_type") or data.get("type")
-    agent = data.get("agent", "")
-    if not signal_type or not agent:
-        return None
-    _skip = {"signal_type", "type", "agent"}
-    payload = {k: v for k, v in data.items() if k not in _skip}
-    return SignalEmitted(
-        run_id=run_id,
-        agent_id=agent,
-        signal_type=str(signal_type),
-        payload=payload,
-    )
 
 
 class MonetClient:
@@ -221,24 +132,33 @@ class MonetClient:
         resolved_data_url = (
             data_plane_url if data_plane_url is not None else cfg.data_plane_url
         )
-        self._url = resolved_url
-        self._api_key = resolved_key
-        self._data_url: str = resolved_data_url or resolved_url
-        self._client: LangGraphClient = make_client(resolved_url, api_key=resolved_key)
-        self._store = _RunStore()
-        self._entrypoints = load_entrypoints()
-        if graph_ids is not None:
-            self._graph_roles = dict(graph_ids)
-        else:
-            self._graph_roles = load_graph_roles()
+        resolved_data_url = resolved_data_url or resolved_url
+
+        entrypoints = load_entrypoints()
+        graph_roles = dict(graph_ids) if graph_ids is not None else load_graph_roles()
+
+        core = _ClientCore(
+            url=resolved_url,
+            api_key=resolved_key,
+            data_url=resolved_data_url,
+            client=make_client(resolved_url, api_key=resolved_key),
+            store=_RunStore(),
+            entrypoints=entrypoints,
+            graph_roles=graph_roles,
+        )
+        self._core = core
+        self._runs = RunClient(core)
+        self._capabilities = CapabilitiesClient(core)
+        self._artifacts = ArtifactClient(core)
+        self._progress = ProgressClient(core)
         self.chat = ChatClient(
-            self._client,
-            chat_graph_id=self._graph_roles.get("chat", "chat"),
+            core.client,
+            chat_graph_id=graph_roles.get("chat", "chat"),
             base_url=resolved_url,
             api_key=resolved_key,
         )
 
-    # ── Run lifecycle ───────────────────────────────────────────
+    # ── Run lifecycle ────────────────────────────────────────────
 
     async def run(
         self,
@@ -247,160 +167,34 @@ class MonetClient:
         *,
         run_id: str | None = None,
     ) -> AsyncIterator[RunEvent]:
-        """Drive one graph and yield typed core events.
+        async for event in self._runs.run(graph_id, input, run_id=run_id):
+            yield event
 
-        Args:
-            graph_id: A graph declared in ``monet.toml [entrypoints]``
-                (by ``graph`` value). Raises :class:`GraphNotInvocable`
-                if not declared.
-            input: Initial state dict. If a string is passed, it is
-                wrapped by :func:`task_input`. If ``None``, an empty
-                dict is used (for graphs that take no input).
-            run_id: Optional run identifier. Auto-generated if omitted.
-
-        Yields:
-            :class:`RunStarted`, then :class:`NodeUpdate` /
-            :class:`AgentProgress` / :class:`SignalEmitted` chunks as
-            they arrive, then either :class:`Interrupt` (run paused) or
-            :class:`RunComplete` / :class:`RunFailed`.
-        """
-        declared_graphs = {ep["graph"] for ep in self._entrypoints.values()}
-        if graph_id not in declared_graphs:
-            raise GraphNotInvocable(graph_id, sorted(declared_graphs))
-
-        rid = run_id or secrets.token_hex(4)
-        if isinstance(input, str):
-            input = task_input(input, rid)
-
-        thread = await create_thread(
-            self._client,
-            metadata={MONET_RUN_ID_KEY: rid, MONET_GRAPH_KEY: graph_id},
-        )
-        self._store.put_thread(rid, graph_id, thread)
-        yield RunStarted(run_id=rid, graph_id=graph_id, thread_id=thread)
-
-        active_rid = rid
-        try:
-            async for mode, data in stream_run(
-                self._client, thread, graph_id, input=input or {}
-            ):
-                if mode == "metadata":
-                    if isinstance(data, dict):
-                        active_rid = data.get("run_id", active_rid)
-                    continue
-
-                if mode == "error":
-                    yield RunFailed(run_id=active_rid, error=str(data))
-                    return
-                if mode == "custom" and isinstance(data, dict):
-                    signal = _build_signal_emitted(active_rid, data)
-                    if signal is not None:
-                        yield signal
-                        continue
-                    progress = _build_agent_progress(active_rid, data)
-                    if progress is not None:
-                        yield progress
-                        continue
-                elif mode == "updates" and isinstance(data, dict):
-                    for node_name, update in data.items():
-                        if isinstance(update, dict):
-                            yield NodeUpdate(
-                                run_id=active_rid, node=node_name, update=update
-                            )
-
-            values, nxt = await get_state_values(self._client, thread)
-            if nxt:
-                tag = nxt[0]
-                yield Interrupt(
-                    run_id=rid,
-                    tag=tag,
-                    values=values.get("__interrupt__") or {},
-                    next_nodes=list(nxt),
-                )
-                return
-            yield RunComplete(run_id=rid, final_values=values)
-        except Exception as exc:
-            _log.exception("run %s on %s failed", rid, graph_id)
-            yield RunFailed(run_id=rid, error=str(exc))
-
-    # ── HITL ────────────────────────────────────────────────────
-
-    async def resume(
-        self,
-        run_id: str,
-        tag: str,
-        payload: dict[str, Any],
-    ) -> None:
-        """Resume a paused interrupt.
-
-        Validates that the run is actually paused at *tag* before
-        dispatching. Raises :class:`RunNotInterrupted`,
-        :class:`AlreadyResolved`, :class:`AmbiguousInterrupt`, or
-        :class:`InterruptTagMismatch` on mismatch.
-
-        In split-plane mode (``data_plane_url`` set), posts a
-        ``HITL_DECISION`` event to the data plane before issuing the
-        LangGraph ``Command(resume=...)``. Step 1 is idempotent via
-        ``cause_id`` — a 409 means the decision was already recorded and
-        the LangGraph command can be retried safely.
-
-        Args:
-            run_id: The run to resume.
-            tag: The interrupt node name (must match ``Interrupt.tag``).
-            payload: Dict forwarded to the graph as ``Command(resume=payload)``.
-        """
-        thread, graph_id = await self._find_interrupted_thread(run_id)
-        _, nxt = await get_state_values(self._client, thread)
-        if not nxt:
-            raise AlreadyResolved(run_id)
-        if len(nxt) > 1:
-            raise AmbiguousInterrupt(run_id, list(nxt))
-        if nxt[0] != tag:
-            raise InterruptTagMismatch(run_id, expected=nxt[0], got=tag)
-
-        # Checkpointer exposes `next` the moment the graph hits interrupt(),
-        # but Aegra's resume validator rejects until ThreadORM.status is
-        # committed to "interrupted" via finalize_run. Poll briefly so the
-        # failure mode is a deterministic timeout, not a 400 race.
-        await self._await_interrupted_status(thread)
-
-        # Split-plane ordering: record HITL_DECISION on the data plane
-        # before issuing the control-plane command. 409 = already recorded,
-        # safe to proceed. Any other error propagates to the caller for retry.
-        if self._data_url != self._url:
-            await self._post_hitl_decision(run_id, tag)
-
-        _log.info(
-            "resume",
-            extra={"run_id": run_id, "tag": tag, "payload_keys": list(payload)},
-        )
-        async for mode, data in stream_run(
-            self._client,
-            thread,
-            graph_id,
-            command={"resume": payload},
-        ):
-            if mode == "error":
-                raise RuntimeError(f"server error: {data}")
+    async def resume(self, run_id: str, tag: str, payload: dict[str, Any]) -> None:
+        return await self._runs.resume(run_id, tag, payload)
 
     async def abort(self, run_id: str) -> None:
-        """Abort a paused run — resumes with a canonical abort payload.
+        return await self._runs.abort(run_id)
 
-        Finds the interrupted thread and dispatches
-        ``{"resume": {"action": "abort"}}``. Graphs that don't consume
-        that shape will simply continue past the interrupt.
-        """
-        thread, graph_id = await self._find_interrupted_thread(run_id)
-        async for mode, data in stream_run(
-            self._client,
-            thread,
-            graph_id,
-            command={"resume": {"action": "abort"}},
-        ):
-            if mode == "error":
-                raise RuntimeError(f"server error: {data}")
+    async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
+        return await self._runs.list_runs(limit=limit)
 
-    # ── Queries ─────────────────────────────────────────────────
+    async def get_run(self, run_id: str) -> RunDetail:
+        return await self._runs.get_run(run_id)
+
+    async def list_pending(self) -> list[PendingDecision]:
+        return await self._runs.list_pending()
+
+    async def list_graphs(self) -> list[str]:
+        return await self._runs.list_graphs()
+
+    # ── Capabilities ─────────────────────────────────────────────
+
+    async def list_capabilities(self) -> list[Capability]:
+        return await self._capabilities.list_capabilities()
+
+    async def slash_commands(self) -> list[str]:
+        return await self._capabilities.slash_commands()
 
     async def invoke_agent(
         self,
@@ -411,297 +205,33 @@ class MonetClient:
         context: list[dict[str, Any]] | None = None,
         skills: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Run a single ``agent_id:command`` invocation on the server.
+        return await self._capabilities.invoke_agent(
+            agent_id, command, task=task, context=context, skills=skills
+        )
 
-        Bypasses graphs entirely — good for direct calls (``monet run
-        <agent>:<command>``, chat REPL slash commands). The server
-        dispatches via its configured queue and returns the resulting
-        ``AgentResult`` as a dict.
-        """
-        import httpx
-
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        url = self._url.rstrip("/") + f"/api/v1/agents/{agent_id}/{command}/invoke"
-        payload: dict[str, Any] = {"task": task}
-        if context is not None:
-            payload["context"] = context
-        if skills is not None:
-            payload["skills"] = skills
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(600.0, connect=10.0)
-        ) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        return dict(data) if isinstance(data, dict) else {}
-
-    async def list_capabilities(self) -> list[Capability]:
-        """List every ``(agent_id, command)`` declared on the server.
-
-        Drives dynamic slash-command discovery in ``monet chat`` and
-        resolves the target for ``monet run <agent>:<command>`` direct
-        invocation. Returns an empty list if the server has no manifest
-        entries.
-        """
-        import httpx
-
-        headers: dict[str, str] = {}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        url = self._url.rstrip("/") + "/api/v1/agents"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        if not isinstance(data, list):
-            return []
-        return [cast("Capability", item) for item in data if isinstance(item, dict)]
+    # ── Artifacts ────────────────────────────────────────────────
 
     async def list_artifacts(
         self, *, thread_id: str, limit: int = 50
     ) -> list[ArtifactSummary]:
-        """List artifacts for a thread, newest-first."""
-        import httpx
-
-        headers: dict[str, str] = {}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        url = self._url.rstrip("/") + "/api/v1/artifacts"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url, headers=headers, params={"thread_id": thread_id, "limit": limit}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        items = data.get("artifacts", []) if isinstance(data, dict) else []
-        return [
-            ArtifactSummary(
-                artifact_id=item.get("artifact_id", ""),
-                summary=item.get("summary", ""),
-                kind=item.get("content_type", ""),
-                agent_id=item.get("agent_id", "") or "",
-                key=item.get("key", "") or "",
-            )
-            for item in items
-            if isinstance(item, dict)
-        ]
+        return await self._artifacts.list_artifacts(thread_id=thread_id, limit=limit)
 
     async def count_artifacts_per_thread(self, thread_ids: list[str]) -> dict[str, int]:
-        """Return artifact counts keyed by thread_id — one server round trip."""
-        if not thread_ids:
-            return {}
-        import httpx
+        return await self._artifacts.count_artifacts_per_thread(thread_ids)
 
-        headers: dict[str, str] = {}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        url = self._url.rstrip("/") + "/api/v1/artifacts/counts"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url,
-                headers=headers,
-                params={"thread_ids": ",".join(thread_ids)},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        return {k: int(v) for k, v in data.items()} if isinstance(data, dict) else {}
-
-    async def slash_commands(self) -> list[str]:
-        """Return the client-visible slash-command vocabulary.
-
-        Mirrors :meth:`monet.server._capabilities.CapabilityIndex.slash_commands`
-        from the server side: the framework-reserved prefixes (``/plan``)
-        followed by ``/<agent_id>:<command>`` for each declared
-        capability. Feeds the Textual chat REPL's completion suggester
-        and command palette.
-        """
-        from monet.server._capabilities import RESERVED_SLASH
-
-        out: list[str] = list(RESERVED_SLASH)
-        seen: set[str] = set(out)
-        for cap in await self.list_capabilities():
-            cmd = f"/{cap['agent_id']}:{cap['command']}"
-            if cmd not in seen:
-                out.append(cmd)
-                seen.add(cmd)
-        return out
+    # ── Progress / telemetry ─────────────────────────────────────
 
     async def get_progress_history(self, run_id: str) -> list[AgentProgress]:
-        """Retrieve persisted progress events for a run."""
-        import httpx
-
-        headers: dict[str, str] = {}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        url = self._url.rstrip("/") + f"/api/v1/runs/{run_id}/progress"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        events = data.get("events", []) if isinstance(data, dict) else []
-        results: list[AgentProgress] = []
-        for ev in events:
-            if not isinstance(ev, dict):
-                continue
-            progress = _build_agent_progress(run_id, ev)
-            if progress is not None:
-                results.append(progress)
-        return results
+        return await self._progress.get_progress_history(run_id)
 
     async def get_batch_progress(self, run_ids: list[str]) -> list[AgentProgress]:
-        """Retrieve progress for multiple runs in one server round-trip."""
-        if not run_ids:
-            return []
-        import httpx
-
-        headers: dict[str, str] = {}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
-        url = self._url.rstrip("/") + "/api/v1/progress"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url, headers=headers, params={"run_ids": ",".join(run_ids)}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        progress_map = data.get("progress", {}) if isinstance(data, dict) else {}
-        results: list[AgentProgress] = []
-        for rid, events in progress_map.items():
-            for ev in events:
-                if not isinstance(ev, dict):
-                    continue
-                p = _build_agent_progress(str(rid), ev)
-                if p is not None:
-                    results.append(p)
-        return results
+        return await self._progress.get_batch_progress(run_ids)
 
     async def get_thread_progress(self, thread_id: str) -> list[AgentProgress]:
         """Fetch progress history for all completed runs on a thread."""
         runs = await self.chat.list_thread_runs(thread_id)
         run_ids = [r.run_id for r in runs if r.status != "interrupted"]
-        return await self.get_batch_progress(run_ids)
-
-    async def list_runs(self, *, limit: int = 20) -> list[RunSummary]:
-        """List recent runs with status and completed stages.
-
-        Groups threads by ``monet_run_id`` metadata. The first-seen
-        graph_id per run (in creation order, newest first) is treated
-        as the run's head for timing purposes.
-        """
-        threads = await self._client.threads.search(
-            metadata={MONET_RUN_ID_KEY: None},
-            limit=limit * 4,  # overscan; dedupe by run_id below
-            sort_by="created_at",
-            sort_order="desc",
-        )
-        per_run: dict[str, list[dict[str, Any]]] = {}
-        for raw in threads:
-            t: dict[str, Any] = dict(raw)  # type: ignore[call-overload]
-            meta = t.get("metadata") or {}
-            rid = meta.get(MONET_RUN_ID_KEY)
-            if not isinstance(rid, str):
-                continue
-            per_run.setdefault(rid, []).append(t)
-
-        summaries: list[RunSummary] = []
-        for rid, ts in per_run.items():
-            ts.sort(key=lambda t: str(t.get("created_at", "")))
-            head = ts[-1]  # newest
-            stages = [
-                str((t.get("metadata") or {}).get(MONET_GRAPH_KEY, ""))
-                for t in ts
-                if (t.get("metadata") or {}).get(MONET_GRAPH_KEY)
-            ]
-            summaries.append(
-                RunSummary(
-                    run_id=rid,
-                    status=str(head.get("status", "unknown")),
-                    completed_stages=stages,
-                    created_at=str(ts[0].get("created_at", "")),
-                )
-            )
-            if len(summaries) >= limit:
-                break
-        return summaries
-
-    async def get_run(self, run_id: str) -> RunDetail:
-        """Merge all threads for *run_id* into a generic :class:`RunDetail`."""
-        threads = await self._client.threads.search(
-            metadata={MONET_RUN_ID_KEY: run_id},
-            limit=20,
-        )
-        # Order threads by creation — earliest first — so later-stage
-        # keys win on collision.
-        threads.sort(key=lambda t: str(t.get("created_at", "")))
-
-        merged_values: dict[str, Any] = {}
-        completed: list[str] = []
-        status = "unknown"
-        pending: Interrupt | None = None
-
-        for t in threads:
-            tid = str(t.get("thread_id", ""))
-            if not tid:
-                continue
-            meta = t.get("metadata") or {}
-            graph = str(meta.get(MONET_GRAPH_KEY, ""))
-            if graph:
-                completed.append(graph)
-
-            values, nxt = await get_state_values(self._client, tid)
-            merged_values.update(values)
-            status = str(t.get("status", status))
-            if nxt:
-                status = "interrupted"
-                pending = Interrupt(
-                    run_id=run_id,
-                    tag=nxt[0],
-                    values=values.get("__interrupt__") or {},
-                    next_nodes=list(nxt),
-                )
-        return RunDetail(
-            run_id=run_id,
-            status=status,
-            completed_stages=completed,
-            values=merged_values,
-            pending_interrupt=pending,
-        )
-
-    async def list_pending(self) -> list[PendingDecision]:
-        """List runs currently waiting for human input."""
-        threads = await self._client.threads.search(
-            status="interrupted",
-            metadata={MONET_RUN_ID_KEY: None},
-        )
-        decisions: list[PendingDecision] = []
-        seen: set[str] = set()
-        for t in threads:
-            meta = t.get("metadata") or {}
-            rid = meta.get(MONET_RUN_ID_KEY)
-            if not isinstance(rid, str) or rid in seen:
-                continue
-            seen.add(rid)
-            tid = str(t.get("thread_id", ""))
-            _, nxt = await get_state_values(self._client, tid)
-            tag = nxt[0] if nxt else ""
-            decisions.append(PendingDecision(run_id=rid, decision_type=tag, summary=""))
-        return decisions
-
-    async def list_graphs(self) -> list[str]:
-        """Return graph IDs available on the connected server."""
-        assistants = await self._client.assistants.search(limit=100)
-        graph_ids: list[str] = []
-        seen: set[str] = set()
-        for a in assistants:
-            gid = a.get("graph_id", "")
-            if gid and gid not in seen:
-                seen.add(gid)
-                graph_ids.append(gid)
-        return sorted(graph_ids)
-
-    # ── Data-plane telemetry ─────────────────────────────────────
+        return await self._progress.get_batch_progress(run_ids)
 
     async def query_events(
         self,
@@ -710,26 +240,7 @@ class MonetClient:
         after: int = 0,
         limit: int = 100,
     ) -> list[ProgressEvent]:
-        """Fetch typed progress events for *run_id* from the data plane.
-
-        Args:
-            run_id: The run to query.
-            after: Return only events with ``event_id > after`` (cursor).
-            limit: Maximum events to return (1-1000).
-
-        Returns:
-            List of :class:`~monet.queue._progress.ProgressEvent` dicts,
-            ordered by ``event_id``.
-        """
-        from monet.client._wire import query_progress_events
-
-        return await query_progress_events(  # type: ignore[return-value]
-            self._data_url,
-            run_id,
-            api_key=self._api_key,
-            after=after,
-            limit=limit,
-        )
+        return await self._progress.query_events(run_id, after=after, limit=limit)
 
     async def subscribe_events(
         self,
@@ -737,114 +248,15 @@ class MonetClient:
         *,
         after: int = 0,
     ) -> AsyncIterator[ProgressEvent]:
-        """Stream typed progress events for *run_id* from the data plane.
-
-        Polls ``GET /runs/{run_id}/events`` and yields events as they
-        arrive, tracking the cursor so reconnects never duplicate. Stops
-        when a terminal event (``run_completed`` / ``run_cancelled``) is
-        received or the caller closes the iterator.
-
-        When ``data_plane_url`` is ``None``, reads from the unified URL.
-        """
-        from monet.client._wire import stream_progress_events
-
-        async for event in stream_progress_events(
-            self._data_url,
-            run_id,
-            api_key=self._api_key,
-            after=after,
-        ):
+        async for event in self._progress.subscribe_events(run_id, after=after):
             yield event  # type: ignore[misc]
 
-    # ── Private helpers ─────────────────────────────────────────
+    # ── Compat accessors (used by tests) ─────────────────────────
 
-    async def _find_interrupted_thread(self, run_id: str) -> tuple[str, str]:
-        """Return ``(thread_id, graph_id)`` for the currently paused thread."""
-        cached = self._store.threads_for(run_id)
-        if cached:
-            for graph_id, thread_id in cached.items():
-                _, nxt = await get_state_values(self._client, thread_id)
-                if nxt:
-                    return thread_id, graph_id
+    @property
+    def _url(self) -> str:
+        return self._core.url
 
-        threads = await self._client.threads.search(
-            metadata={MONET_RUN_ID_KEY: run_id},
-            status="interrupted",
-            limit=5,
-        )
-        if not threads:
-            raise RunNotInterrupted(run_id)
-        t = threads[0]
-        tid = str(t.get("thread_id", ""))
-        graph_id = str((t.get("metadata") or {}).get(MONET_GRAPH_KEY, ""))
-        if not tid:
-            raise RunNotInterrupted(run_id)
-        return tid, graph_id
-
-    async def _post_hitl_decision(self, run_id: str, tag: str) -> None:
-        """Post a HITL_DECISION event to the data plane before resuming.
-
-        Queries progress events to find the most recent HITL_CAUSE event
-        and its cause_id. A 409 (duplicate decision) is treated as success
-        — the prior decision is already recorded and the LangGraph command
-        can proceed. Failure to find a cause_id skips the post so unified
-        mode (no progress writer) is unaffected.
-        """
-        from monet.client._wire import post_hitl_decision, query_progress_events
-
-        events = await query_progress_events(
-            self._data_url, run_id, api_key=self._api_key, after=0, limit=500
-        )
-        cause_id: str | None = None
-        task_id = ""
-        agent_id = ""
-        for ev in reversed(events):
-            if ev.get("event_type") == "hitl_cause":
-                cause_id = (ev.get("payload") or {}).get("cause_id")
-                task_id = ev.get("task_id", "")
-                agent_id = ev.get("agent_id", "")
-                break
-
-        if not cause_id:
-            return
-
-        import contextlib
-
-        with contextlib.suppress(AlreadyResolved):
-            await post_hitl_decision(
-                self._data_url,
-                run_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                cause_id=cause_id,
-                tag=tag,
-                api_key=self._api_key,
-            )
-
-    async def _await_interrupted_status(
-        self,
-        thread_id: str,
-        *,
-        timeout: float = 3.0,
-        interval: float = 0.05,
-    ) -> None:
-        """Poll ``thread.status`` until ``"interrupted"`` or timeout.
-
-        Aegra's resume validator rejects unless the thread row is
-        committed to ``status="interrupted"``. That commit runs after
-        the graph stream exits but before the broker "end" event; in
-        practice scheduling can leave a brief window where the client
-        has observed the interrupt but the DB has not.
-        """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            thread = await self._client.threads.get(thread_id)
-            if thread.get("status") == "interrupted":
-                return
-            if loop.time() >= deadline:
-                raise MonetClientError(
-                    f"thread {thread_id!r} did not reach "
-                    f"'interrupted' status within {timeout}s"
-                )
-            await asyncio.sleep(interval)
+    @property
+    def _data_url(self) -> str:
+        return self._core.data_url

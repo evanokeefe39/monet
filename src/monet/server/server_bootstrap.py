@@ -21,8 +21,16 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from monet.artifacts import artifacts_from_env, configure_artifacts
-from monet.config import MONET_QUEUE_BACKEND, ConfigError, QueueConfig, ServerConfig
+from monet.artifacts import ArtifactClient, artifacts_from_env, configure_artifacts
+from monet.config import (
+    MONET_ARTIFACT_BACKEND,
+    MONET_QUEUE_BACKEND,
+    MONET_QUEUE_CUSTOM_BACKEND,
+    ConfigError,
+    QueueConfig,
+    ServerConfig,
+)
+from monet.config._resolve import resolve_backend
 from monet.core.tracing import configure_tracing
 from monet.orchestration import (
     build_chat_graph as _build_chat_graph,
@@ -48,6 +56,18 @@ def _create_queue(cfg: QueueConfig) -> TaskQueue:
     ``cfg.validate_for_boot()`` must have been called first; this
     function trusts that credentials for the chosen backend are present.
     """
+    if cfg.custom_backend:
+        from typing import cast
+
+        return cast(
+            "TaskQueue",
+            resolve_backend(
+                config_ref=cfg.custom_backend,
+                env_var_name=MONET_QUEUE_CUSTOM_BACKEND,
+                default_factory=lambda: None,  # unreachable — config_ref is set
+                protocol=TaskQueue,
+            ),
+        )
     if cfg.backend == "memory":
         from monet.config import read_int
         from monet.progress.backends.sqlite_store import SqliteProgressStore
@@ -102,7 +122,14 @@ _monet_log_level = os.environ.get("MONET_LOG_LEVEL", "INFO").upper()
 logging.getLogger("monet").setLevel(getattr(logging, _monet_log_level, logging.INFO))
 
 configure_tracing(_config.observability)
-configure_artifacts(artifacts_from_env(default_root=_config.artifacts.root))
+configure_artifacts(
+    resolve_backend(
+        config_ref=_config.artifacts.backend,
+        env_var_name=MONET_ARTIFACT_BACKEND,
+        default_factory=lambda: artifacts_from_env(default_root=_config.artifacts.root),
+        protocol=ArtifactClient,
+    )
+)
 
 
 def bootstrap_server() -> TaskQueue:

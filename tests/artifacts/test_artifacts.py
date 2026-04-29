@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from monet.artifacts._memory import InMemoryArtifactClient
+from monet.artifacts._protocol import ArtifactQueryable
 from monet.artifacts.prebuilt._index import SQLiteIndex
 from monet.artifacts.prebuilt._service import ArtifactService
 from monet.artifacts.prebuilt._storage import FsspecStorage
@@ -297,3 +298,15 @@ async def test_artifacts_from_env_default_root_produces_absolute_uri(
     from pathlib import Path as _Path
 
     assert _Path(raw_path).exists(), f"round-tripped path missing: {raw_path}"
+
+
+# ── ArtifactQueryable protocol ─────────────────────────────────────────
+
+
+def test_artifact_service_satisfies_queryable() -> None:
+    assert issubclass(ArtifactService, ArtifactQueryable)
+
+
+def test_in_memory_client_does_not_satisfy_queryable() -> None:
+    client = InMemoryArtifactClient()
+    assert not isinstance(client, ArtifactQueryable)

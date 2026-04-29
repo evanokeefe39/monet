@@ -44,3 +44,23 @@ class ArtifactClient(ArtifactReader, ArtifactWriter, Protocol):
     """Minimum backend contract: read + write + list."""
 
     ...
+
+
+@runtime_checkable
+class ArtifactQueryable(Protocol):
+    """Optional query capability — backends that support filtered listing.
+
+    Separate from ArtifactClient (ISP): InMemoryArtifactClient should not
+    need to implement query. Checked via isinstance at the route layer to
+    dispatch to backends that support it; absent backends get empty results.
+    """
+
+    async def query(
+        self,
+        *,
+        agent_id: str | None = None,
+        thread_id: str | None = None,
+        tag: str | None = None,
+        since: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]: ...

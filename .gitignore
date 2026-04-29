@@ -1,3 +1,5 @@
+*.png
+
 # graphify knowledge graph (transient, regenerable)
 .graphify/
 graphify-out/
@@ -70,3 +72,4 @@ go/monet-tui.exe
 
 # Compat harness output
 tests/compat/_out/
+saas-copy/

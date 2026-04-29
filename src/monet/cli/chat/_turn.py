@@ -181,8 +181,15 @@ async def run_turn(
             return
         log.info("resume payload=%r", decision)
         stream = resume(thread_id, decision)
+        if isinstance(decision, dict) and decision:
+            parts = ", ".join(f"{k}={v}" for k, v in decision.items())
+            writer(f"[user] {parts}")
         had_output = await drain_stream(
-            stream, writer, source="resume", client=client, thread_id=thread_id
+            stream,
+            writer,
+            source="resume",
+            client=client,
+            thread_id=thread_id,
         )
     else:
         writer(
