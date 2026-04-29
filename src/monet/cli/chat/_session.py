@@ -162,7 +162,6 @@ class SessionController(Widget):
         if not text:
             return
         if self._interrupts.is_pending():
-            self._t.append(f"[user] {text}")
             self._interrupts.consume_if_pending(text)
             return
         if self.app.busy:  # type: ignore[attr-defined]
@@ -178,10 +177,6 @@ class SessionController(Widget):
         if msg.payload is None:
             self.app.notify("please fill in every required field", severity="warning")
             return
-        from monet.cli.chat._hitl._widgets import build_submit_summary
-
-        summary = build_submit_summary(envelope, msg.payload)
-        self._t.append(f"[user] {summary}")
         self._interrupts.consume_payload(msg.payload)
 
     def handle_hitl_dismissed(self, msg: Any) -> None:
@@ -370,12 +365,6 @@ class SessionController(Widget):
         if payload is None:
             self.app.notify("please fill in every required field", severity="warning")
             return
-        envelope = self._hitl_envelope
-        if envelope is not None:
-            from monet.cli.chat._hitl._widgets import build_submit_summary
-
-            summary = build_submit_summary(envelope, payload)
-            self._t.append(f"[user] {summary}")
         self._interrupts.consume_payload(payload)
 
     # ── Interrupt recovery ───────────────────────────────────────────

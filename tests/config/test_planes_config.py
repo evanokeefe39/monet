@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from monet.config import PlanesConfig, ProgressBackend, ProgressConfig
 from monet.config._env import ConfigError
-from monet.config._schema import PlanesConfig, ProgressBackend, ProgressConfig
 
 
 def test_progress_backend_values() -> None:

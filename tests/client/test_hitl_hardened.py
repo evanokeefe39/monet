@@ -277,7 +277,7 @@ async def test_post_hitl_decision_sends_correct_payload() -> None:
         patch("monet.client._wire.query_progress_events", new=fake_query),
         patch("monet.client._wire.post_hitl_decision", new=fake_post),
     ):
-        await client._post_hitl_decision("run-sp", "human_interrupt")
+        await client._runs._post_hitl_decision("run-sp", "human_interrupt")
 
     assert len(posted) == 1
     assert posted[0]["cause_id"] == cause_id
@@ -312,7 +312,7 @@ async def test_post_hitl_decision_swallows_already_resolved() -> None:
         patch("monet.client._wire.post_hitl_decision", new=fake_post_409),
     ):
         # Must not raise even though post raises AlreadyResolved
-        await client._post_hitl_decision("run-dup2", "human_interrupt")
+        await client._runs._post_hitl_decision("run-dup2", "human_interrupt")
 
 
 @pytest.mark.asyncio
@@ -332,7 +332,7 @@ async def test_post_hitl_decision_skips_when_no_cause_event() -> None:
         patch("monet.client._wire.query_progress_events", new=fake_query),
         patch("monet.client._wire.post_hitl_decision", new=fake_post),
     ):
-        await client._post_hitl_decision("run-no-cause", "human_interrupt")
+        await client._runs._post_hitl_decision("run-no-cause", "human_interrupt")
 
     assert not post_called
 
@@ -350,18 +350,18 @@ async def test_resume_calls_post_hitl_decision_in_split_plane() -> None:
         return
         yield  # async generator
 
-    client._find_interrupted_thread = AsyncMock(  # type: ignore[method-assign]
+    client._runs._find_interrupted_thread = AsyncMock(  # type: ignore[method-assign]
         return_value=("thread-1", "default")
     )
-    client._await_interrupted_status = AsyncMock()  # type: ignore[method-assign]
-    client._post_hitl_decision = fake_post_hitl  # type: ignore[method-assign]
+    client._runs._await_interrupted_status = AsyncMock()  # type: ignore[method-assign]
+    client._runs._post_hitl_decision = fake_post_hitl  # type: ignore[method-assign]
 
     async def _fake_get_state(*a: Any, **kw: Any) -> tuple[Any, list[str]]:
         return {}, ["human_interrupt"]
 
     with (
-        patch("monet.client.get_state_values", new=_fake_get_state),
-        patch("monet.client.stream_run", new=fake_stream),
+        patch("monet.client._run.get_state_values", new=_fake_get_state),
+        patch("monet.client._run.stream_run", new=fake_stream),
     ):
         await client.resume("run-sp", "human_interrupt", {"action": "retry"})
 
@@ -389,18 +389,18 @@ async def test_resume_skips_data_plane_post_when_unified() -> None:
         return
         yield  # async generator
 
-    client._find_interrupted_thread = AsyncMock(  # type: ignore[method-assign]
+    client._runs._find_interrupted_thread = AsyncMock(  # type: ignore[method-assign]
         return_value=("thread-1", "default")
     )
-    client._await_interrupted_status = AsyncMock()  # type: ignore[method-assign]
-    client._post_hitl_decision = fake_post_hitl  # type: ignore[method-assign]
+    client._runs._await_interrupted_status = AsyncMock()  # type: ignore[method-assign]
+    client._runs._post_hitl_decision = fake_post_hitl  # type: ignore[method-assign]
 
     async def _fake_get_state(*a: Any, **kw: Any) -> tuple[Any, list[str]]:
         return {}, ["human_interrupt"]
 
     with (
-        patch("monet.client.get_state_values", new=_fake_get_state),
-        patch("monet.client.stream_run", new=fake_stream),
+        patch("monet.client._run.get_state_values", new=_fake_get_state),
+        patch("monet.client._run.stream_run", new=fake_stream),
     ):
         await client.resume("run-unified", "human_interrupt", {"action": "retry"})
 

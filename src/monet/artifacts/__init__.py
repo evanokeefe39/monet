@@ -11,6 +11,7 @@ from monet.core.artifacts import (
 from ._memory import InMemoryArtifactClient
 from ._protocol import (
     ArtifactClient,
+    ArtifactQueryable,
     ArtifactReader,
     ArtifactWriter,
 )
@@ -37,6 +38,7 @@ def configure_artifacts(client: ArtifactClient | None) -> None:
 
 __all__ = [
     "ArtifactClient",
+    "ArtifactQueryable",
     "ArtifactReader",
     "ArtifactService",
     "ArtifactStore",

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from monet.queue import TaskQueue
     from monet.server._capabilities import CapabilityIndex
 
-from monet.config._schema import ChatConfig
+from monet.config import ChatConfig
 
 __all__ = [
     "_create_control_plane",
@@ -220,7 +220,7 @@ def _create_control_plane() -> FastAPI:
     Reads config from env/toml and returns a control-plane-only FastAPI app.
     Suitable for use as a Uvicorn ``factory=True`` entry point.
     """
-    from monet.config._schema import QueueConfig
+    from monet.config import QueueConfig
     from monet.orchestration import configure_capability_index
     from monet.server._capabilities import CapabilityIndex
 
@@ -256,7 +256,7 @@ def _create_data_plane() -> FastAPI:
     Reads config from env/toml and returns a data-plane-only FastAPI app.
     Requires ``MONET_PROGRESS_BACKEND`` to be set.
     """
-    from monet.config._schema import PlanesConfig
+    from monet.config import PlanesConfig
 
     planes = PlanesConfig.load()
     if planes.progress is None:
@@ -269,7 +269,23 @@ def _create_data_plane() -> FastAPI:
         )
     planes.progress.validate_for_boot()
 
-    if planes.progress.backend.value == "postgres":
+    if planes.progress.custom_backend:
+        from monet.config._env import MONET_PROGRESS_CUSTOM_BACKEND
+        from monet.config._resolve import resolve_backend
+        from monet.progress import ProgressWriter
+
+        backend = resolve_backend(
+            config_ref=planes.progress.custom_backend,
+            env_var_name=MONET_PROGRESS_CUSTOM_BACKEND,
+            default_factory=lambda: None,  # unreachable — config_ref is set
+            protocol=ProgressWriter,
+        )
+        return create_data_app(writer=backend, reader=backend)
+
+    if (
+        planes.progress.backend is not None
+        and planes.progress.backend.value == "postgres"
+    ):
         from monet.progress.backends.postgres import PostgresProgressBackend
 
         pg = PostgresProgressBackend(dsn=planes.progress.dsn or "")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -10,12 +10,14 @@ if TYPE_CHECKING:
 __all__ = ["ProgressReader", "ProgressWriter"]
 
 
+@runtime_checkable
 class ProgressWriter(Protocol):
     async def record(self, run_id: str, event: ProgressEvent) -> int:
         """Append event. Returns assigned event_id. Monotonic within run_id."""
         ...
 
 
+@runtime_checkable
 class ProgressReader(Protocol):
     async def query(
         self,
