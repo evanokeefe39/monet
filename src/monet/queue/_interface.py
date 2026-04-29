@@ -43,7 +43,7 @@ class AwaitAlreadyConsumedError(Exception):
 
 @runtime_checkable
 class TaskQueue(Protocol):
-    """Queue interface. Six methods, transport-neutral."""
+    """Queue interface. Ten members, transport-neutral."""
 
     async def enqueue(self, task: TaskRecord) -> str:
         """Submit a task. Returns the opaque task_id (usually ``task["task_id"]``).

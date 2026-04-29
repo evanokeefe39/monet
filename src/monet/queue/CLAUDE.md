@@ -4,7 +4,7 @@
 
 Transport layer. Task dispatch + result delivery between orchestration (producer) and workers (consumer). Owns nothing else: no agent logic, no graph state, no artifact storage, no HITL, no routing.
 
-## Protocol (7 methods)
+## Protocol (10 members)
 
 ```python
 class TaskQueue(Protocol):
@@ -15,7 +15,12 @@ class TaskQueue(Protocol):
     async def publish_progress(task_id, event: dict) -> None
     def subscribe_progress(task_id) -> AsyncIterator[dict]
     async def await_completion(task_id, timeout) -> AgentResult
+    async def ping() -> bool
+    @property backend_name -> str
+    async def close() -> None
 ```
+
+`QueueMaintenance` is a separate optional protocol for persistent backends: `lease_ttl_seconds`, `reclaim_expired`, `renew_lease`, `cancel`.
 
 ## Public types
 
@@ -33,7 +38,7 @@ Worker claim loop (`run_worker`) and dispatch backends live in `monet.worker`.
 
 ## Design invariants
 
-1. Protocol is 7 methods. New methods need strong justification, must not couple to specific transport.
+1. Protocol is 10 members. New members need strong justification, must not couple to specific transport.
 2. Protocol makes no assumptions about Redis/Kafka/SQS. Implementations handle leases, dedup, crash recovery internally.
 3. Queue knows nothing about agents, graph topology, or workflow. Receives `TaskRecord`, delivers `AgentResult`.
 4. Workers claim tasks on demand (pull). Queue never pushes to workers.
@@ -52,23 +57,18 @@ Worker claim loop (`run_worker`) and dispatch backends live in `monet.worker`.
 
 ## Redis-only surface (not on Protocol)
 
-| Method | Purpose | Caller |
+| Member | Purpose | Caller |
 |--------|---------|--------|
-| `record_push_dispatch()` | Track in-flight push tasks | `orchestration/_invoke.py` |
-| `pop_push_dispatch()` | Remove on completion | `orchestration/_invoke.py`, `server/_aegra_routes.py` |
-| `list_in_flight_push_dispatches()` | Boot recovery scan | `server/_aegra_routes.py` |
-| `reclaim_expired_internal()` | Sweeper reclaims dead PEL | `server/_aegra_routes.py` |
-| `ping()` | Health check (socket only) | `server/_routes.py` |
-| `close()` | Connection cleanup | `server/__init__.py` |
-| `_lease_ttl` | Derive sweeper interval | `server/__init__.py` |
+| `reclaim_expired_internal()` | PEL sweep implementation; called by `reclaim_expired` | internal |
+| `_lease_ttl` | Private int attribute; `lease_ttl_seconds` property delegates to it | `server/__init__.py` |
 
 ## Callers
 
 | Package | Usage |
 |---------|-------|
-| `orchestration/_invoke.py` | enqueue, await_completion, complete, fail, publish_progress, push dispatch |
+| `orchestration/_invoke.py` | enqueue, await_completion, complete, fail, publish_progress |
 | `server/_routes.py` | claim, complete, fail, publish_progress, ping |
-| `server/_aegra_routes.py` | push recovery (QueueMaintenance) |
+| `server/_aegra_routes.py` | reclaim_expired (QueueMaintenance), renew_lease |
 | `server/__init__.py` | TaskQueue type, close, _lease_ttl |
 | `server/server_bootstrap.py` | InMemoryTaskQueue, TaskQueue instantiation |
 | `cli/_worker.py` | InMemoryTaskQueue |
@@ -77,7 +77,6 @@ Worker claim loop (`run_worker`) and dispatch backends live in `monet.worker`.
 ## Known issues
 
 - Progress events untyped `dict[str, Any]`. Schema version `v: "1"` on stored entries but no payload validation.
-- `list_in_flight_push_dispatches()` does unbounded SCAN — no pagination.
 - `InMemoryTaskQueue._pruned_ids` uses `set.pop()` — arbitrary-order eviction.
 - No cost/token metering at queue layer.
 - `ping()` checks socket only, not operational readiness (streams, pubsub).

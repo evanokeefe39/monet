@@ -9,7 +9,6 @@
 - `handlers.py` — stream handler factories
 - `exceptions.py` — `SemanticError`, `EscalationRequired`, `NeedsHumanReview`
 - `tracing.py` — public tracing API
-- `agent_manifest.py` — `configure_agent_manifest`, `get_agent_manifest` (orchestration-side)
 - `_ports.py` — canonical local ports (`STANDARD_POSTGRES_PORT=5432`, `STANDARD_REDIS_PORT=6379`, `STANDARD_DEV_PORT=2026`, `STANDARD_LANGFUSE_PORT=3000`) and `state_file()` helper
 
 **`events/`** — zero-import foundation (no imports from any other monet package)
@@ -68,7 +67,7 @@
 - `plan_context.py` — `inject_plan_context` worker hook that resolves `work_brief_pointer` + `node_id` into task content
 
 **`queue/`** — task queue transport protocols and backends
-- `_interface.py` — `TaskQueue` Protocol (9 methods): `enqueue`, `claim`, `complete`, `fail`, `publish_progress`, `subscribe_progress`, `await_completion`, `renew_lease`, `cancel`; `QueueMaintenance` Protocol; `ProgressStore` Protocol; `AwaitAlreadyConsumedError`
+- `_interface.py` — `TaskQueue` Protocol (10 members): `enqueue`, `claim`, `complete`, `fail`, `publish_progress`, `subscribe_progress`, `await_completion`, `ping`, `backend_name`, `close`; `QueueMaintenance` Protocol (4 members): `lease_ttl_seconds`, `reclaim_expired`, `renew_lease`, `cancel`; `ProgressStore` Protocol; `AwaitAlreadyConsumedError`
 - `backends/memory.py` — `InMemoryTaskQueue`; `_leases: dict[str, float]` + `_cancelled: set[str]` + `threading.Lock`
 - `backends/sqlite_store.py` — SQLite queue; `task_leases` table for heartbeat/cancel
 - `backends/redis_streams.py` — Redis Streams queue; stream entry ID ms component as `event_id`; `HSET task:{id}:lease` for heartbeat
@@ -112,6 +111,11 @@
 **`artifacts/`** — artifact store: index, memory, metadata, storage, protocol, service, `artifacts_from_env()` helper
 - `_migrations.py` — programmatic alembic entry points: `apply_migrations`, `check_at_head`, `head_revision`, `stamp_head`
 - `artifacts_from_env()` auto-migrates for dev ergonomics; production deploys gate with `monet db check` + construct `SQLiteIndex` directly
+
+**`schedule/`** — cron-based graph scheduling
+- `_protocol.py` — `ScheduleRecord` TypedDict (wire shape: `schedule_id`, `graph_id`, `input`, `cron_expression`, `enabled`, `created_at`, `last_run_at`); `ScheduleStore` Protocol (7 methods: `create`, `list_all`, `get`, `delete`, `set_enabled`, `update_last_run`, `close`); `Scheduler` Protocol (6 methods: `start`, `add_job`, `remove_job`, `pause_job`, `resume_job`, `shutdown`)
+- `_apscheduler.py` — APScheduler-backed `Scheduler` implementation
+- `backends/sqlite.py` — SQLite `ScheduleStore` implementation
 
 **`_migrations/`** — package-shipped alembic tree (`env.py`, `script.py.mako`, `versions/`). Sync-only (no asyncio loops). Baseline `0001_baseline` creates `artifacts` table. `0002_progress_events_up.sql` / `_down.sql` — creates `progress_events` table with `ix_progress_run_event` and `ix_progress_run_type` indexes.
 
