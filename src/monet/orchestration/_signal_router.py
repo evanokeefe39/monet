@@ -9,9 +9,12 @@ match wins.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from monet.signals import BLOCKING, RECOVERABLE, SignalType, in_group
+
+if TYPE_CHECKING:
+    from monet.types import Signal
 
 
 class SignalRoute:
@@ -19,7 +22,7 @@ class SignalRoute:
 
     __slots__ = ("action", "signals")
 
-    def __init__(self, action: str, signals: list[dict[str, Any]]) -> None:
+    def __init__(self, action: str, signals: list[Signal]) -> None:
         self.action = action
         self.signals = signals
 
@@ -39,10 +42,10 @@ class SignalRouter:
         self._rules.append((group, action))
         return self
 
-    def route(self, signals: list[dict[str, Any]]) -> SignalRoute | None:
+    def route(self, signals: list[Signal]) -> SignalRoute | None:
         """Evaluate signals against rules. Returns first matching route, or None."""
         for group, action in self._rules:
-            matching = [s for s in signals if in_group(s.get("type", ""), group)]
+            matching = [s for s in signals if in_group(s["type"], group)]
             if matching:
                 return SignalRoute(action=action, signals=matching)
         return None

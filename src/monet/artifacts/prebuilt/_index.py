@@ -33,6 +33,7 @@ class ArtifactRecord(Base):
     thread_id: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[str] = mapped_column(Text, default="{}")  # JSON string
     created_at: Mapped[str] = mapped_column(String)
+    key: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
 
     __table_args__ = (
         Index("ix_artifacts_run_id", "run_id"),

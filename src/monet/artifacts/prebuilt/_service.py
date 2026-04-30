@@ -84,6 +84,7 @@ class ArtifactService:
             thread_id=thread_id,
             tags=tags,
             created_at=datetime.now(tz=UTC).isoformat(),
+            key=key,
         )
         await self._index.put(metadata)
 

@@ -1,6 +1,6 @@
 import datetime
 import logging
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -40,6 +40,69 @@ class UnifiedEvent(TypedDict):
     call_id: str | None
     parent_call_id: str | None
     data: dict[str, Any]
+
+
+class TelemetryEntry(TypedDict, total=False):
+    """Shape of a progress event from the thread history stream."""
+
+    timestamp_ms: int
+    _redis_id: str
+    task_id: str | None
+    parent_call_id: str | None
+    status: str
+    agent_id: str
+
+
+class LangGraphSnapshot(TypedDict, total=False):
+    """Normalised shape of a LangGraph thread history snapshot."""
+
+    created_at: str
+    values: dict[str, Any] | None
+
+
+class LangGraphMessage(TypedDict, total=False):
+    """Normalised shape of a single LangGraph message."""
+
+    id: str | None
+    role: str | None
+    type: str | None
+    content: Any
+
+
+def _coerce_snapshot(snapshot: Any) -> LangGraphSnapshot:
+    """Normalise dict-or-object SDK snapshot into a typed shape."""
+    if isinstance(snapshot, dict):
+        values: Any = snapshot.get("values")
+        if values is not None and not isinstance(values, dict):
+            values = {"messages": getattr(values, "messages", [])}
+        return LangGraphSnapshot(
+            created_at=str(snapshot.get("created_at") or ""),
+            values=values,
+        )
+    # Object variant (older SDK versions)
+    raw_values: Any = getattr(snapshot, "values", None)
+    if raw_values is not None and not isinstance(raw_values, dict):
+        raw_values = {"messages": getattr(raw_values, "messages", [])}
+    return LangGraphSnapshot(
+        created_at=str(getattr(snapshot, "created_at", "") or ""),
+        values=raw_values,
+    )
+
+
+def _coerce_message(m: Any) -> LangGraphMessage:
+    """Normalise dict-or-object SDK message into a typed shape."""
+    if isinstance(m, dict):
+        return cast("LangGraphMessage", m)
+    if hasattr(m, "dict") and callable(m.dict):
+        return cast("LangGraphMessage", m.dict())
+    try:
+        return cast("LangGraphMessage", dict(m))
+    except (TypeError, ValueError):
+        return LangGraphMessage(
+            role=str(getattr(m, "role", "unknown") or "unknown"),
+            content=getattr(m, "content", ""),
+            id=getattr(m, "id", None),
+        )
 
 
 def _parse_iso_ms(iso: str) -> int:
@@ -161,32 +224,20 @@ async def get_thread_transcript(
     seen_user_content: set[tuple[int, str]] = set()
     _msg_seq = 0
     for s_idx, snapshot in enumerate(reversed(list(history))):
-        # Handle both dict-like and object-like snapshots from different SDK versions
-        _snap: Any = snapshot
-        s_dict: dict[str, Any] = (
-            _snap
-            if isinstance(_snap, dict)
-            else (_snap.dict() if hasattr(_snap, "dict") else {})
-        )
-        created_at = s_dict.get("created_at") or getattr(snapshot, "created_at", "")
-
-        ts_ms = _parse_iso_ms(str(created_at))
-        values = s_dict.get("values", {}) or getattr(snapshot, "values", {})
+        snap = _coerce_snapshot(snapshot)
+        ts_ms = _parse_iso_ms(snap.get("created_at", "") or "")
+        values = snap.get("values")
 
         # Guard against None-values in partial checkpoints
         if values is None:
             continue
 
-        msgs = (
-            values.get("messages", [])
-            if isinstance(values, dict)
-            else getattr(values, "messages", [])
-        )
-        msgs = msgs or []
+        msgs = values.get("messages") or []
 
         for m_idx, m in enumerate(msgs):
             try:
-                mid = m.get("id") if isinstance(m, dict) else getattr(m, "id", None)
+                msg = _coerce_message(m)
+                mid = msg.get("id")
 
                 identity = mid or f"pos-{m_idx}"
                 if identity in seen_msg_ids:
@@ -196,39 +247,17 @@ async def get_thread_transcript(
                 # Content-based dedup for user messages: update_state and
                 # the subsequent graph run can assign different IDs to the
                 # same user message, producing duplicates in the timeline.
-                _raw_role = (
-                    m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+                m_role = msg.get("role") or _MSG_TYPE_TO_ROLE.get(
+                    str(msg.get("type") or ""), ""
                 )
-                _raw_type = (
-                    m.get("type") if isinstance(m, dict) else getattr(m, "type", "")
-                )
-                m_role = _raw_role or _MSG_TYPE_TO_ROLE.get(str(_raw_type or ""), "")
-                m_content = (
-                    m.get("content")
-                    if isinstance(m, dict)
-                    else getattr(m, "content", "")
-                )
+                m_content = msg.get("content")
                 if m_role in ("user", "human") and isinstance(m_content, str):
                     content_key = (m_idx, m_content)
                     if content_key in seen_user_content:
                         continue
                     seen_user_content.add(content_key)
 
-                # Robust dict conversion
-                if isinstance(m, dict):
-                    m_dict = m
-                elif hasattr(m, "dict") and callable(m.dict):
-                    m_dict = m.dict()
-                else:
-                    try:
-                        m_dict = dict(m)
-                    except (TypeError, ValueError):
-                        m_dict = {
-                            "role": getattr(m, "role", "unknown"),
-                            "content": getattr(m, "content", ""),
-                            "id": mid,
-                        }
-
+                m_dict = dict(msg)
                 if "role" not in m_dict:
                     m_dict["role"] = m_role or "unknown"
 
@@ -260,14 +289,14 @@ async def get_thread_transcript(
 
     merged: list[UnifiedEvent] = []
     tel_idx = 0
-    for msg in msg_events:
+    for me in msg_events:
         while (
             tel_idx < len(tel_events)
-            and tel_events[tel_idx]["timestamp_ms"] < msg["timestamp_ms"]
+            and tel_events[tel_idx]["timestamp_ms"] < me["timestamp_ms"]
         ):
             merged.append(tel_events[tel_idx])
             tel_idx += 1
-        merged.append(msg)
+        merged.append(me)
     while tel_idx < len(tel_events):
         merged.append(tel_events[tel_idx])
         tel_idx += 1

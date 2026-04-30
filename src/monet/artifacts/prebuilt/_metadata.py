@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 
-class ArtifactMetadata(TypedDict):
-    """Metadata sidecar for a stored artifact."""
+class _ArtifactMetadataRequired(TypedDict):
+    """Required metadata fields for a stored artifact."""
 
     artifact_id: str
     content_type: str
@@ -21,3 +21,9 @@ class ArtifactMetadata(TypedDict):
     thread_id: str | None
     tags: dict[str, Any]
     created_at: str  # ISO 8601
+
+
+class ArtifactMetadata(_ArtifactMetadataRequired, total=False):
+    """Metadata sidecar for a stored artifact."""
+
+    key: str | None

@@ -17,7 +17,9 @@ import importlib
 import json
 import logging
 import tomllib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -25,11 +27,57 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("monet.agents_config")
 
-_VALID_TRANSPORT_TYPES = frozenset({"http", "sse", "cli"})
-_VALID_HANDLER_TYPES = frozenset({"python", "bash", "webhook"})
-_VALID_EVENT_TYPES = frozenset({"progress", "signal", "artifact", "result", "error"})
-# Default timeout for bash/webhook handlers (seconds).
-_DEFAULT_HANDLER_TIMEOUT = 5.0
+
+# ── Typed config models (extra="forbid" so typos surface immediately) ────────
+
+
+class AgentTransportConfig(BaseModel):
+    """Transport declaration for a config-declared agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["http", "sse", "cli"]
+    url: str | None = None
+    cmd: list[str] | None = None
+    timeout: float = 30.0
+
+    @model_validator(mode="after")
+    def _check_requirements(self) -> AgentTransportConfig:
+        if self.type in ("http", "sse") and not self.url:
+            raise ValueError(f"{self.type.upper()} transport requires 'url'")
+        if self.type == "cli" and not self.cmd:
+            raise ValueError("CLI transport requires 'cmd' as an array of strings")
+        return self
+
+
+class AgentEventHandlerConfig(BaseModel):
+    """A single ``[[agent.on]]`` event handler declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: Literal["progress", "signal", "artifact", "result", "error"]
+    type: Literal["python", "bash", "webhook"]
+    handler: str | None = None  # python handler: "module.path:function_name"
+    cmd: str | None = None  # bash handler: shell command string
+    url: str | None = None  # webhook handler: target URL
+    timeout: float = 5.0
+
+
+class AgentEntryConfig(BaseModel):
+    """Full declaration for a single ``[[agent]]`` entry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    transport: AgentTransportConfig
+    command: str = "fast"
+    pool: str = "local"
+    description: str = ""
+    allow_empty: bool = False
+    on: list[AgentEventHandlerConfig] = []
+
+
+# ── Public entry point ───────────────────────────────────────────────────────
 
 
 def load_agents(path: Path) -> int:
@@ -54,108 +102,67 @@ def load_agents(path: Path) -> int:
         raise ValueError(msg)
 
     for i, entry in enumerate(entries):
-        _register_agent(entry, path, i)
+        try:
+            config = AgentEntryConfig.model_validate(entry)
+        except ValidationError as exc:
+            raise ValueError(f"{path}: agent[{i}] invalid declaration: {exc}") from exc
+        _register_agent(config, path, i)
 
     return len(entries)
 
 
-def _register_agent(entry: dict[str, Any], path: Path, index: int) -> None:
+# ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _register_agent(config: AgentEntryConfig, path: Path, index: int) -> None:
     """Generate a handler function from config and apply ``@agent``."""
-    # Validate required fields.
-    agent_id = entry.get("id")
-    if not agent_id or not isinstance(agent_id, str):
-        msg = f"{path}: agent[{index}] missing required 'id' field"
-        raise ValueError(msg)
-
-    transport = entry.get("transport")
-    if not isinstance(transport, dict):
-        msg = f"{path}: agent[{index}] ({agent_id!r}) missing 'transport' table"
-        raise ValueError(msg)
-
-    transport_type = transport.get("type")
-    if transport_type not in _VALID_TRANSPORT_TYPES:
-        msg = (
-            f"{path}: agent[{index}] ({agent_id!r}) invalid transport type "
-            f"{transport_type!r}. Must be one of: "
-            f"{', '.join(sorted(_VALID_TRANSPORT_TYPES))}"
-        )
-        raise ValueError(msg)
-
-    # Validate transport-specific requirements eagerly.
-    if transport_type in ("http", "sse"):
-        if not transport.get("url"):
-            msg = (
-                f"{path}: agent[{index}] ({agent_id!r}) "
-                f"{transport_type.upper()} transport requires 'url'"
-            )
-            raise ValueError(msg)
-    elif transport_type == "cli":
-        cmd = transport.get("cmd")
-        if not cmd or not isinstance(cmd, list):
-            msg = (
-                f"{path}: agent[{index}] ({agent_id!r}) "
-                "CLI transport requires 'cmd' as an array of strings"
-            )
-            raise ValueError(msg)
-
-    command: str = entry.get("command", "fast")
-    pool: str = entry.get("pool", "local")
-    description: str = entry.get("description", "")
-    allow_empty: bool = entry.get("allow_empty", False)
-
-    # Resolve event handlers eagerly (fail-fast on bad config).
-    on_entries: list[dict[str, Any]] = entry.get("on", [])
     resolved_handlers: list[tuple[str, Any]] = []
-    for j, on_entry in enumerate(on_entries):
+    for j, on_cfg in enumerate(config.on):
         event_type, handler_fn = _resolve_event_handler(
-            on_entry, path, index, agent_id, j
+            on_cfg, path, index, config.id, j
         )
         resolved_handlers.append((event_type, handler_fn))
 
-    # Build the handler via a factory function so loop variables are
-    # bound at call time, not captured by late-binding closure.
-    handler = _make_handler(dict(transport), agent_id, command, resolved_handlers)
+    handler = _make_handler(
+        config.transport, config.id, config.command, resolved_handlers
+    )
 
-    # Check for duplicate registration before applying.
     from monet.core.registry import default_registry
 
-    if default_registry.exists(agent_id, command):
+    if default_registry.exists(config.id, config.command):
         msg = (
-            f"{path}: agent[{index}] ({agent_id!r}/{command!r}) conflicts with "
+            f"{path}: agent[{index}] ({config.id!r}/{config.command!r}) conflicts with "
             "an already-registered handler (from @agent decorator or another config)"
         )
         raise ValueError(msg)
 
-    # Set docstring before applying @agent (decorator reads first line).
-    handler.__doc__ = description or f"External {transport_type} agent"
+    handler.__doc__ = config.description or f"External {config.transport.type} agent"
 
-    # Apply the decorator — gets all wrapping, tracing, hooks, registration.
     from monet.core.decorator import agent
 
-    agent(agent_id=agent_id, command=command, pool=pool, allow_empty=allow_empty)(
-        handler
-    )
+    agent(
+        agent_id=config.id,
+        command=config.command,
+        pool=config.pool,
+        allow_empty=config.allow_empty,
+    )(handler)
 
     logger.info(
         "Registered config-declared agent %s/%s (transport=%s, pool=%s)",
-        agent_id,
-        command,
-        transport_type,
-        pool,
+        config.id,
+        config.command,
+        config.transport.type,
+        config.pool,
     )
 
 
 def _make_handler(
-    transport: dict[str, Any],
+    transport: AgentTransportConfig,
     agent_id: str,
     command: str,
     event_handlers: list[tuple[str, Any]],
 ) -> Any:
-    """Create an async handler with values bound at creation time.
-
-    The handler signature uses only valid ``AgentRunContext`` field names
-    so it passes the ``@agent`` decorator's signature validation.
-    """
+    """Create an async handler with values bound at creation time."""
 
     async def handler(
         task: str,
@@ -168,7 +175,6 @@ def _make_handler(
             "agent_id": agent_id,
         }
         stream = _build_stream(transport, payload)
-        # Register config-declared event handlers (supplement defaults).
         for event_type, handler_fn in event_handlers:
             stream.on_after(event_type, handler_fn)
         result: str | None = await stream.run()
@@ -177,49 +183,25 @@ def _make_handler(
     return handler
 
 
-def _build_stream(transport: dict[str, Any], payload: dict[str, Any]) -> Any:
-    """Dispatch to the appropriate ``AgentStream`` constructor.
-
-    Extension point: add a new ``transport_type`` branch here to support
-    additional transports. There is no registry — each transport is a named
-    branch in this function.
-    """
+def _build_stream(transport: AgentTransportConfig, payload: dict[str, Any]) -> Any:
+    """Dispatch to the appropriate ``AgentStream`` constructor."""
     from monet.streams import AgentStream
 
-    transport_type = transport["type"]
-    timeout = float(transport.get("timeout", 30.0))
+    if transport.type == "http":
+        return AgentStream.http_post(transport.url, payload, timeout=transport.timeout)  # type: ignore[arg-type]
 
-    if transport_type == "http":
-        url = transport.get("url")
-        if not url:
-            msg = "HTTP transport requires 'url'"
-            raise ValueError(msg)
-        return AgentStream.http_post(url, payload, timeout=timeout)
+    if transport.type == "sse":
+        return AgentStream.sse_post(transport.url, payload, timeout=transport.timeout)  # type: ignore[arg-type]
 
-    if transport_type == "sse":
-        url = transport.get("url")
-        if not url:
-            msg = "SSE transport requires 'url'"
-            raise ValueError(msg)
-        return AgentStream.sse_post(url, payload, timeout=timeout)
-
-    if transport_type == "cli":
-        cmd = transport.get("cmd")
-        if not cmd or not isinstance(cmd, list):
-            msg = "CLI transport requires 'cmd' as an array of strings"
-            raise ValueError(msg)
-        return AgentStream.cli(cmd, stdin_payload=payload)
-
-    # Unreachable given _VALID_TRANSPORT_TYPES check, but guard anyway.
-    msg = f"Unknown transport type: {transport_type!r}"
-    raise ValueError(msg)
+    # cli — transport.cmd is guaranteed non-None by AgentTransportConfig validator
+    return AgentStream.cli(transport.cmd, stdin_payload=payload)  # type: ignore[arg-type]
 
 
-# ── Event handler resolution ─────────────────────────────────────────────
+# ── Event handler resolution ─────────────────────────────────────────────────
 
 
 def _resolve_event_handler(
-    entry: dict[str, Any],
+    cfg: AgentEventHandlerConfig,
     path: Path,
     agent_index: int,
     agent_id: str,
@@ -234,37 +216,20 @@ def _resolve_event_handler(
     """
     prefix = f"{path}: agent[{agent_index}] ({agent_id!r}) on[{handler_index}]"
 
-    event = entry.get("event")
-    if event not in _VALID_EVENT_TYPES:
-        msg = (
-            f"{prefix}: invalid event {event!r}. "
-            f"Must be one of: {', '.join(sorted(_VALID_EVENT_TYPES))}"
-        )
-        raise ValueError(msg)
-
-    handler_type = entry.get("type")
-    if handler_type not in _VALID_HANDLER_TYPES:
-        msg = (
-            f"{prefix}: invalid handler type {handler_type!r}. "
-            f"Must be one of: {', '.join(sorted(_VALID_HANDLER_TYPES))}"
-        )
-        raise ValueError(msg)
-
-    if handler_type == "python":
-        return event, _import_python_handler(entry, prefix)
-    if handler_type == "bash":
-        return event, _make_bash_handler(entry, prefix)
-    # webhook
-    return event, _make_webhook_handler(entry, prefix)
+    if cfg.type == "python":
+        return cfg.event, _import_python_handler(cfg, prefix)
+    if cfg.type == "bash":
+        return cfg.event, _make_bash_handler(cfg, prefix)
+    return cfg.event, _make_webhook_handler(cfg, prefix)
 
 
 def _import_python_handler(
-    entry: dict[str, Any],
+    cfg: AgentEventHandlerConfig,
     prefix: str,
 ) -> Callable[..., Any]:
     """Import a Python handler from a ``module:function`` spec."""
-    spec = entry.get("handler")
-    if not spec or not isinstance(spec, str) or ":" not in spec:
+    spec = cfg.handler
+    if not spec or ":" not in spec:
         msg = (
             f"{prefix}: python handler requires "
             "'handler' as 'module.path:function_name'"
@@ -287,16 +252,16 @@ def _import_python_handler(
 
 
 def _make_bash_handler(
-    entry: dict[str, Any],
+    cfg: AgentEventHandlerConfig,
     prefix: str,
 ) -> Callable[[dict[str, Any]], Awaitable[None]]:
     """Create an async handler that runs a bash command with event JSON on stdin."""
-    cmd = entry.get("cmd")
-    if not cmd or not isinstance(cmd, str):
+    if not cfg.cmd:
         msg = f"{prefix}: bash handler requires 'cmd' as a string"
         raise ValueError(msg)
 
-    timeout = float(entry.get("timeout", _DEFAULT_HANDLER_TIMEOUT))
+    cmd = cfg.cmd
+    timeout = cfg.timeout
 
     async def handler(event: dict[str, Any]) -> None:
         proc = await asyncio.create_subprocess_exec(
@@ -333,17 +298,14 @@ def _make_bash_handler(
 
 
 def _make_webhook_handler(
-    entry: dict[str, Any],
+    cfg: AgentEventHandlerConfig,
     prefix: str,
 ) -> Callable[[dict[str, Any]], Awaitable[None]]:
     """Create an async webhook handler using the existing factory."""
-    url = entry.get("url")
-    if not url or not isinstance(url, str):
+    if not cfg.url:
         msg = f"{prefix}: webhook handler requires 'url'"
         raise ValueError(msg)
 
-    timeout = float(entry.get("timeout", _DEFAULT_HANDLER_TIMEOUT))
-
     from monet.handlers import webhook_handler
 
-    return webhook_handler(url, timeout=timeout)
+    return webhook_handler(cfg.url, timeout=cfg.timeout)

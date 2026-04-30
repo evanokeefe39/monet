@@ -157,7 +157,7 @@ type = "http"
 url = "http://x:8080"
 """,
         )
-        with pytest.raises(ValueError, match="missing required 'id'"):
+        with pytest.raises(ValueError, match="Field required"):
             load_agents(path)
 
     def test_missing_transport(self, tmp_path: Path) -> None:
@@ -168,7 +168,7 @@ url = "http://x:8080"
 id = "x"
 """,
         )
-        with pytest.raises(ValueError, match="missing 'transport'"):
+        with pytest.raises(ValueError, match="Field required"):
             load_agents(path)
 
     def test_invalid_transport_type(self, tmp_path: Path) -> None:
@@ -181,7 +181,7 @@ id = "x"
 type = "grpc"
 """,
         )
-        with pytest.raises(ValueError, match="invalid transport type"):
+        with pytest.raises(ValueError, match="Input should be"):
             load_agents(path)
 
     def test_http_missing_url(self, tmp_path: Path) -> None:
@@ -252,7 +252,7 @@ type = "webhook"
 url = "http://hook:9090"
 """,
         )
-        with pytest.raises(ValueError, match="invalid event"):
+        with pytest.raises(ValueError, match="Input should be"):
             load_agents(path)
 
     def test_invalid_handler_type(self, tmp_path: Path) -> None:
@@ -270,7 +270,7 @@ event = "progress"
 type = "grpc"
 """,
         )
-        with pytest.raises(ValueError, match="invalid handler type"):
+        with pytest.raises(ValueError, match="Input should be"):
             load_agents(path)
 
     def test_python_handler_bad_spec(self, tmp_path: Path) -> None:

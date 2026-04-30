@@ -457,30 +457,25 @@ async def test_get_batch_progress_501_without_progress_store(
 
 
 def test_work_brief_dag_renders_mermaid_with_edges() -> None:
+    from monet.orchestration.prebuilt._state import WorkBriefNode
     from monet.server.routes._artifacts import _render_work_brief_dag
 
     nodes = [
-        {
-            "id": "a",
-            "agent_id": "planner",
-            "command": "fast",
-            "task": "draft outline",
-            "depends_on": [],
-        },
-        {
-            "id": "b",
-            "agent_id": "writer",
-            "command": "deep",
-            "task": "write body",
-            "depends_on": ["a"],
-        },
-        {
-            "id": "c",
-            "agent_id": "qa",
-            "command": "check",
-            "task": "review output",
-            "depends_on": ["a", "b"],
-        },
+        WorkBriefNode(id="a", agent_id="planner", command="fast", task="draft outline"),
+        WorkBriefNode(
+            id="b",
+            agent_id="writer",
+            command="deep",
+            task="write body",
+            depends_on=["a"],
+        ),
+        WorkBriefNode(
+            id="c",
+            agent_id="qa",
+            command="check",
+            task="review output",
+            depends_on=["a", "b"],
+        ),
     ]
     html = _render_work_brief_dag(nodes)
     assert 'class="mermaid"' in html
@@ -501,13 +496,12 @@ def test_work_brief_dag_renders_mermaid_with_edges() -> None:
 
 
 def test_work_brief_dag_truncates_long_task() -> None:
+    from monet.orchestration.prebuilt._state import WorkBriefNode
     from monet.server.routes._artifacts import _render_work_brief_dag
     from monet.server.routes._common import _DAG_TASK_CHAR_BUDGET
 
     long = "x" * (_DAG_TASK_CHAR_BUDGET + 50)
-    nodes = [
-        {"id": "a", "agent_id": "p", "command": "c", "task": long, "depends_on": []},
-    ]
+    nodes = [WorkBriefNode(id="a", agent_id="p", command="c", task=long)]
     html = _render_work_brief_dag(nodes)
     # Ellipsis appended; full string not present.
     assert "…" in html
@@ -521,11 +515,10 @@ def test_work_brief_dag_empty_when_no_nodes() -> None:
 
 
 def test_work_brief_dag_escapes_quotes_in_labels() -> None:
+    from monet.orchestration.prebuilt._state import WorkBriefNode
     from monet.server.routes._artifacts import _render_work_brief_dag
 
-    nodes = [
-        {"id": 'weird"id', "agent_id": "x", "command": "y", "depends_on": []},
-    ]
+    nodes = [WorkBriefNode(id='weird"id', agent_id="x", command="y", task="")]
     html = _render_work_brief_dag(nodes)
     # User quote replaced with Mermaid escape, not raw "
     assert "weird#quot;id" in html

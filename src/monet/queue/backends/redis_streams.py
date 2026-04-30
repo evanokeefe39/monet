@@ -28,7 +28,7 @@ import contextlib
 import json
 import logging
 import socket
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from monet._ports import MAX_INLINE_PAYLOAD_BYTES
 from monet.core.serialization import (
@@ -57,6 +57,26 @@ except ImportError as exc:  # pragma: no cover
 __all__ = ["RedisStreamsTaskQueue"]
 
 _log = logging.getLogger("monet.queue.redis_streams")
+
+
+class RedisStreamEntry(TypedDict):
+    """Fields written to a Redis progress stream via XADD."""
+
+    v: str
+    agent_id: str
+    status: str
+    command: str
+    task_id: str
+    parent_call_id: str
+    payload: str
+
+
+class RedisIndexEntry(TypedDict):
+    """Fields stored in the taskidx hash for XACK lookup."""
+
+    stream_id: str
+    pool: str
+
 
 _DEFAULT_LEASE_TTL_SECONDS = 300
 _DEFAULT_POOL_SIZE = 20
@@ -382,13 +402,13 @@ class RedisStreamsTaskQueue:
 
         try:
             client = await self._ensure_client()
-            fields = {
+            fields: RedisStreamEntry = {
                 "v": "2",
-                "agent_id": event.get("agent_id") or event.get("agent", ""),
-                "status": event.get("status", ""),
-                "command": event.get("command", ""),
+                "agent_id": event.get("agent_id") or "",
+                "status": event.get("status") or "",
+                "command": event.get("command") or "",
                 "task_id": task_id,
-                "parent_call_id": event.get("parent_call_id", ""),
+                "parent_call_id": event.get("parent_call_id") or "",
                 "payload": payload,
             }
 
@@ -447,7 +467,7 @@ class RedisStreamsTaskQueue:
                 for _stream_name, entries in result:
                     for entry_id, fields in entries:
                         last_id = entry_id
-                        raw = fields.get("payload") or fields.get(b"payload")
+                        raw = fields.get("payload")
                         if raw:
                             try:
                                 yield json.loads(raw)
@@ -477,7 +497,7 @@ class RedisStreamsTaskQueue:
         entries = await client.xrange(stream, count=count)
         results: list[dict[str, Any]] = []
         for entry_id, fields in entries:
-            raw = fields.get("payload") or fields.get(b"payload")
+            raw = fields.get("payload")
             if raw:
                 try:
                     event = json.loads(raw)

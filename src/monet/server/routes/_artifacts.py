@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from monet import get_artifacts
 from monet.artifacts._protocol import ArtifactQueryable
 from monet.core.artifacts import get_artifact_backend
+from monet.orchestration.prebuilt._state import WorkBrief, WorkBriefNode
 from monet.server._auth import require_api_key
 from monet.server.routes._common import _DAG_TASK_CHAR_BUDGET, ARTIFACT_LIST_MAX
 
@@ -106,10 +108,10 @@ async def list_artifacts(
         ArtifactListItem(
             artifact_id=r["artifact_id"],
             key=str(r.get("key") or r["artifact_id"]),
-            content_type=r.get("content_type", ""),
-            content_length=r.get("content_length", 0),
-            summary=r.get("summary", ""),
-            created_at=r.get("created_at", ""),
+            content_type=r["content_type"],
+            content_length=r["content_length"],
+            summary=r["summary"],
+            created_at=r["created_at"],
             agent_id=r.get("agent_id"),
             run_id=r.get("run_id"),
             thread_id=r.get("thread_id"),
@@ -178,8 +180,13 @@ def _render_artifact_html(
     except Exception:
         parsed = None
 
-    if isinstance(parsed, dict) and "nodes" in parsed and "goal" in parsed:
-        body_html = _render_work_brief_html(parsed)
+    work_brief: WorkBrief | None = None
+    if isinstance(parsed, dict):
+        with contextlib.suppress(ValidationError):
+            work_brief = WorkBrief.model_validate(parsed)
+
+    if work_brief is not None:
+        body_html = _render_work_brief_html(work_brief)
     elif parsed is not None:
         body_html = (
             '<section class="card"><pre class="json">'
@@ -221,33 +228,29 @@ def _render_artifact_html(
     )
 
 
-def _render_work_brief_html(brief: dict[str, Any]) -> str:
-    """Render a WorkBrief dict (goal + nodes + assumptions) as HTML cards."""
+def _render_work_brief_html(brief: WorkBrief) -> str:
+    """Render a WorkBrief (goal + nodes + assumptions) as HTML cards."""
     import html as _html
 
-    goal = str(brief.get("goal") or "(no goal)")
-    nodes = brief.get("nodes") or []
-    assumptions = brief.get("assumptions") or []
-
     assumption_list = ""
-    if assumptions:
-        items = "".join(f"<li>{_html.escape(str(a))}</li>" for a in assumptions)
+    if brief.assumptions:
+        items = "".join(f"<li>{_html.escape(str(a))}</li>" for a in brief.assumptions)
         assumption_list = (
             "<section class='card'><h2>Assumptions</h2>"
             f"<ul class='assumptions'>{items}</ul></section>"
         )
 
-    dag_card = _render_work_brief_dag(nodes)
+    dag_card = _render_work_brief_dag(brief.nodes)
 
     return (
         "<section class='card'><h2>Goal</h2>"
-        f"<p class='goal'>{_html.escape(goal)}</p></section>"
+        f"<p class='goal'>{_html.escape(brief.goal)}</p></section>"
         f"{dag_card}"
         f"{assumption_list}"
     )
 
 
-def _render_work_brief_dag(nodes: list[Any]) -> str:
+def _render_work_brief_dag(nodes: list[WorkBriefNode]) -> str:
     """Emit a Mermaid ``graph TB`` card for the plan's node dependencies."""
     import html as _html
 
@@ -255,18 +258,13 @@ def _render_work_brief_dag(nodes: list[Any]) -> str:
     id_map: dict[str, str] = {}
 
     for idx, node in enumerate(nodes):
-        if not isinstance(node, dict):
-            continue
-        nid = str(node.get("id") or f"node{idx}")
         alias = f"n{idx}"
-        id_map[nid] = alias
-        agent = str(node.get("agent_id") or "")
-        command = str(node.get("command") or "")
-        badge = f"{agent}/{command}".strip("/")
-        task = str(node.get("task") or "")
+        id_map[node.id] = alias
+        badge = f"{node.agent_id}/{node.command}".strip("/")
+        task = node.task
         if len(task) > _DAG_TASK_CHAR_BUDGET:
             task = task[: _DAG_TASK_CHAR_BUDGET - 1].rstrip() + "…"
-        label_id = _mermaid_escape(nid)
+        label_id = _mermaid_escape(node.id)
         label_badge = _mermaid_escape(badge)
         label_task = _mermaid_escape(task)
         caption_parts: list[str] = []
@@ -283,15 +281,12 @@ def _render_work_brief_dag(nodes: list[Any]) -> str:
         caption = "<br/>".join(caption_parts)
         diagram_lines.append(f'  {alias}["{caption}"]')
 
-    for idx, node in enumerate(nodes):
-        if not isinstance(node, dict):
-            continue
-        nid = str(node.get("id") or f"node{idx}")
-        target = id_map.get(nid)
+    for node in nodes:
+        target = id_map.get(node.id)
         if not target:
             continue
-        for dep in node.get("depends_on") or []:
-            src = id_map.get(str(dep))
+        for dep in node.depends_on:
+            src = id_map.get(dep)
             if src:
                 diagram_lines.append(f"  {src} --> {target}")
 

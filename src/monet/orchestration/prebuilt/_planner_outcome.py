@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from monet.signals import SignalType
 from monet.types import find_artifact
@@ -23,6 +23,20 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
     from monet.types import AgentResult, ArtifactPointer, Signal
+
+
+class PlannerRawOutput(BaseModel):
+    """Typed wrapper for the planner's structured output dict.
+
+    extra='ignore' because LLM output frequently carries additional keys.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    work_brief_artifact_id: str | None = None
+    routing_skeleton: dict[str, Any] | None = None
+    kind: str | None = None
+    questions: list[Any] = []
 
 
 @dataclass(frozen=True)
@@ -59,7 +73,7 @@ def format_signal_reasons(
     """Return first-line, length-capped reasons from signals that carry one."""
     reasons: list[str] = []
     for signal in signals:
-        reason = signal.get("reason") if isinstance(signal, dict) else None
+        reason = signal.get("reason")
         if not reason:
             continue
         first_line = str(reason).splitlines()[0][:max_chars]
@@ -79,14 +93,18 @@ def classify_planner_result(result: AgentResult) -> PlannerResult:
             reason="; ".join(reasons) if reasons else "Planner failed"
         )
 
-    questions = _extract_questions(output, signals)
-    if questions is not None:
-        return QuestionsOutcome(questions=questions)
-
-    if not isinstance(output, dict):
+    try:
+        raw = PlannerRawOutput.model_validate(output)
+    except ValidationError:
+        if any(s["type"] == SignalType.NEEDS_CLARIFICATION for s in signals):
+            return QuestionsOutcome(questions=[])
         return PlannerFailure(
             reason=f"Planner returned non-dict output: {type(output).__name__}"
         )
+
+    questions = _extract_questions(raw, signals)
+    if questions is not None:
+        return QuestionsOutcome(questions=questions)
 
     pointer = find_artifact(result.artifacts, "work_brief")
     if pointer is None:
@@ -97,45 +115,40 @@ def classify_planner_result(result: AgentResult) -> PlannerResult:
             )
         )
 
-    reported_id = output.get("work_brief_artifact_id")
-    if reported_id and reported_id != pointer["artifact_id"]:
+    if (
+        raw.work_brief_artifact_id
+        and raw.work_brief_artifact_id != pointer["artifact_id"]
+    ):
         return PlannerFailure(
             reason=(
-                f"Planner reported artifact_id '{reported_id}' "
+                f"Planner reported artifact_id '{raw.work_brief_artifact_id}' "
                 f"but keyed artifact has '{pointer['artifact_id']}'."
             )
         )
 
-    skeleton_raw = output.get("routing_skeleton")
-    if not skeleton_raw:
+    if not raw.routing_skeleton:
         return PlannerFailure(
             reason="Planner did not return routing_skeleton in output."
         )
     try:
-        RoutingSkeleton.model_validate(skeleton_raw)
+        RoutingSkeleton.model_validate(raw.routing_skeleton)
     except ValidationError as exc:
         return PlannerFailure(reason=f"Routing skeleton invalid: {exc}")
 
     return PlanOutcome(
         work_brief_pointer=pointer,
-        routing_skeleton=skeleton_raw,
-        raw_output=output,
+        routing_skeleton=raw.routing_skeleton,
+        raw_output=output if isinstance(output, dict) else {},
     )
 
 
 def _extract_questions(
-    output: Any,
-    signals: Sequence[Signal | dict[str, Any]],
+    raw: PlannerRawOutput,
+    signals: Sequence[Signal],
 ) -> list[str] | None:
     """Return questions if planner is asking for clarification, else None."""
-    signalled = any(
-        isinstance(s, dict) and s.get("type") == SignalType.NEEDS_CLARIFICATION
-        for s in signals
-    )
-    kind_questions = isinstance(output, dict) and output.get("kind") == "questions"
+    signalled = any(s["type"] == SignalType.NEEDS_CLARIFICATION for s in signals)
+    kind_questions = raw.kind == "questions"
     if not (signalled or kind_questions):
         return None
-    raw: list[Any] = []
-    if isinstance(output, dict):
-        raw = list(output.get("questions") or [])
-    return [str(q).strip() for q in raw if str(q).strip()]
+    return [str(q).strip() for q in raw.questions if str(q).strip()]

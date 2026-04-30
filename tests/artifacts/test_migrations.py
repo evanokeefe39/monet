@@ -37,7 +37,7 @@ def _tables(path: Path) -> set[str]:
 
 
 def test_head_revision_is_latest() -> None:
-    assert head_revision() == "0004_artifacts_thread_id"
+    assert head_revision() == "0005_artifact_key"
 
 
 def test_artifacts_table_has_secondary_indexes(tmp_path: Path) -> None:
