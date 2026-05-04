@@ -236,7 +236,8 @@ url = "http://b:8080"
         with pytest.raises(FileNotFoundError):
             load_agents(tmp_path / "nonexistent.toml")
 
-    def test_invalid_event_type(self, tmp_path: Path) -> None:
+    def test_on_handlers_rejected_with_clear_message(self, tmp_path: Path) -> None:
+        """[[agent.on]] configs must be rejected with a deprecation message."""
         path = _write_agents_toml(
             tmp_path,
             """
@@ -247,89 +248,18 @@ type = "http"
 url = "http://x:8080"
 
 [[agent.on]]
-event = "bogus"
+event = "progress"
 type = "webhook"
 url = "http://hook:9090"
 """,
         )
-        with pytest.raises(ValueError, match="Input should be"):
+        with pytest.raises(ValueError, match="no longer supported"):
             load_agents(path)
 
-    def test_invalid_handler_type(self, tmp_path: Path) -> None:
-        path = _write_agents_toml(
-            tmp_path,
-            """
-[[agent]]
-id = "x"
-[agent.transport]
-type = "http"
-url = "http://x:8080"
-
-[[agent.on]]
-event = "progress"
-type = "grpc"
-""",
-        )
-        with pytest.raises(ValueError, match="Input should be"):
-            load_agents(path)
-
-    def test_python_handler_bad_spec(self, tmp_path: Path) -> None:
-        path = _write_agents_toml(
-            tmp_path,
-            """
-[[agent]]
-id = "x"
-[agent.transport]
-type = "http"
-url = "http://x:8080"
-
-[[agent.on]]
-event = "progress"
-type = "python"
-handler = "no_colon_here"
-""",
-        )
-        with pytest.raises(ValueError, match=r"module\.path:function_name"):
-            load_agents(path)
-
-    def test_python_handler_module_not_found(self, tmp_path: Path) -> None:
-        path = _write_agents_toml(
-            tmp_path,
-            """
-[[agent]]
-id = "x"
-[agent.transport]
-type = "http"
-url = "http://x:8080"
-
-[[agent.on]]
-event = "progress"
-type = "python"
-handler = "nonexistent_module_xyz:func"
-""",
-        )
-        with pytest.raises(ValueError, match="could not import"):
-            load_agents(path)
-
-    def test_webhook_handler_missing_url(self, tmp_path: Path) -> None:
-        path = _write_agents_toml(
-            tmp_path,
-            """
-[[agent]]
-id = "x"
-[agent.transport]
-type = "http"
-url = "http://x:8080"
-
-[[agent.on]]
-event = "progress"
-type = "webhook"
-""",
-        )
-        with pytest.raises(ValueError, match="requires 'url'"):
-            load_agents(path)
-
-    def test_bash_handler_missing_cmd(self, tmp_path: Path) -> None:
+    def test_on_handlers_rejection_message_mentions_gateway(
+        self, tmp_path: Path
+    ) -> None:
+        """Rejection message directs users to the gateway."""
         path = _write_agents_toml(
             tmp_path,
             """
@@ -342,57 +272,8 @@ url = "http://x:8080"
 [[agent.on]]
 event = "signal"
 type = "bash"
+cmd = "echo hello"
 """,
         )
-        with pytest.raises(ValueError, match="requires 'cmd'"):
+        with pytest.raises(ValueError, match="gateway"):
             load_agents(path)
-
-
-class TestEventHandlerRegistration:
-    """Event handlers are registered and wired to the stream."""
-
-    def test_webhook_handler_registered(self, tmp_path: Path) -> None:
-        """Agent with webhook on-handler registers without error."""
-        path = _write_agents_toml(
-            tmp_path,
-            """
-[[agent]]
-id = "hooked"
-command = "fast"
-
-[agent.transport]
-type = "http"
-url = "http://x:8080"
-
-[[agent.on]]
-event = "progress"
-type = "webhook"
-url = "http://hook:9090"
-""",
-        )
-        count = load_agents(path)
-        assert count == 1
-        assert default_registry.exists("hooked", "fast")
-
-    def test_python_handler_from_stdlib(self, tmp_path: Path) -> None:
-        """Python handler referencing a stdlib callable resolves."""
-        path = _write_agents_toml(
-            tmp_path,
-            """
-[[agent]]
-id = "pyhooked"
-command = "fast"
-
-[agent.transport]
-type = "http"
-url = "http://x:8080"
-
-[[agent.on]]
-event = "progress"
-type = "python"
-handler = "json:dumps"
-""",
-        )
-        count = load_agents(path)
-        assert count == 1
-        assert default_registry.exists("pyhooked", "fast")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path  # noqa: TC003 — pydantic needs this at runtime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .._env import (
     GEMINI_API_KEY,
@@ -31,11 +31,17 @@ class WorkerConfig(BaseModel):
     When ``server_url`` is set the worker runs in remote/distributed mode
     and requires ``api_key``. When it is unset, the worker runs in local
     sidecar mode and neither is required.
+
+    ``pools`` is the authoritative list of pool names this worker serves.
+    For backwards compatibility, if only ``pool`` is set and ``pools`` is
+    empty, ``pools`` is initialised to ``[pool]``. Prefer ``pools`` for new
+    configuration.
     """
 
     model_config = ConfigDict(frozen=True)
 
     pool: str = "local"
+    pools: list[str] = Field(default_factory=list)
     concurrency: int = Field(default=10, gt=0)
     server_url: str | None = None
     api_key: str | None = None
@@ -44,6 +50,12 @@ class WorkerConfig(BaseModel):
     shutdown_timeout: float = Field(default=30.0, gt=0.0)
     heartbeat_interval: float = Field(default=30.0, gt=0.0)
     required_llm_keys: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _derive_pools(self) -> WorkerConfig:
+        if not self.pools:
+            object.__setattr__(self, "pools", [self.pool])
+        return self
 
     @classmethod
     def load(cls) -> WorkerConfig:
@@ -86,6 +98,7 @@ class WorkerConfig(BaseModel):
     def redacted_summary(self) -> dict[str, Any]:
         return {
             "pool": self.pool,
+            "pools": self.pools,
             "concurrency": self.concurrency,
             "server_url": self.server_url or _UNSET,
             "api_key": _redact(self.api_key),

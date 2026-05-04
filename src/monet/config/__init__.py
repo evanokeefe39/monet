@@ -78,7 +78,7 @@ from ._graphs import (
     load_graph_roles,
 )
 from ._load import default_config_path, read_toml, read_toml_section
-from ._pools import PoolConfig, load_pool_config
+from ._pools import GatewayConfig, PoolConfig, load_gateway_config, load_pool_config
 from ._resolve import resolve_backend, validate_dotted_path
 from ._schema import (
     ArtifactsConfig,
@@ -147,6 +147,7 @@ __all__ = [
     "ClientConfig",
     "ConfigError",
     "Entrypoint",
+    "GatewayConfig",
     "ObservabilityConfig",
     "OrchestrationConfig",
     "PlanesConfig",
@@ -163,6 +164,7 @@ __all__ = [
     "dispatch_secret_env",
     "graph_role_env",
     "load_entrypoints",
+    "load_gateway_config",
     "load_graph_roles",
     "load_pool_config",
     "pool_auth_env",
