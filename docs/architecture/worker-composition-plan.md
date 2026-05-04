@@ -790,17 +790,17 @@ class ContainerSupervisor:
 ```
 
 **Done when:**
-- [ ] execute_managed_workload passes: start -> ready -> connect -> submit -> collect -> cleanup
-- [ ] execute_managed_workload saga: failure at any step -> cleanup in reverse
-- [ ] execute_managed_workload timeout: asyncio.wait_for -> cancel -> cleanup
-- [ ] execute_persistent_workload: acquire -> submit -> collect -> release
-- [ ] execute_cloud_push_workload: dispatch -> poll -> retrieve result from gateway -> complete
-- [ ] execute_cloud_push_workload: cloud job failure -> queue.fail()
-- [ ] TaskRouter: acquire blocks when no idle; release returns to idle
-- [ ] ContainerSupervisor: warm pool startup, health loop, restart with backoff, circuit breaker, drain
-- [ ] Docker supervisor delegates restart to Docker restart policy when available
-- [ ] Orphan reconciliation kills containers from previous worker incarnation
-- [ ] Structured cancellation: every create_task has cancel+await in finally
+- [x] execute_managed_workload passes: start -> ready -> connect -> submit -> collect -> cleanup
+- [x] execute_managed_workload saga: failure at any step -> cleanup in reverse
+- [x] execute_managed_workload timeout: asyncio.wait_for -> cancel -> cleanup
+- [x] execute_persistent_workload: acquire -> submit -> collect -> release
+- [x] execute_cloud_push_workload: dispatch -> poll -> retrieve result from gateway -> complete
+- [x] execute_cloud_push_workload: cloud job failure -> queue.fail()
+- [x] TaskRouter: acquire blocks when no idle; release returns to idle
+- [x] ContainerSupervisor: warm pool startup, health loop, restart with backoff, circuit breaker, drain
+- [x] Docker supervisor delegates restart to Docker restart policy when available
+- [ ] Orphan reconciliation kills containers from previous worker incarnation (deferred: requires ListContainersBackend protocol extension)
+- [x] Structured cancellation: every create_task has cancel+await in finally
 
 ---
 
