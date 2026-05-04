@@ -75,7 +75,7 @@ async def test_task_timeout_raises_task_failure(
         workload="task",
         image=pi_agent_image,
         agent_port=8080,
-        task_timeout_s=5,
+        task_timeout_s=1,
         startup_timeout_s=90,
         graceful_shutdown_s=5,
     )
@@ -121,7 +121,11 @@ async def test_container_crash_raises_transport_error(
                     if r.status_code == 200:
                         ready = True
                         break
-                except (_httpx.ConnectError, _httpx.TimeoutException):
+                except (
+                    _httpx.ConnectError,
+                    _httpx.TimeoutException,
+                    _httpx.RemoteProtocolError,
+                ):
                     pass
                 await asyncio.sleep(1.0)
         if not ready:
@@ -168,7 +172,7 @@ async def test_startup_timeout_raises_runtime_error(
     )
     agent = SimpleNamespace(transport=SimpleNamespace(cmd=None))
 
-    with pytest.raises(RuntimeError, match="ready"):
+    with pytest.raises(RuntimeError, match="did not respond"):
         await execute_managed_workload(
             record=_make_record(task="Hello", task_id="e2e-t6c-001"),
             agent=agent,  # type: ignore[arg-type]
@@ -217,7 +221,9 @@ async def test_agent_400_raises_agent_error() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
-    endpoint = Endpoint(address=f"http://127.0.0.1:{port}", process_id="stub")
+    endpoint = Endpoint(
+        address=f"http://127.0.0.1:{port}", process_id="stub", backend_type="subprocess"
+    )
     transport = HTTPTransport()
     try:
         session = await transport.connect(endpoint)

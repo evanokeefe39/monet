@@ -62,7 +62,11 @@ async def _wait_instance_healthy(instance: ManagedInstance, timeout_s: float) ->
                 resp = await client.get(health_url)
                 if resp.status_code == 200:
                     return
-            except (httpx.ConnectError, httpx.TimeoutException):
+            except (
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                httpx.RemoteProtocolError,
+            ):
                 pass
             await asyncio.sleep(min(1.0, remaining))
 

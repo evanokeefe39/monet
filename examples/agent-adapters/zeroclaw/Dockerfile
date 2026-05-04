@@ -1,11 +1,8 @@
-# Use zeroclaw official image as base; add python3 for the adapter.
-# The adapter starts zeroclaw as a subprocess and exposes monet /task on 8080.
-FROM ghcr.io/zeroclaw-labs/zeroclaw:latest
+# Multi-stage: extract zeroclaw binary (distroless) into python:3.12-slim.
+FROM ghcr.io/zeroclaw-labs/zeroclaw:latest AS zeroclaw
 
-# Install python3 — zeroclaw's base image is Debian-based.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-slim
+COPY --from=zeroclaw /usr/local/bin/zeroclaw /usr/local/bin/zeroclaw
 
 COPY config.toml /etc/zeroclaw/config.toml
 

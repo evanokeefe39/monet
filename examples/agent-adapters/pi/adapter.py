@@ -34,12 +34,17 @@ _pi_proc: subprocess.Popen[bytes] | None = None
 def _build_pi_env() -> dict[str, str]:
     env = dict(os.environ)
     env["PORT"] = str(PI_PORT)
-    # Route through NIM using the openai-compatible provider.
-    if "NVIDIA_NIM_API_KEY" in env and "OPENAI_API_KEY" not in env:
+    # Route via NVIDIA NIM (OpenAI-compatible) when key is available — NIM has
+    # generous rate limits that fit Pi's large system prompt. Fall back to Groq.
+    # LLM_PROVIDER / LLM_MODEL env vars override these defaults at deploy time.
+    if "NVIDIA_NIM_API_KEY" in env and not env.get("LLM_PROVIDER"):
+        env["LLM_PROVIDER"] = "openai"
+        env["LLM_MODEL"] = "meta/llama-3.3-70b-instruct"
+        env["OPENAI_BASE_URL"] = "https://integrate.api.nvidia.com/v1"
         env["OPENAI_API_KEY"] = env["NVIDIA_NIM_API_KEY"]
-    env.setdefault("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1")
-    env.setdefault("LLM_PROVIDER", "openai")
-    env.setdefault("LLM_MODEL", "deepseek-ai/deepseek-v4-pro")
+    else:
+        env.setdefault("LLM_PROVIDER", "groq")
+        env.setdefault("LLM_MODEL", "llama-3.3-70b-versatile")
     return env
 
 

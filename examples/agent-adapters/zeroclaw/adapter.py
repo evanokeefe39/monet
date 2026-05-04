@@ -1,69 +1,105 @@
 #!/usr/bin/env python3
-"""Monet /task adapter wrapping ZeroClaw.
+"""Monet /task adapter wrapping ZeroClaw via ACP (JSON-RPC 2.0 over stdio).
 
-Starts ZeroClaw on ZEROCLAW_PORT (default 3002) as a subprocess, then
-serves the monet /task protocol on ADAPTER_PORT (default 8080).
+Starts ZeroClaw ACP server as a subprocess on startup, then serves the
+monet /task protocol on ADAPTER_PORT (default 8080).
 
 Protocol translation:
     POST /task {task_id, payload: {task, ...}}
-      -> POST http://localhost:3002/v1/chat/completions (OpenAI-compat)
-      <- {choices: [{message: {content: "response"}}]}
+      -> session/new + session/prompt over ACP stdio
+      <- JSON-RPC result / streaming notifications
       -> {output: "response", success: true}
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-import socket
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ZEROCLAW_PORT = int(os.environ.get("ZEROCLAW_PORT", "3002"))
 ADAPTER_PORT = int(os.environ.get("ADAPTER_PORT", "8080"))
-_ZC_BASE = f"http://localhost:{ZEROCLAW_PORT}"
-_ZC_CHAT = f"{_ZC_BASE}/v1/chat/completions"
 
 _zc_proc: subprocess.Popen[bytes] | None = None
+_lock = threading.Lock()
+_req_id = 0
 
 
 def _build_zc_env() -> dict[str, str]:
-    env = dict(os.environ)
-    # ZeroClaw with provider=openai reads OPENAI_API_KEY.
-    if "NVIDIA_NIM_API_KEY" in env and "OPENAI_API_KEY" not in env:
-        env["OPENAI_API_KEY"] = env["NVIDIA_NIM_API_KEY"]
-    return env
+    return dict(os.environ)
 
 
-def _start_zeroclaw() -> subprocess.Popen[bytes]:
-    return subprocess.Popen(
-        ["zeroclaw", "serve", "--config", "/etc/zeroclaw/config.toml"],
-        env=_build_zc_env(),
-        stdout=sys.stdout,
-        stderr=sys.stderr,
+def _next_id() -> int:
+    global _req_id
+    _req_id += 1
+    return _req_id
+
+
+def _rpc(method: str, params: dict[str, object]) -> dict[str, object]:
+    """Send one JSON-RPC request; return result dict.
+
+    Reads stdout line-by-line, skipping notifications (no id field),
+    accumulating streamed text chunks, until the matching id arrives.
+    """
+    assert _zc_proc is not None
+    req_id = _next_id()
+    msg = json.dumps(
+        {"jsonrpc": "2.0", "method": method, "id": req_id, "params": params}
     )
+    _zc_proc.stdin.write((msg + "\n").encode())  # type: ignore[union-attr]
+    _zc_proc.stdin.flush()  # type: ignore[union-attr]
+
+    streamed: list[str] = []
+    while True:
+        raw = _zc_proc.stdout.readline()  # type: ignore[union-attr]
+        if not raw:
+            raise RuntimeError("zeroclaw ACP process exited unexpectedly")
+        try:
+            envelope = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        # Notification (no id) — streaming chunk from session/prompt
+        if "id" not in envelope:
+            p = envelope.get("params", {})
+            for key in ("chunk", "content", "text", "delta"):
+                if key in p and isinstance(p[key], str):
+                    streamed.append(p[key])
+                    break
+            continue
+
+        # Response to our request
+        if envelope.get("id") != req_id:
+            continue
+        if "error" in envelope:
+            raise RuntimeError(f"ACP error: {envelope['error']}")
+        result: dict[str, object] = envelope.get("result") or {}
+        if streamed:
+            result["_streamed"] = "".join(streamed)
+        return result
 
 
-def _zc_healthy() -> bool:
-    """TCP probe — ZeroClaw has no /health endpoint."""
-    try:
-        with socket.create_connection(("localhost", ZEROCLAW_PORT), timeout=2):
-            return True
-    except OSError:
-        return False
-
-
-def _wait_zc_ready(timeout_s: float = 120.0) -> None:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if _zc_healthy():
-            return
-        time.sleep(1.0)
-    raise RuntimeError(f"ZeroClaw did not become ready within {timeout_s}s")
+def _run_task(message: str) -> str:
+    """Open a fresh ACP session, prompt it, return the text response."""
+    with _lock:
+        sess = _rpc("session/new", {})
+        session_id = str(sess.get("sessionId", ""))
+        result = _rpc("session/prompt", {"sessionId": session_id, "prompt": message})
+        with contextlib.suppress(Exception):
+            _rpc("session/stop", {"sessionId": session_id})
+    # Extract content from result or accumulated streaming chunks
+    for key in ("content", "message", "text", "_streamed"):
+        val = result.get(key)
+        if isinstance(val, str) and val:
+            return val
+    # Fallback: nested content array (same shape as OpenAI)
+    choices = result.get("choices")
+    if isinstance(choices, list) and choices:
+        return str(choices[0].get("message", {}).get("content", ""))
+    return str(result)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -72,9 +108,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            ok = _zc_healthy()
-            body = b'{"ok":true}' if ok else b'{"ok":false}'
-            self.send_response(200 if ok else 503)
+            alive = _zc_proc is not None and _zc_proc.poll() is None
+            body = b'{"ok":true}' if alive else b'{"ok":false}'
+            self.send_response(200 if alive else 503)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(body)
@@ -100,33 +136,13 @@ class _Handler(BaseHTTPRequestHandler):
         task_payload: dict[str, object] = payload.get("payload", {})
         message: str = str(task_payload.get("task") or task_payload.get("command", ""))
 
-        zc_body = json.dumps(
-            {
-                "model": "deepseek-ai/deepseek-v4-pro",
-                "messages": [{"role": "user", "content": message}],
-            }
-        ).encode()
-        req = urllib.request.Request(
-            _ZC_CHAT,
-            data=zc_body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(req, timeout=300) as r:
-                zc_resp = json.loads(r.read())
-            content: str = zc_resp["choices"][0]["message"]["content"]
-            result = json.dumps({"output": content, "success": True}).encode()
+            output = _run_task(message)
+            result = json.dumps({"output": output, "success": True}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(result)
-        except (urllib.error.HTTPError, KeyError, IndexError) as exc:
-            error = json.dumps({"error": str(exc)}).encode()
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(error)
         except Exception as exc:
             error = json.dumps({"error": str(exc)}).encode()
             self.send_response(500)
@@ -135,13 +151,22 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(error)
 
 
-if __name__ == "__main__":
-    _zc_proc = _start_zeroclaw()
-    print(
-        f"ZeroClaw started (pid={_zc_proc.pid}), waiting for readiness...", flush=True
+def _start_acp() -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        ["zeroclaw", "acp", "--config-dir", "/etc/zeroclaw"],
+        env=_build_zc_env(),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,
     )
-    _wait_zc_ready()
-    print(f"ZeroClaw ready. Adapter listening on :{ADAPTER_PORT}", flush=True)
+
+
+if __name__ == "__main__":
+    _zc_proc = _start_acp()
+    print(f"ZeroClaw ACP started (pid={_zc_proc.pid})", flush=True)
+    # Initialize the ACP session
+    _rpc("initialize", {})
+    print(f"ZeroClaw ACP ready. Adapter listening on :{ADAPTER_PORT}", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", ADAPTER_PORT), _Handler)
     try:
         server.serve_forever()

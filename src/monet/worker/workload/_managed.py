@@ -129,7 +129,13 @@ async def execute_managed_workload(
 
         session = await transport_factory.connect(endpoint)
         try:
-            await session.submit({"task_id": record["task_id"], "payload": record})
+            # submit() on synchronous transports (HTTP) blocks until the agent
+            # returns the full response, so the task_timeout_s deadline must
+            # cover it — not only the subsequent collect phase.
+            await asyncio.wait_for(
+                session.submit({"task_id": record["task_id"], "payload": record}),
+                timeout=pool.task_timeout_s,
+            )
             result = await _run_with_lease(
                 session, queue, record["task_id"], pool.task_timeout_s
             )

@@ -111,16 +111,21 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
                         "PEL sweeper reclaimed %d expired entries", len(reclaimed)
                     )
 
-    # Register reference agents via the explicit helper — a bare import
-    # is a no-op after the first load (sys.modules), which means test
-    # scopes that roll back ``default_registry`` leave the worker with
-    # an empty handler set.
     from monet.agents import register_reference_agents
     from monet.core.registry import default_registry
     from monet.server._capabilities import Capability
     from monet.worker import run_worker
 
-    register_reference_agents()
+    # Register reference agents only when the default stack is active.
+    # Custom stacks import their own agents before the lifespan (via @agent
+    # decorators in their graph modules), leaving default_registry non-empty.
+    # For them, reference agents must stay out of the registry. The default
+    # stack does not pre-register any agents (server_bootstrap.py defers
+    # monet.agents import), so an empty registry signals we should populate it.
+    # Explicit re-registration guards against test-scope registry rollbacks
+    # where a bare ``import monet.agents`` is a no-op (sys.modules cached).
+    if not default_registry.registered_agents():
+        register_reference_agents()
 
     in_proc_worker_id = "monolith-0"
     capabilities = [

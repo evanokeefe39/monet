@@ -167,7 +167,10 @@ def _load_env_file(path: Path) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        result[key.strip()] = value.strip()
+        v = value.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+            v = v[1:-1]
+        result[key.strip()] = v
     return result
 
 
@@ -179,6 +182,7 @@ def _agent_env() -> dict[str, str]:
     for k in (
         "NVIDIA_NIM_API_KEY",
         "GROQ_API_KEY",
+        "GEMINI_API_KEY",
         "TAVILY_API_KEY",
         "EXA_API_KEY",
         "OPENAI_API_KEY",
@@ -188,9 +192,6 @@ def _agent_env() -> dict[str, str]:
             result[k] = os.environ[k]
         elif k in keys:
             result[k] = keys[k]
-    if "NVIDIA_NIM_API_KEY" in result and "OPENAI_API_KEY" not in result:
-        result["OPENAI_API_KEY"] = result["NVIDIA_NIM_API_KEY"]
-    result.setdefault("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1")
     return result
 
 

@@ -1,27 +1,5 @@
-[server]
-host = "0.0.0.0"
-port = 3002
-
-[grpc]
-port = 9090
-
-[metrics]
-port = 9091
-enabled = false
-
-[llm]
-provider = "openai"
-model = "deepseek-ai/deepseek-v4-pro"
-
-[llm.openai]
-base_url = "https://integrate.api.nvidia.com/v1"
-
-[storage]
-path = "/tmp/zeroclaw.db"
-
-[tools]
-enabled = ["search"]
-
-[logging]
-level = "warn"
-format = "json"
+workspace_dir = "/tmp/zeroclaw-workspace"
+api_key = ""
+default_provider = "gemini"
+default_model = "gemini-2.5-flash"
+default_temperature = 0.7
