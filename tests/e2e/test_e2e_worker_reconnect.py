@@ -11,9 +11,13 @@ Gated behind ``MONET_E2E=1``.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
+import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -31,6 +35,24 @@ QUICKSTART_DIR = REPO_ROOT / "examples" / "quickstart"
 HEALTH_URL = f"http://localhost:{STANDARD_DEV_PORT}/health"
 BOOT_TIMEOUT_SECONDS = 180.0
 RUN_TIMEOUT_SECONDS = 300.0
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill process and all its children (platform-aware)."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            check=False,
+            capture_output=True,
+        )
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 def _wait_health(timeout: float) -> None:
@@ -51,7 +73,7 @@ def _wait_unhealthy(timeout: float) -> None:
     while time.monotonic() < deadline:
         try:
             httpx.get(HEALTH_URL, timeout=1.0)
-        except (httpx.ConnectError, OSError):
+        except (httpx.ConnectError, httpx.TimeoutException, OSError):
             return
         time.sleep(0.5)
     msg = f"monet dev still reachable after {timeout}s"
@@ -80,8 +102,7 @@ def dev_server_with_external_worker() -> Iterator[tuple[subprocess.Popen[bytes],
     try:
         _wait_health(BOOT_TIMEOUT_SECONDS)
     except RuntimeError:
-        server_proc.terminate()
-        server_proc.wait(timeout=10)
+        _kill_tree(server_proc)
         server_fh.close()
         raise
 
@@ -109,11 +130,7 @@ def dev_server_with_external_worker() -> Iterator[tuple[subprocess.Popen[bytes],
             timeout=30,
         )
         if server_proc.poll() is None:
-            server_proc.terminate()
-            try:
-                server_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                server_proc.kill()
+            _kill_tree(server_proc)
         server_fh.close()
 
 
@@ -126,13 +143,8 @@ def test_worker_survives_server_restart(
     monet_bin = shutil.which("monet")
     assert monet_bin is not None
 
-    # Kill the server.
-    server_proc.terminate()
-    try:
-        server_proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        server_proc.kill()
-        server_proc.wait(timeout=5)
+    # Kill the server and all child processes (monet dev forks aegra).
+    _kill_tree(server_proc)
     _wait_unhealthy(30.0)
 
     # Restart the server — reuses Postgres volume, worker still running.
@@ -164,11 +176,7 @@ def test_worker_survives_server_restart(
             check=False,
         )
     finally:
-        restarted.terminate()
-        try:
-            restarted.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            restarted.kill()
+        _kill_tree(restarted)
         restart_fh.close()
 
     assert result.returncode == 0, (

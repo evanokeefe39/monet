@@ -192,6 +192,9 @@ def _agent_env() -> dict[str, str]:
             result[k] = os.environ[k]
         elif k in keys:
             result[k] = keys[k]
+    # Alias for zeroclaw's nvidia provider which reads NVIDIA_API_KEY.
+    if "NVIDIA_NIM_API_KEY" in result and "NVIDIA_API_KEY" not in result:
+        result["NVIDIA_API_KEY"] = result["NVIDIA_NIM_API_KEY"]
     return result
 
 

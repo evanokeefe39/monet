@@ -16,7 +16,8 @@ from monet.worker.execution._docker import DockerBackend
 from monet.worker.transport._http import HTTPTransport
 from monet.worker.workload._managed import execute_managed_workload
 
-_TASK = "What is 2 + 2? Respond with just the number."
+_PI_TASK = "What is 2 + 2? Respond with just the number."
+_ZC_TASK = "Run the shell command: python3 -c 'print(2+2)' and report the output."
 
 
 class _NullQueue:
@@ -24,7 +25,7 @@ class _NullQueue:
 
 
 def _make_record(
-    idx: int, pool: str, agent_id: str, task: str = _TASK
+    idx: int, pool: str, agent_id: str, task: str = _PI_TASK
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -65,7 +66,7 @@ async def test_pi_and_zeroclaw_run_concurrently(
         workload="task",
         image=zeroclaw_agent_image,
         agent_port=8080,
-        task_timeout_s=120,
+        task_timeout_s=180,
         startup_timeout_s=90,
         graceful_shutdown_s=10,
     )
@@ -82,7 +83,7 @@ async def test_pi_and_zeroclaw_run_concurrently(
             gateway_env=agent_env,
         ),
         execute_managed_workload(
-            record=_make_record(1, "zeroclaw-pool", "zeroclaw"),  # type: ignore[arg-type]
+            record=_make_record(1, "zeroclaw-pool", "zeroclaw", _ZC_TASK),  # type: ignore[arg-type]
             agent=agent,  # type: ignore[arg-type]
             pool=zc_pool,
             backend=DockerBackend(),

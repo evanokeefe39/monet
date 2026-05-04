@@ -1,5 +1,5 @@
 workspace_dir = "/tmp/zeroclaw-workspace"
 api_key = ""
-default_provider = "gemini"
-default_model = "gemini-2.5-flash"
+default_provider = "nvidia"
+default_model = "meta/llama-3.3-70b-instruct"
 default_temperature = 0.7

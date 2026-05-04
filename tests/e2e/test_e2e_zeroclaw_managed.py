@@ -18,7 +18,7 @@ from monet.worker.transport._http import HTTPTransport
 from monet.worker.workload._managed import execute_managed_workload
 
 POOL = "zeroclaw-managed"
-_TASK = "What is 2 + 2? Respond with just the number."
+_TASK = "Run the shell command: python3 -c 'print(2+2)' and report the output."
 
 
 class _NullQueue:
@@ -53,7 +53,7 @@ async def test_zeroclaw_managed_full_lifecycle(
         workload="task",
         image=zeroclaw_agent_image,
         agent_port=8080,
-        task_timeout_s=120,
+        task_timeout_s=180,
         startup_timeout_s=90,
         graceful_shutdown_s=10,
     )

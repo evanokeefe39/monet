@@ -162,6 +162,7 @@ def _start_acp() -> subprocess.Popen[bytes]:
 
 
 if __name__ == "__main__":
+    os.makedirs("/tmp/zeroclaw-workspace", exist_ok=True)
     _zc_proc = _start_acp()
     print(f"ZeroClaw ACP started (pid={_zc_proc.pid})", flush=True)
     # Initialize the ACP session
