@@ -1,0 +1,60 @@
+[pools.pi-managed]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/pi-agent:latest"
+agent_port = 8080
+concurrency = 2
+task_timeout_s = 120
+startup_timeout_s = 90
+graceful_shutdown_s = 10
+
+[pools.pi-persistent]
+backend = "docker"
+workload = "persistent"
+image = "monet-e2e/pi-agent:latest"
+agent_port = 8080
+warm_pool_size = 2
+concurrency = 2
+task_timeout_s = 120
+startup_timeout_s = 90
+heartbeat_interval_s = 10
+restart_policy = "on_failure"
+max_restarts = 3
+
+[pools.zeroclaw-managed]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/zeroclaw-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+startup_timeout_s = 90
+
+[pools.local]
+backend = "in_process"
+
+[pools.pi-pool]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/pi-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+startup_timeout_s = 90
+
+[pools.zeroclaw-pool]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/zeroclaw-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+startup_timeout_s = 90
+
+[pools.pi-gateway]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/pi-gateway-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+startup_timeout_s = 90
+
+[gateway]
+port = 2027

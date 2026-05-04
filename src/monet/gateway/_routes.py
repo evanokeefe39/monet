@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from monet.worker.gateway._auth import validate_token
+from monet.gateway._auth import validate_token
 
 if TYPE_CHECKING:
     from monet.artifacts._protocol import ArtifactClient
@@ -90,6 +90,23 @@ def mount_routes(app: FastAPI, ctx: GatewayContext) -> None:
     ) -> JSONResponse:
         _auth_claims(request, task_id, ctx)
         data = await file.read()
+        pointer = await ctx.artifact_client.write(
+            content=data, key=key, task_id=task_id
+        )
+        ctx._artifacts[(task_id, key)] = pointer["artifact_id"]
+        return JSONResponse(
+            {"artifact_id": pointer["artifact_id"], "key": pointer.get("key", key)}
+        )
+
+    @app.post("/artifacts/{task_id}/{key}")
+    async def write_artifact_raw(
+        task_id: str,
+        key: str,
+        request: Request,
+    ) -> JSONResponse:
+        """Write raw request body as an artifact under task_id/key."""
+        _auth_claims(request, task_id, ctx)
+        data = await request.body()
         pointer = await ctx.artifact_client.write(
             content=data, key=key, task_id=task_id
         )

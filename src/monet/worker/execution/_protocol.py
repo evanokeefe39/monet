@@ -78,6 +78,10 @@ class ContainerSpec:
         image: Container image reference (docker/cloudrun/ecs backends).
         entrypoint: Command to run inside the container, overriding the image
             default entrypoint (e.g. ``["python", "-m", "myagent"]``).
+        expose_port: Container port to publish to the host.  When set, the
+            Docker backend maps this to a random host port and returns the
+            mapped address in :attr:`Endpoint.address`.  Ignored by cloud
+            backends.
         cpu: CPU allocation string in backend-native format (e.g. ``"1"`` for
             Cloud Run, ``"1024"`` for ECS task units).
         memory: Memory limit in MiB (integer).
@@ -87,6 +91,7 @@ class ContainerSpec:
 
     image: str | None = None
     entrypoint: list[str] | None = None
+    expose_port: int | None = None
     cpu: str | None = None
     memory: int | None = None
     labels: dict[str, str] = field(default_factory=dict)

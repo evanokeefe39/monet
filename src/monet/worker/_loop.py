@@ -19,7 +19,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from monet.worker.gateway._auth import DEV_SIGNING_KEY, mint_task_token
+from monet.gateway._auth import DEV_SIGNING_KEY, mint_task_token
 from monet.worker.workload._collect import TaskFailure
 
 if TYPE_CHECKING:

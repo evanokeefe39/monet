@@ -125,6 +125,11 @@ select = [
     "RUF",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# BaseHTTPRequestHandler requires do_GET/do_POST method names (N802).
+"examples/agent-adapters/**" = ["N802"]
+"tests/e2e/test_e2e_failure_modes.py" = ["N802"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

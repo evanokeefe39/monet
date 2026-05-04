@@ -182,7 +182,23 @@ class TestDockerBackend:
         try:
             assert endpoint.backend_type == "docker"
             assert len(endpoint.process_id) == 64  # full container ID
-            assert endpoint.address == ""
+            assert endpoint.address == ""  # no expose_port → empty address
+        finally:
+            await backend.kill(endpoint)
+
+    @pytest.mark.asyncio
+    async def test_start_with_expose_port_returns_reachable_address(self) -> None:
+        backend = DockerBackend()
+        spec = ContainerSpec(
+            image="busybox",
+            entrypoint=["sh", "-c", "nc -l -p 8080 -e echo ok || sleep 999"],
+            expose_port=8080,
+        )
+        endpoint = await backend.start(spec, env={})
+        try:
+            assert endpoint.address.startswith("http://localhost:")
+            port = int(endpoint.address.rsplit(":", 1)[1])
+            assert port > 0
         finally:
             await backend.kill(endpoint)
 

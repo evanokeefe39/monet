@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from monet.artifacts._memory import InMemoryArtifactClient
-from monet.worker.gateway import (
+from monet.gateway import (
     DEV_SIGNING_KEY,
     GatewayContext,
     create_gateway_app,

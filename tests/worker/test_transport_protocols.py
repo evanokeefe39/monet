@@ -110,6 +110,7 @@ def test_container_spec_all_optional() -> None:
     spec = ContainerSpec()
     assert spec.image is None
     assert spec.entrypoint is None
+    assert spec.expose_port is None
     assert spec.cpu is None
     assert spec.memory is None
     assert spec.labels == {}

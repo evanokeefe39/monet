@@ -149,6 +149,107 @@ def _skip_if_no_docker() -> None:
         pytest.skip(f"Docker daemon unreachable: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Agent adapter image build fixtures (used by agent-integration E2E tests)
+# ---------------------------------------------------------------------------
+
+ADAPTERS_DIR = REPO_ROOT / "examples" / "agent-adapters"
+CLAW_BOT_PI_SRC = Path.home() / "repos" / "claw-bot-evals" / "pi-agents"
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env file; return key/value pairs (no shell expansion)."""
+    result: dict[str, str] = {}
+    if not path.exists():
+        return result
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        result[key.strip()] = value.strip()
+    return result
+
+
+def _agent_env() -> dict[str, str]:
+    """Env vars to inject into agent containers (API keys, LLM routing)."""
+    env_file = REPO_ROOT / ".env"
+    keys = _load_env_file(env_file)
+    result: dict[str, str] = {}
+    for k in (
+        "NVIDIA_NIM_API_KEY",
+        "GROQ_API_KEY",
+        "TAVILY_API_KEY",
+        "EXA_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+    ):
+        if k in os.environ:
+            result[k] = os.environ[k]
+        elif k in keys:
+            result[k] = keys[k]
+    if "NVIDIA_NIM_API_KEY" in result and "OPENAI_API_KEY" not in result:
+        result["OPENAI_API_KEY"] = result["NVIDIA_NIM_API_KEY"]
+    result.setdefault("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    return result
+
+
+def _build_pi_image(tag: str, adapter_dir: Path) -> str:
+    """Build a pi-based adapter image; return the image tag."""
+    _skip_if_no_docker()
+    if not CLAW_BOT_PI_SRC.exists():
+        pytest.skip(f"Pi source not found at {CLAW_BOT_PI_SRC}")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ctx = Path(tmp)
+        # Adapter files at root of build context.
+        for f in adapter_dir.iterdir():
+            if f.is_file():
+                shutil.copy2(f, ctx / f.name)
+        # Pi source at pi-src/ (referenced by Dockerfile COPY pi-src/...).
+        shutil.copytree(CLAW_BOT_PI_SRC, ctx / "pi-src")
+        subprocess.run(
+            ["docker", "build", "-t", tag, str(ctx)],
+            check=True,
+            timeout=600,
+        )
+    return tag
+
+
+@pytest.fixture(scope="session")
+def pi_agent_image() -> str:
+    """Build monet-e2e/pi-agent:latest; return the tag."""
+    return _build_pi_image("monet-e2e/pi-agent:latest", ADAPTERS_DIR / "pi")
+
+
+@pytest.fixture(scope="session")
+def pi_gateway_agent_image() -> str:
+    """Build monet-e2e/pi-gateway-agent:latest; return the tag."""
+    return _build_pi_image(
+        "monet-e2e/pi-gateway-agent:latest", ADAPTERS_DIR / "pi-gateway"
+    )
+
+
+@pytest.fixture(scope="session")
+def zeroclaw_agent_image() -> str:
+    """Build monet-e2e/zeroclaw-agent:latest; return the tag."""
+    _skip_if_no_docker()
+    tag = "monet-e2e/zeroclaw-agent:latest"
+    subprocess.run(
+        ["docker", "build", "-t", tag, str(ADAPTERS_DIR / "zeroclaw")],
+        check=True,
+        timeout=600,
+    )
+    return tag
+
+
+@pytest.fixture(scope="session")
+def agent_env() -> dict[str, str]:
+    """API key env vars to inject into agent containers."""
+    return _agent_env()
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[Any]:
     """Session-scoped Postgres testcontainer. Yields the container handle.
@@ -175,3 +276,72 @@ def redis_container() -> Iterator[Any]:
 
     with RedisContainer("redis:7-alpine") as container:
         yield container
+
+
+# ---------------------------------------------------------------------------
+# Embedded gateway fixture (used by T5 gateway roundtrip test)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def embedded_gateway() -> Iterator[dict[str, Any]]:
+    """Start the monet gateway on a random local port.
+
+    Yields a dict with:
+        host_url    — reachable from the test process (http://localhost:{port})
+        docker_url  — reachable from inside Docker containers
+        signing_key — JWT signing key used by the gateway
+        ctx         — GatewayContext (for post-hoc artifact inspection)
+    """
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from monet.artifacts._memory import InMemoryArtifactClient
+    from monet.gateway import DEV_SIGNING_KEY, GatewayContext, create_gateway_app
+
+    class _NullProgressWriter:
+        async def record(self, run_id: str, event: Any) -> int:
+            return 0
+
+    # Find a free port.
+    with socket.socket() as sock:
+        sock.bind(("", 0))
+        port = sock.getsockname()[1]
+
+    ctx = GatewayContext(
+        artifact_client=InMemoryArtifactClient(),
+        progress_writer=_NullProgressWriter(),
+        signing_key=DEV_SIGNING_KEY,
+    )
+    app = create_gateway_app(ctx)
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    # Wait for server to become ready.
+    deadline = time.monotonic() + 10.0
+    import httpx as _httpx
+
+    while time.monotonic() < deadline:
+        try:
+            _httpx.get(f"http://localhost:{port}/health", timeout=1.0)
+            break
+        except Exception:
+            time.sleep(0.2)
+
+    # On Windows/Mac Docker can reach the host via host.docker.internal.
+    docker_url = f"http://host.docker.internal:{port}"
+
+    yield {
+        "host_url": f"http://localhost:{port}",
+        "docker_url": docker_url,
+        "signing_key": DEV_SIGNING_KEY,
+        "ctx": ctx,
+    }
+
+    server.should_exit = True
+    thread.join(timeout=5)

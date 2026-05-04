@@ -10,6 +10,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+import httpx
+
 from monet.worker.execution._protocol import (
     ContainerSpec,
     Endpoint,
@@ -42,7 +44,10 @@ async def _wait_ready(
     endpoint: Endpoint,
     startup_timeout_s: float,
 ) -> None:
-    """Poll backend until the process reports RUNNING or the timeout expires.
+    """Poll backend until the process reports RUNNING then probe /health.
+
+    Phase 1: poll backend.poll_status until RUNNING.
+    Phase 2: if endpoint.address is set, poll {address}/health until HTTP 200.
 
     Raises:
         RuntimeError: If the process exits before becoming ready, or if the
@@ -50,10 +55,12 @@ async def _wait_ready(
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + startup_timeout_s
+
+    # Phase 1 — container must reach RUNNING state.
     while True:
         status = await backend.poll_status(endpoint)
         if status == JobStatus.RUNNING:
-            return
+            break
         if status in (JobStatus.FAILED, JobStatus.SUCCEEDED):
             raise RuntimeError(
                 f"Agent process exited during startup (status={status.value})"
@@ -64,6 +71,27 @@ async def _wait_ready(
                 f"Agent did not become ready within {startup_timeout_s}s"
             )
         await asyncio.sleep(min(1.0, remaining))
+
+    # Phase 2 — probe /health when the endpoint has an address.
+    if not endpoint.address:
+        return
+    health_url = endpoint.address.rstrip("/") + "/health"
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=2.0, read=2.0, write=2.0, pool=2.0)
+    ) as client:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Agent /health did not respond 200 within {startup_timeout_s}s"
+                )
+            try:
+                resp = await client.get(health_url)
+                if resp.status_code == 200:
+                    return
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
+                pass
+            await asyncio.sleep(min(1.0, remaining))
 
 
 async def execute_managed_workload(
@@ -93,6 +121,7 @@ async def execute_managed_workload(
     spec = ContainerSpec(
         image=pool.image,
         entrypoint=agent.transport.cmd,
+        expose_port=pool.agent_port,
     )
     endpoint = await backend.start(spec, {**gateway_env, **_task_env(record)})
     try:

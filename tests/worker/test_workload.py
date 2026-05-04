@@ -37,8 +37,9 @@ from monet.worker.workload._collect import (
 
 
 def _fake_endpoint(pid: str = "123") -> Endpoint:
+    # Empty address skips /health polling — mock transport ignores address anyway.
     return Endpoint(
-        address="http://127.0.0.1:9999",
+        address="",
         process_id=pid,
         backend_type="subprocess",
     )

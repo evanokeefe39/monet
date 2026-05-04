@@ -34,7 +34,7 @@ class FsspecStorage:
         return ArtifactPointer(artifact_id=artifact_id, url=url)
 
     def _sync_write(self, url: str, content: bytes) -> None:
-        import fsspec  # type: ignore[import-not-found]
+        import fsspec  # type: ignore[import-not-found,import-untyped]
 
         fs, path = fsspec.url_to_fs(url)
         parent = "/".join(path.replace("\\", "/").rstrip("/").split("/")[:-1])
@@ -49,7 +49,7 @@ class FsspecStorage:
         return await asyncio.to_thread(self._sync_read, url, artifact_id)
 
     def _sync_read(self, url: str, artifact_id: str) -> bytes:
-        import fsspec  # type: ignore[import-not-found]
+        import fsspec  # type: ignore[import-not-found,import-untyped]
 
         fs, path = fsspec.url_to_fs(url)
         if not fs.exists(path):

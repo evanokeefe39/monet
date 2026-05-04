@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from monet.worker.gateway._routes import GatewayContext, mount_routes
+from monet.gateway._routes import GatewayContext, mount_routes
 
 __all__ = ["create_gateway_app"]
 

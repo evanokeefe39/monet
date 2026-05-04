@@ -87,6 +87,7 @@ class ContainerSupervisor:
         instances: list[ManagedInstance] = []
         spec = ContainerSpec(
             image=config.image,
+            expose_port=config.agent_port,
             labels={"monet.pool": pool},
         )
         for i in range(config.warm_pool_size):
@@ -188,6 +189,7 @@ class ContainerSupervisor:
 
         spec = ContainerSpec(
             image=config.image,
+            expose_port=config.agent_port,
             labels={"monet.pool": pool},
         )
         try:

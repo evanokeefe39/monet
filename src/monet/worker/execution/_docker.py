@@ -35,6 +35,10 @@ class DockerBackend:
     async def start(self, spec: ContainerSpec, env: dict[str, str]) -> Endpoint:
         """Pull and start a Docker container.
 
+        When ``spec.expose_port`` is set, the container port is published to a
+        random host port and the returned :class:`Endpoint` carries a reachable
+        ``http://localhost:{host_port}`` address.  Otherwise ``address`` is empty.
+
         Args:
             spec: Must have a non-None ``image``.  ``entrypoint`` overrides the
                 image default when provided.  ``labels`` are applied to the
@@ -42,8 +46,7 @@ class DockerBackend:
             env: Environment variables injected into the container.
 
         Returns:
-            :class:`~._protocol.Endpoint` with ``backend_type="docker"`` and
-            an empty ``address``.
+            :class:`~._protocol.Endpoint` with ``backend_type="docker"``.
 
         Raises:
             RuntimeError: If the ``docker`` package is not installed.
@@ -55,21 +58,38 @@ class DockerBackend:
                 "DockerBackend requires docker: pip install docker"
             ) from exc
 
-        def _run() -> str:
+        expose = spec.expose_port
+
+        def _run() -> tuple[str, str]:
             client = docker.from_env()
+            ports: dict[str, object] | None = None
+            if expose is not None:
+                ports = {f"{expose}/tcp": ("127.0.0.1", 0)}
             container = client.containers.run(
                 spec.image,
                 spec.entrypoint,
                 detach=True,
                 environment=env,
                 labels=spec.labels or {},
+                ports=ports,
             )
-            return container.id  # type: ignore[no-any-return]
+            address = ""
+            if expose is not None:
+                container.reload()
+                port_map = container.ports.get(f"{expose}/tcp")
+                if port_map:
+                    host_port = port_map[0]["HostPort"]
+                    address = f"http://localhost:{host_port}"
+            return container.id, address  # type: ignore[return-value]
 
-        container_id: str = await asyncio.to_thread(_run)
-        _log.debug("docker started: container_id=%s", container_id[:12])
+        container_id, address = await asyncio.to_thread(_run)
+        _log.debug(
+            "docker started: container_id=%s address=%s",
+            container_id[:12],
+            address or "(none)",
+        )
         return Endpoint(
-            address="",
+            address=address,
             process_id=container_id,
             backend_type="docker",
         )

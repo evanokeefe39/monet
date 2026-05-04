@@ -1,114 +1,279 @@
-# Fix: LangGraph state scoping for multi-run chat threads
+# E2E Testing — Real Agent Integration
 
-## Problem
+## Overview
 
-On same-thread multi-run conversations, stale execution state (wave_results, completed_node_ids) and duplicate messages leak across runs. Root cause: transient execution data lives in parent ChatState with append reducers instead of being scoped to the execution subgraph.
+Validate worker composition model end-to-end using real agents from
+~/repos/claw-bot-evals. Each agent gets a combined Docker image containing
+the real agent process plus a thin adapter that speaks monet's /task protocol.
 
-## Goal
+---
 
-Align with LangGraph best practices:
-- Thread-scoped = `messages` only (using `add_messages` reducer)
-- Run-scoped transient data stays inside subgraphs
-- Parent graph only receives distilled output (messages)
+## Prerequisites
 
-## Checklist
+### P1: DockerBackend must return a reachable address — DONE
 
-### Phase 1: Move execution_summary_node into execution subgraph
+Added `ContainerSpec.expose_port` and `PoolConfig.agent_port`. DockerBackend
+publishes the container port to a random host port and returns
+`http://localhost:{host_port}` as endpoint address. Workload layer passes
+`pool.agent_port` through. 889 tests pass, mypy clean.
 
-This is the key structural fix. execution_summary_node currently lives in the chat graph and reads wave_results from ChatState. Moving it inside the execution subgraph means wave_results never needs to leave ExecutionState.
+### P2: .env with API keys — DONE
 
-- [ ] Move `execution_summary_node` from `chat/_format.py` into `execution_graph.py` as the final node before END
-- [ ] Update execution subgraph topology: `collect_batch → (route_after_collect) → {dispatch | human_interrupt | END}` becomes `... → END → execution_summary` — actually: add edge from the END-bound route to a new "summarise" node, then that node → END
-- [ ] `execution_summary_node` writes to `messages` field (add `messages: Annotated[list, _append_reducer]` to ExecutionState if not present)
-- [ ] The summary message flows back to parent ChatState via name-matching on `messages`
-- [ ] Remove `execution_summary` node from chat graph (`_build.py`)
-- [ ] Remove edge `execution → execution_summary → END`, replace with `execution → END`
-- [ ] Verify: graph topology test still passes
+Copied from ~/repos/claw-bot-evals/.env. Keys: NVIDIA_NIM_API_KEY,
+GROQ_API_KEY, TAVILY_API_KEY, EXA_API_KEY. Both agents route through NIM
+with deepseek-v4-pro. Zero Anthropic/OpenAI spend.
 
-### Phase 2: Remove wave_results/wave_reflections from ChatState and RunState
+---
 
-Once execution_summary_node is inside the subgraph, parent graphs no longer need wave_results.
+## Agent selection
 
-- [ ] Remove `wave_results` and `wave_reflections` from `ChatState` (chat/_state.py)
-- [ ] Remove `wave_results` and `wave_reflections` from `RunState` (prebuilt/_state.py)
-- [ ] Keep them in `ExecutionState` — they're correctly scoped there
-- [ ] Remove `completed_node_ids` from `ChatState` (it's already only in ExecutionState + the parse reset)
-- [ ] Remove the `completed_node_ids` reset from `parse_command_node` (no longer needed)
-- [ ] Remove `wave_results`/`wave_reflections` resets from `parse_command_node`
-- [ ] Verify: mypy passes, tests pass
+| Agent | Transport | Why selected | Image |
+|---|---|---|---|
+| Pi | HTTP POST /chat, NDJSON streaming | Fast build (2min), /health, streaming | Build from claw-bot-evals/pi-agents |
+| ZeroClaw | REST :3002, OpenAI-compatible | Pre-built pull, 93MB, config-driven | ghcr.io/zeroclaw-labs/zeroclaw:latest |
 
-### Phase 3: Switch messages to add_messages reducer
+Skipped: NanoClaw (Docker socket), IronClaw (20min build, wizard),
+Hermes (8.3GB, wizard), Nanobot (SYS_ADMIN), PicoClaw (web UI only).
 
-Replace `_append_reducer` on messages with LangGraph's `add_messages` which deduplicates by message ID and prevents the double-user-message bug.
+---
 
-- [ ] Import `add_messages` from `langgraph.graph.message`
-- [ ] Replace `Annotated[list[dict[str, Any]], _append_reducer]` with `Annotated[list, add_messages]` for the `messages` field in `PlanningState`
-- [ ] Ensure all message dicts emitted by nodes include an `id` field (or use LangChain message objects)
-- [ ] If `add_messages` expects LangChain BaseMessage objects, evaluate whether to keep dict messages with a custom ID-aware reducer instead
-- [ ] Alternative: write a `_dedup_messages_reducer` that deduplicates by content hash for dict-based messages (simpler, no BaseMessage dependency)
-- [ ] Test: sending same message twice on same thread doesn't produce duplicate in state
-- [ ] Remove the `update_state` + `input={}` double-write pattern in `send_message` if add_messages handles it, OR ensure message IDs prevent duplication
+## Adapter architecture
 
-### Phase 4: Reset planning_context at planning entry
+Each adapter is a single-container Docker image:
+1. Starts the real agent as a subprocess or internal service
+2. Exposes /task (monet protocol) and /health on port 8080
+3. Translates monet payload to agent's native API
+4. Returns agent response as JSON object
 
-`planning_context` uses append reducer and grows across runs. Each new plan on the same thread shouldn't inherit old context entries from unrelated previous plans.
+### Pi adapter
 
-- [ ] In the planner node (or a new `initialise_planning` entry node), reset `planning_context` to `[]` at the start of each planning invocation
-- [ ] OR: change `planning_context` from append reducer to plain list (overwritten each run)
-- [ ] Evaluate: is there a case where carrying forward old context is desired? (e.g., "plan something similar to before") — if yes, keep append but scope to the current `task`
-- [ ] Decision: likely reset is correct — the planner gets conversation history via `messages`, it doesn't need raw planning_context from prior unrelated plans
+Dockerfile: multi-stage, node:22-slim for Pi + python:3.12-slim for adapter.
+Pi runs on internal port 9000. Adapter on 8080.
 
-### Phase 5: Remove client-side workarounds
-
-Once state scoping is correct, the band-aids can go.
-
-- [ ] Remove the `seen_content` pre-seed from `_stream_chat_with_input` in `chat.py` (no stale messages in stream)
-- [ ] Remove `plan_approved`, `work_brief_pointer`, `routing_skeleton` resets from `parse_command_node` (these are overwritten by the planning subgraph each run anyway; the issue was wave_results leaking)
-- [ ] Evaluate: keep the parse resets as defense-in-depth? Costs nothing, prevents future bugs if someone adds a new conditional edge that reads old state. Decision: keep them, they're cheap.
-- [ ] Remove the `_subgraph_parents` dedup logic in `stream_run` only if parent echoes no longer carry stale messages — test this empirically
-
-### Phase 6: Verify end-to-end
-
-- [ ] `uv run ruff check .`
-- [ ] `uv run ruff format .`  
-- [ ] `uv run mypy src/`
-- [ ] `uv run pytest tests/chat/ tests/orchestration/ -q --ignore=tests/e2e --ignore=tests/compat 2>&1 | tail -60`
-- [ ] Manual test: run two different plans on same chat thread, verify no duplicate "Execution finished"
-- [ ] Manual test: verify wave_results don't carry old entries into new execution
-- [ ] Manual test: verify conversation history displays correctly in TUI after multiple runs
-
-## Architecture after changes
-
+Protocol translation:
 ```
-ChatState (parent):
-  messages: Annotated[list, add_messages]   # thread-scoped, deduped
-  route: str | None                         # run-scoped (overwritten by parse)
-  command_meta: dict                        # run-scoped
-  task: str                                 # run-scoped
-  + PlanningState fields (plan_approved, routing_skeleton, etc.)
-
-PlanningState (subgraph):
-  messages: Annotated[list, add_messages]   # flows to parent
-  task, work_brief_pointer, routing_skeleton, plan_approved, ...
-  planning_context: list[dict]              # run-scoped (reset at entry)
-
-ExecutionState (subgraph):
-  messages: Annotated[list, add_messages]   # execution_summary writes here → flows to parent
-  wave_results: Annotated[list, _append_reducer]   # stays here, never leaves
-  wave_reflections: Annotated[list, _append_reducer]  # stays here
-  completed_node_ids: list[str]             # stays here
-  routing_skeleton, work_brief_pointer, ...
+POST /task {task_id, payload: {task, context, command, agent_id}}
+  → POST http://localhost:9000/chat {message: payload.task, session_id: task_id}
+    query: stream=false
+  ← {message: "response text"}
+  → {output: "response text"}
 ```
 
-State flow:
-- ChatState.messages ←(name-match)→ PlanningState.messages ←(name-match)→ ExecutionState.messages
-- wave_results only exists in ExecutionState — scoped to one execution run
-- execution_summary_node runs inside execution subgraph, writes to messages
-- Parent chat graph receives the summary as a message, never sees raw wave_results
+Health: GET /health → proxy Pi GET /health on :9000.
 
-## Risk items
+Env vars passed through: NVIDIA_NIM_API_KEY, OPENAI_BASE_URL, OPENAI_API_KEY,
+LLM_PROVIDER, LLM_MODEL, TAVILY_API_KEY, EXA_API_KEY.
 
-1. `add_messages` expects LangChain BaseMessage objects with `id` fields — if monet uses plain dicts, need either a custom reducer or conversion layer
-2. Moving execution_summary_node changes the stream event namespace — client may need update to where it expects the summary event
-3. `default_graph.py` (pipeline, non-chat) also has wave_results in RunState — same fix applies there
-4. Tests that assert on wave_results in ChatState output will break — update to check messages instead
+### ZeroClaw adapter
+
+Dockerfile: multi-stage, zeroclaw official image for binary + python:3.12-slim
+for adapter. ZeroClaw on internal port 3002. Adapter on 8080.
+
+Protocol translation:
+```
+POST /task {task_id, payload: {task, context, command, agent_id}}
+  → POST http://localhost:3002/v1/chat/completions
+    {model: "deepseek-ai/deepseek-v4-pro", messages: [{role: "user", content: payload.task}]}
+  ← {choices: [{message: {content: "response"}}]}
+  → {output: "response"}
+```
+
+Health: GET /health → TCP probe on :3002 (ZeroClaw has no /health endpoint).
+
+Requires config.toml mounted into the image at build time.
+
+### Pi-gateway adapter (for T5)
+
+Same as Pi adapter + writes result as artifact to gateway before returning.
+Reads MONET_GATEWAY_URL and MONET_TOKEN from env.
+
+```python
+# After getting Pi response:
+httpx.post(f"{gw_url}/artifacts/{task_id}/research_output",
+           headers={"Authorization": f"Bearer {token}"},
+           content=response_text)
+```
+
+---
+
+## Test scenarios
+
+### T1: Docker managed + Pi (core lifecycle)
+
+```toml
+[pools.pi-managed]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/pi-agent:latest"
+agent_port = 8080
+concurrency = 2
+task_timeout_s = 120
+startup_timeout_s = 45
+graceful_shutdown_s = 10
+```
+
+Flow: enqueue → claim → DockerBackend.start(expose_port=8080) →
+_wait_ready polls /health → HTTPSession POST /task → adapter → Pi /chat →
+LLM via NIM → response → session.receive() → DockerBackend.stop() → done.
+
+Validates: managed lifecycle, Docker port publishing, HTTP transport,
+real LLM round-trip, startup/shutdown.
+
+### T2: Docker persistent + Pi (warm pool reuse)
+
+```toml
+[pools.pi-persistent]
+backend = "docker"
+workload = "persistent"
+image = "monet-e2e/pi-agent:latest"
+agent_port = 8080
+warm_pool_size = 2
+concurrency = 2
+task_timeout_s = 120
+startup_timeout_s = 45
+heartbeat_interval_s = 10
+restart_policy = "on_failure"
+max_restarts = 3
+```
+
+Flow: supervisor starts 2 containers → TaskRouter registers idle →
+enqueue 3 tasks → first 2 acquire one each → third blocks until release →
+verify only 2 containers started.
+
+Validates: warm pool, TaskRouter acquire/release, container reuse,
+back-pressure.
+
+### T3: Docker managed + ZeroClaw
+
+```toml
+[pools.zeroclaw-managed]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/zeroclaw-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+startup_timeout_s = 60
+```
+
+Same lifecycle as T1 with ZeroClaw. Longer startup (model config load).
+
+Validates: managed lifecycle with pre-built third-party agent, different
+LLM provider path.
+
+### T4: Mixed-pool single worker
+
+```toml
+[pools.local]
+backend = "in_process"
+
+[pools.pi-pool]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/pi-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+
+[pools.zeroclaw-pool]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/zeroclaw-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+```
+
+One @agent in-process + Pi + ZeroClaw. One worker, three pools, three tasks.
+
+Validates: multi-pool claim loop, routing by backend, concurrent execution.
+
+### T5: Gateway data plane round-trip
+
+```toml
+[pools.pi-gateway]
+backend = "docker"
+workload = "task"
+image = "monet-e2e/pi-gateway-agent:latest"
+agent_port = 8080
+task_timeout_s = 120
+
+[gateway]
+port = 2027
+```
+
+Pi-gateway adapter writes artifact to gateway after LLM response. Worker
+verifies artifact exists post-completion.
+
+Validates: embedded gateway, JWT minting, artifact write from container,
+artifact read from worker, task-scoped isolation.
+
+### T6: Failure modes
+
+All use Pi adapter.
+
+- **T6a timeout**: task_timeout_s = 5, slow prompt → cancel → cleanup
+- **T6b crash**: kill container mid-task → TransportError → fail → no orphan
+- **T6c startup timeout**: startup_timeout_s = 1 → _wait_ready fails → stop
+- **T6d agent error**: malformed payload → HTTP 400 → AgentError → fail
+
+---
+
+## File layout
+
+```
+examples/agent-adapters/
+    README.md
+    pi/
+        Dockerfile
+        adapter.py
+        requirements.txt
+    zeroclaw/
+        Dockerfile
+        adapter.py
+        config.toml
+        requirements.txt
+    pi-gateway/
+        Dockerfile
+        adapter.py
+        requirements.txt
+tests/e2e/
+    conftest.py              # add Docker image build fixtures
+    test_e2e_pi_managed.py
+    test_e2e_pi_persistent.py
+    test_e2e_zeroclaw_managed.py
+    test_e2e_mixed_pool.py
+    test_e2e_gateway_roundtrip.py
+    test_e2e_failure_modes.py
+    fixtures/
+        monet-e2e.toml
+```
+
+---
+
+## Build order
+
+- [x] P1: DockerBackend addressing
+- [x] P2: .env with API keys
+- [x] Pi adapter image (examples/agent-adapters/pi/)
+- [x] T1: test_e2e_pi_managed.py
+- [x] ZeroClaw adapter image (examples/agent-adapters/zeroclaw/)
+- [x] T3: test_e2e_zeroclaw_managed.py
+- [x] T4: test_e2e_mixed_pool.py
+- [x] T2: test_e2e_pi_persistent.py
+- [x] Pi-gateway adapter + T5: test_e2e_gateway_roundtrip.py
+- [x] T6: test_e2e_failure_modes.py
+
+---
+
+## Dependency graph
+
+```
+P1 (done) ──┬── Pi adapter
+             │    ├── T1 (pi managed)
+             │    ├── T2 (pi persistent)
+             │    ├── T4 (mixed pool) ← also needs ZeroClaw adapter
+             │    ├── T6 (failure modes)
+             │    └── Pi-gateway adapter
+             │         └── T5 (gateway roundtrip)
+             └── ZeroClaw adapter
+                  ├── T3 (zeroclaw managed)
+                  └── T4 (mixed pool)
+```

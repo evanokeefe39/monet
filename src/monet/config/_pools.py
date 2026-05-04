@@ -58,6 +58,9 @@ class PoolConfig:
         task_timeout_s: Seconds before a task is considered failed.
         lease_ttl: Task lease TTL in seconds.
         image: Container image for docker/cloudrun/ecs backends.
+        agent_port: Port the agent listens on inside the container. When set,
+            the Docker backend publishes this port to a random host port and
+            returns a reachable ``http://localhost:{host_port}`` address.
         warm_pool_size: Number of pre-warmed persistent instances.
         startup_timeout_s: Seconds to wait for a new instance to become ready.
         graceful_shutdown_s: Seconds to wait for a draining instance to finish.
@@ -90,6 +93,7 @@ class PoolConfig:
     lease_ttl: int = 300
 
     image: str | None = None
+    agent_port: int | None = None
 
     warm_pool_size: int = 0
     startup_timeout_s: float = 30.0
@@ -217,6 +221,7 @@ def load_pool_config(path: Path | None = None) -> dict[str, PoolConfig]:
             task_timeout_s=_get_float(pool_data, "task_timeout_s", 300.0),
             lease_ttl=_get_int(pool_data, "lease_ttl", 300),
             image=_get_str(pool_data, "image"),
+            agent_port=_get_int(pool_data, "agent_port", 0) or None,
             warm_pool_size=_get_int(pool_data, "warm_pool_size", 0),
             startup_timeout_s=_get_float(pool_data, "startup_timeout_s", 30.0),
             graceful_shutdown_s=_get_float(pool_data, "graceful_shutdown_s", 30.0),
