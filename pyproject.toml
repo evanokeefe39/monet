@@ -63,7 +63,7 @@ examples = [
     "aegra-cli>=0.9",
     "langchain-google-genai>=2.0",
     "langchain-groq>=0.2",
-    "tavily-python>=0.5",
+    "tavily-python>=0.7.24",
     "exa-py>=1.0",
     "python-dotenv>=1.0",
 ]
