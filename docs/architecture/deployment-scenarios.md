@@ -24,10 +24,13 @@ Key files: `src/monet/cli/_worker.py`, `src/monet/server/_auth.py`, `src/monet/q
 
 Same as S2 but N worker processes across regions or hardware classes, each claiming by `--pool` name declared in `monet.toml [pools]`. One logical server, several worker fleets.
 
-Two pool execution modes exist:
+Three pool execution modes exist:
 
-- **Pull pools** — workers poll `claim()`, execute in-process, heartbeat lease every 30s via `renew_lease()`. No inbound ports required.
-- **Cloud dispatch pools** — `dispatch = "ecs"` or `dispatch = "cloudrun"` in `monet.toml [pools.<name>]`. A thin dispatch worker polls `claim()`, submits the task to ECS/Cloud Run via outbound API call, then immediately claims next. The spawned container runs standard worker bootstrap, calls `complete()`/`fail()`, and heartbeats directly. No inbound ports on any worker.
+- **Pull pools** — workers poll `claim()`, execute in-process or via managed backend (subprocess/Docker), heartbeat lease every 30s via `renew_lease()`. No inbound ports required.
+- **Cloud-push pools** — `backend = "cloudrun"` or `backend = "ecs"` in `monet.toml [pools.<name>]`. Worker polls `claim()`, dispatches to cloud via API, then polls cloud API for job completion (ADR-007). No webhooks, no inbound ports. Agent communicates artifacts/progress/signals through the data plane gateway.
+- **Persistent pools** — `workload = "persistent"` with subprocess/Docker/K8s backend. Long-running agent containers, worker routes tasks to idle instances via TaskRouter.
+
+All workers and agents are outbound-only. The data plane gateway (ADR-008) is the single inbound endpoint for agent-to-platform communication. For cross-network cloud-push, the gateway must be reachable from the cloud provider's network (via public endpoint or Cloudflare Tunnel).
 
 Target audience: `examples/split-fleet/` (one server, two pools `fast` + `heavy`, shipped as both a Docker Compose stack and a Railway deployment).
 
@@ -49,6 +52,40 @@ MonetClient(url="https://control.saas.com", data_plane_url="https://data.custome
 
 Control-plane methods (`run`, `resume`, `abort`, `list_runs`) target `url`. Data-plane methods (`subscribe_events`, `query_events`, `list_artifacts`) target `data_plane_url`. When `data_plane_url` is absent, all methods resolve against `url` — zero config change for S1–S3.
 
+### Data plane gateway in S5
+
+The data plane gateway (ADR-008) runs in customer infrastructure as the single authenticated endpoint for agent communication. All agents POST artifacts, progress, and signals to the gateway. The gateway routes to customer-owned backend stores (S3, Postgres, OTel collector). Backend credentials live only in the gateway.
+
+Enterprise service topology:
+
+```
+Control Plane (vendor-hosted)
+  Task routing, run state, metadata, UI
+  No user data transits here
+       |
+       | outbound only (workers poll CP)
+       |
+Customer Infrastructure
+  +-- Data Plane Gateway (public HTTPS, JWT auth)
+  |     +-- Artifact store (S3, GCS, local FS)
+  |     +-- Progress store (Postgres)
+  |     +-- OTel collector (Grafana Cloud, Honeycomb, etc.)
+  |
+  +-- Workers (any network, outbound-only)
+  |     +-- Laptop, VPS, K8s
+  |
+  +-- Agents (any network, outbound to gateway)
+        +-- Local subprocess, Docker, CloudRun, ECS
+```
+
+For cross-network deployments (laptop worker + CloudRun burst), the gateway
+needs a public URL. Options: deploy behind a load balancer, or use Cloudflare
+Tunnel (`monet dev --tunnel`) for development. Quick tunnels via
+trycloudflare.com are free and require no account.
+
+Pool-scoped service config (`[pools.*.gateway]`) lets different pools in
+different networks use the same or different gateway endpoints. See ADR-008.
+
 Data plane config in `monet.toml`:
 
 ```toml
@@ -58,6 +95,11 @@ data_url = "https://data.customer.com"
 [planes.progress]
 backend = "postgres"
 dsn     = "postgresql://..."
+
+[gateway]
+port = 2027
+signing_key_env = "MONET_GATEWAY_KEY"
+# tunnel = "cloudflare"   # optional: auto-start cloudflared for dev
 ```
 
 `ProgressBackend` enum rejects invalid values at config-parse time. Boot validator raises `ConfigurationError` if `data_plane_url` is set but no `ProgressWriter` backend is configured.
@@ -120,10 +162,11 @@ Individual users submit work through the control plane. Blast radius is managed 
 Each step is a config change, not a migration. Same code, same pipelines, same agents:
 
 - S1 → S2: add `MONET_SERVER_URL` to worker
-- S2 → S5: deploy server with `--plane control`, point workers at it
-- S5 → S3: add `dispatch = "ecs"` to `monet.toml`
+- S2 → S3 (local cloud push): add `backend = "cloudrun"` pool, run `monet dev --tunnel` for gateway
+- S2 → S3 (production cloud push): deploy gateway behind LB, set `gateway = "https://..."` in pool config
+- S3 → S5: deploy server with `--plane control`, point workers at it, deploy gateway in customer infra
 
-No rewrites at any step. The pipeline topology is the constant.
+No rewrites at any step. The pipeline topology is the constant. The data plane gateway is the only new component when crossing network boundaries — and in dev mode it starts embedded in the worker automatically.
 
 ## Deployment-assumption defaults
 
@@ -135,3 +178,32 @@ No rewrites at any step. The pipeline topology is the constant.
 - `cli/_dev.py` healthcheck polls `127.0.0.1` — dev-only, correct.
 
 No hardcodes that break remote deployment.
+
+## Cross-network considerations (ADR-007, ADR-008)
+
+When components span disparate networks (laptop + CloudRun, Railway + GCP,
+multi-cloud), shared services need to be reachable from all networks. This is
+a network topology constraint, not a software design choice. Two patterns:
+
+**Cloud-managed backends (recommended for production):** Use services with
+authenticated public endpoints — S3/GCS for artifacts, managed Postgres for
+progress, cloud OTel collectors (Grafana Cloud, Honeycomb, Datadog). These
+are reachable from any network. The gateway routes to them; agents never see
+the credentials.
+
+**Cloudflare Tunnel (recommended for dev + cloud push):** For laptop workers
+that burst to CloudRun/ECS, a Cloudflare Tunnel gives the local gateway a
+public URL without exposing ports or configuring NAT. Quick tunnels are free
+and require no account. The compose stack includes a cloudflared sidecar when
+`[gateway] tunnel = "cloudflare"` is set.
+
+**What doesn't work:** Local-only backends (SQLite, local filesystem) are not
+reachable from external networks. If a user wants cloud push, they must either
+use cloud-managed backends or expose the gateway publicly. This is documented
+and validated at boot: if a cloud-push pool is configured but the gateway has
+no public URL, the boot validator warns.
+
+## Related ADRs
+
+- **ADR-007** — Cloud-push result delivery via worker polling, not webhooks
+- **ADR-008** — Data plane gateway for cross-network service access
