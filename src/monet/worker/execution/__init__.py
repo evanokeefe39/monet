@@ -8,11 +8,19 @@ Each backend implements :class:`ExecutionBackend` and returns an
 
 from __future__ import annotations
 
+from ._cloudrun import CloudRunBackend
+from ._docker import DockerBackend
+from ._ecs import ECSBackend
 from ._protocol import ContainerSpec, Endpoint, ExecutionBackend, JobStatus
+from ._subprocess import SubprocessBackend
 
 __all__ = [
+    "CloudRunBackend",
     "ContainerSpec",
+    "DockerBackend",
+    "ECSBackend",
     "Endpoint",
     "ExecutionBackend",
     "JobStatus",
+    "SubprocessBackend",
 ]
