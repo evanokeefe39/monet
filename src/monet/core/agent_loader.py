@@ -146,7 +146,7 @@ def _make_handler(
     agent_id: str,
     command: str,
 ) -> Any:
-    """Create an async handler with values bound at creation time."""
+    """Create an async handler backed by a transport adapter."""
 
     async def handler(
         task: str,
@@ -158,22 +158,49 @@ def _make_handler(
             "command": command,
             "agent_id": agent_id,
         }
-        stream = _build_stream(transport, payload)
-        result: str | None = await stream.run()
-        return result
+        adapter = _resolve_adapter(transport)
+        endpoint = _make_endpoint(transport)
+        session = await adapter.connect(endpoint)
+        try:
+            await session.submit(payload)
+            async for event in session.receive():
+                if event.type == "result":
+                    output = event.data.get("output")
+                    return output if isinstance(output, str) else None
+        finally:
+            await session.close()
+        return None
 
     return handler
 
 
-def _build_stream(transport: AgentTransportConfig, payload: dict[str, Any]) -> Any:
-    """Dispatch to the appropriate ``AgentStream`` constructor."""
-    from monet.streams import AgentStream
-
+def _resolve_adapter(transport: AgentTransportConfig) -> Any:
+    """Return the transport adapter matching *transport.type*."""
     if transport.type == "http":
-        return AgentStream.http_post(transport.url, payload, timeout=transport.timeout)  # type: ignore[arg-type]
+        from monet.worker.transport._http import HTTPTransport
 
+        return HTTPTransport()
     if transport.type == "sse":
-        return AgentStream.sse_post(transport.url, payload, timeout=transport.timeout)  # type: ignore[arg-type]
+        from monet.worker.transport._sse import SSETransport
 
+        return SSETransport()
     # cli — transport.cmd is guaranteed non-None by AgentTransportConfig validator
-    return AgentStream.cli(transport.cmd, stdin_payload=payload)  # type: ignore[arg-type]
+    from monet.worker.transport._cli import CLITransport
+
+    return CLITransport()
+
+
+def _make_endpoint(transport: AgentTransportConfig) -> Any:
+    """Build an Endpoint for direct (non-worker) transport invocation."""
+    from monet.worker.execution._protocol import Endpoint
+
+    metadata: dict[str, Any] = {}
+    if transport.type == "cli" and transport.cmd:
+        metadata["cmd"] = transport.cmd
+
+    return Endpoint(
+        address=transport.url or "",
+        process_id="direct",
+        backend_type="none",
+        metadata=metadata,
+    )
