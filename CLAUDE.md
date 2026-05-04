@@ -51,6 +51,26 @@ Dev: pytest, pytest-asyncio, hypothesis, httpx, ruff, mypy, mkdocs-material, pre
 
 - Always run tests with `-q 2>&1 | tail -60` so the pass/fail summary is visible in one shot. Never use `-v` without a tail pipe — output truncates and you will not know if tests passed without running again.
 
+## E2E tests
+
+Run with `MONET_E2E=1 uv run pytest tests/e2e/<file> -q --tb=short 2>&1 | tail -60`. Requires Docker + LLM API keys in `.env` at repo root.
+
+**LLM provider routing for agent containers:**
+- `_agent_env()` in `tests/e2e/conftest.py` controls which keys are injected into Docker containers.
+- Groq free tier (`on_demand`) has a 12,000 TPM hard limit. ZeroClaw's system prompt alone is ~19K tokens — it will always 413 on Groq. Pi's system prompt is ~32K tokens — same issue. Both must use NIM.
+- NIM (NVIDIA) uses `NVIDIA_API_KEY` env var (not `NVIDIA_NIM_API_KEY`). `_agent_env()` aliases `NVIDIA_NIM_API_KEY → NVIDIA_API_KEY` for this reason.
+- ZeroClaw validates API key prefix against the declared provider. `nvapi-` keys require `default_provider = "nvidia"` in `config.toml`, not `"openai"`.
+
+**ZeroClaw adapter specifics** (`examples/agent-adapters/zeroclaw/`):
+- ZeroClaw is a code agent — it uses tools for every task, including trivial Q&A. Give it shell/code tasks, not factual questions. Q&A tasks cause it to exhaust the 10-tool-iteration limit.
+- The workspace dir (`/tmp/zeroclaw-workspace` per `config.toml`) must exist before the ACP process starts. Without it, file tools fail silently and the agent burns all 10 iterations. The adapter creates it at startup.
+- ZeroClaw's `config.toml` is baked into the Docker image. Changes require a rebuild (Docker layer cache invalidates on file change, so this is automatic in tests).
+
+**Windows process management:**
+- `subprocess.Popen.terminate()` kills only the parent process on Windows. `monet dev` forks `aegra dev` which forks uvicorn — only the monet wrapper dies, the server stays up.
+- Use `_kill_tree()` (defined in `test_e2e_worker_reconnect.py`) for any process that may have children: `taskkill /F /T /PID` on Windows, `os.killpg` on Unix.
+- A killed server's port may time out before actively refusing new connections. `_wait_unhealthy()` must catch `httpx.TimeoutException` in addition to `httpx.ConnectError`.
+
 ## Code navigation
 
 SymDex MCP installed, repo registered (`~/.symdex/monet.db`). Tools **deferred** — schemas not loaded by default. For ANY symbol lookup, callgraph trace, file outline, or semantic search against `src/monet/**`, **MUST** load schemas first via `ToolSearch`:
