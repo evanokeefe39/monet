@@ -66,7 +66,9 @@ async def test_http_submit_and_receive_result() -> None:
 
     assert len(events) == 1
     assert events[0].type == "result"
-    assert events[0].data == {"output": "hello"}
+    assert events[0].data["output"] == "hello"
+    assert events[0].data["success"] is True
+    assert events[0].data["artifacts"] == {}
 
 
 @pytest.mark.asyncio
@@ -75,11 +77,34 @@ async def test_http_4xx_raises_agent_error() -> None:
     ep = _endpoint()
     session = await transport.connect(ep)
     session._client = httpx.AsyncClient(
-        transport=_http_app(status=400, body={"error": "bad request"})
+        transport=_http_app(
+            status=400,
+            body={"error": "bad request", "error_code": "INVALID_REQUEST"},
+        )
     )
 
-    with pytest.raises(AgentError, match="HTTP 400"):
+    with pytest.raises(AgentError, match="HTTP 400") as exc_info:
         await session.submit({"task_id": "t1", "payload": {}})
+    assert exc_info.value.status_code == 400
+    assert "bad request" in exc_info.value.body
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_http_4xx_structured_error_code_in_message() -> None:
+    transport = HTTPTransport()
+    ep = _endpoint()
+    session = await transport.connect(ep)
+    session._client = httpx.AsyncClient(
+        transport=_http_app(
+            status=422,
+            body={"error": "validation failed", "error_code": "INVALID_REQUEST"},
+        )
+    )
+
+    with pytest.raises(AgentError, match=r"INVALID_REQUEST") as exc_info:
+        await session.submit({"task_id": "t1", "payload": {}})
+    assert exc_info.value.status_code == 422
     await session.close()
 
 
@@ -92,8 +117,10 @@ async def test_http_5xx_raises_agent_error() -> None:
         transport=_http_app(status=500, raw="internal server error")
     )
 
-    with pytest.raises(AgentError, match="HTTP 500"):
+    with pytest.raises(AgentError, match="HTTP 500") as exc_info:
         await session.submit({"task_id": "t1", "payload": {}})
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.body == "internal server error"
     await session.close()
 
 

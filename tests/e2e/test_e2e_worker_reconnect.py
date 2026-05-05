@@ -11,13 +11,9 @@ Gated behind ``MONET_E2E=1``.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
 import shutil
-import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +22,7 @@ import httpx
 import pytest
 
 from monet._ports import STANDARD_DEV_PORT
+from tests.e2e.conftest import _kill_tree
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -35,24 +32,6 @@ QUICKSTART_DIR = REPO_ROOT / "examples" / "quickstart"
 HEALTH_URL = f"http://localhost:{STANDARD_DEV_PORT}/health"
 BOOT_TIMEOUT_SECONDS = 180.0
 RUN_TIMEOUT_SECONDS = 300.0
-
-
-def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
-    """Kill process and all its children (platform-aware)."""
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            check=False,
-            capture_output=True,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
 
 
 def _wait_health(timeout: float) -> None:

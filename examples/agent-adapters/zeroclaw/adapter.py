@@ -129,8 +129,13 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:
+            error = json.dumps(
+                {"error": "invalid JSON", "error_code": "INVALID_REQUEST"}
+            ).encode()
             self.send_response(400)
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
+            self.wfile.write(error)
             return
 
         task_payload: dict[str, object] = payload.get("payload", {})
@@ -144,7 +149,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(result)
         except Exception as exc:
-            error = json.dumps({"error": str(exc)}).encode()
+            error = json.dumps(
+                {"error": str(exc), "error_code": "AGENT_ERROR"}
+            ).encode()
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

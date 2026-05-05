@@ -11,9 +11,13 @@ from ._cli import CLISession, CLITransport
 from ._errors import AgentError, ProtocolError, TransportError
 from ._http import HTTPSession, HTTPTransport
 from ._protocol import ObservedEvent, Session, TransportAdapter
+from ._schemas import AdapterErrorResponse, AdapterTaskRequest, AdapterTaskResponse
 from ._sse import SSESession, SSETransport
 
 __all__ = [
+    "AdapterErrorResponse",
+    "AdapterTaskRequest",
+    "AdapterTaskResponse",
     "AgentError",
     "CLISession",
     "CLITransport",

@@ -24,6 +24,7 @@ import httpx
 import pytest
 
 from monet._ports import STANDARD_DEV_PORT
+from tests.e2e.conftest import _kill_tree
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -90,12 +91,7 @@ def aegra_with_external_postgres(
         yield aegra_url, db_url
     finally:
         log_fh.close()
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        _kill_tree(proc)
 
 
 @pytest.mark.e2e

@@ -15,9 +15,12 @@ and hermetic. Invoke explicitly with ``pytest -m e2e``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
+import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,6 +42,24 @@ HEALTH_URL = f"http://localhost:{STANDARD_DEV_PORT}/health"
 # in a few seconds.
 BOOT_TIMEOUT_SECONDS = 180.0
 HEALTH_POLL_INTERVAL = 1.0
+
+
+def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+    """Kill process and all its children (platform-aware)."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            check=False,
+            capture_output=True,
+        )
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
 
 def pytest_collection_modifyitems(
@@ -113,12 +134,7 @@ def monet_dev_server() -> Iterator[str]:
             check=False,
             timeout=30,
         )
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        _kill_tree(proc)
 
 
 def _read_tail(path: Path, max_bytes: int = 4096) -> str:

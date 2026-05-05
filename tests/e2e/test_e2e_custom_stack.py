@@ -24,6 +24,7 @@ import pytest
 
 from monet._ports import STANDARD_DEV_PORT
 from monet.client import MonetClient
+from tests.e2e.conftest import _kill_tree
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -86,24 +87,7 @@ def custom_stack_dev_server() -> Iterator[str]:
             check=False,
             timeout=30,
         )
-        # ``monet dev`` spawns ``aegra`` as a child which spawns uvicorn
-        # workers. ``proc.terminate()`` only signals the top-level
-        # process on Windows, leaving grandchildren to inherit the
-        # listening socket. Use ``taskkill /T /F`` to kill the tree so
-        # port 2026 is reliably released between test runs.
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                check=False,
-                timeout=10,
-                capture_output=True,
-            )
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+        _kill_tree(proc)
 
 
 @pytest.mark.e2e

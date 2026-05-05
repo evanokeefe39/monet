@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.conftest import _kill_tree
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 QUICKSTART_DIR = REPO_ROOT / "examples" / "quickstart"
 N_WORKERS = 3
@@ -81,11 +83,7 @@ def test_concurrent_workers_claim_once(monet_dev_server: str) -> None:
             results = [f.result() for f in concurrent.futures.as_completed(futures)]
     finally:
         for proc in worker_procs:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _kill_tree(proc)
 
     # Every run reaches run_complete; no crashes.
     completed = 0

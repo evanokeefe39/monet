@@ -40,4 +40,13 @@ class AgentError(Exception):
     Raised when the agent process responded with an explicit error — e.g.
     HTTP 4xx/5xx, or an event with ``type="error"``.  The string form of
     this exception is the agent's error message.
+
+    Attributes:
+        status_code: HTTP status code from the agent response (0 if not HTTP).
+        body: Raw response body from the agent (full, not truncated).
     """
+
+    def __init__(self, message: str, *, status_code: int = 0, body: str = "") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body

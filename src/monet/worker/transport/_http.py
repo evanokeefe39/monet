@@ -13,12 +13,17 @@ Error classification:
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from pydantic import ValidationError
 
 from ._errors import AgentError, ProtocolError, TransportError
 from ._protocol import ObservedEvent
+from ._schemas import AdapterErrorResponse, AdapterTaskResponse
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -59,17 +64,40 @@ class HTTPSession:
             raise TransportError(str(exc)) from exc
 
         if response.status_code >= 400:
-            raise AgentError(f"HTTP {response.status_code}: {response.text[:200]}")
+            body = response.text
+            _log.debug(
+                "agent error response (status=%d, url=%s): %s",
+                response.status_code,
+                url,
+                body,
+            )
+            try:
+                err = AdapterErrorResponse.model_validate_json(body)
+                message = f"HTTP {response.status_code} [{err.error_code}]: {err.error}"
+            except (ValidationError, json.JSONDecodeError):
+                message = f"HTTP {response.status_code}: {body}"
+            raise AgentError(message, status_code=response.status_code, body=body)
 
         try:
-            self._result = response.json()
+            raw = response.json()
         except json.JSONDecodeError as exc:
             raise ProtocolError(f"response is not valid JSON: {exc}") from exc
 
-        if not isinstance(self._result, dict):
-            raise ProtocolError(
-                f"response JSON is not an object: {type(self._result).__name__}"
-            )
+        if not isinstance(raw, dict):
+            raise ProtocolError(f"response JSON is not an object: {type(raw).__name__}")
+
+        try:
+            parsed = AdapterTaskResponse.model_validate(raw)
+            self._result = parsed.model_dump()
+        except ValidationError as exc:
+            _log.debug("adapter response failed schema validation: %s", exc)
+            # Accept non-conforming responses — raise ProtocolError only on
+            # fields that make the result unusable (missing output).
+            if "output" not in raw:
+                raise ProtocolError(
+                    f"adapter response missing required 'output' field: {raw}"
+                ) from exc
+            self._result = raw
 
     def receive(self) -> AsyncIterator[ObservedEvent]:
         """Yield the single result event buffered by ``submit()``.
