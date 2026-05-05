@@ -152,10 +152,10 @@ class TaskResponse:
 
 ## Phase 7: Docker + Docs
 
-- [ ] `docker/adapter.Dockerfile`
-- [ ] `docs/guides/adapter-sdk.md` — onboarding guide
-- [ ] `docs/reference/adapter-config.md` — full config reference
-- [ ] Update `mkdocs.yml` nav
+- [x] `docker/adapter.Dockerfile`
+- [x] `docs/guides/adapter-sdk.md` — onboarding guide
+- [x] `docs/reference/adapter-config.md` — full config reference
+- [x] Update `mkdocs.yml` nav
 
 ---
 

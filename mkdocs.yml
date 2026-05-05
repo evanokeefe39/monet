@@ -46,6 +46,7 @@ nav:
   - Getting Started: getting-started.md
   - Guides:
     - Defining Agents: guides/agents.md
+    - Adapter SDK: guides/adapter-sdk.md
     - Custom Graphs: guides/custom-graphs.md
     - Artifact Store: guides/artifacts.md
     - Orchestration: guides/orchestration.md
@@ -64,6 +65,8 @@ nav:
     - Server: api/server.md
   - Reference:
     - Environment variables: reference/env-vars.md
+    - Model Catalog: reference/models.md
+    - Adapter Config: reference/adapter-config.md
   - Architecture:
     - Design Principles: architecture/design-principles.md
     - Graph Topology: architecture/graph-topology.md
