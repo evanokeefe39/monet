@@ -1,0 +1,8 @@
+# openclaw-adoption: four-agent harness demo
+#
+# Demonstrates pi, zeroclaw, hermes, and openclaw registered as monet
+# commands and composed by the planner. No Python source required —
+# all agents are external adapters declared in agents.toml.
+#
+# Default entrypoints are inherited: default (planning + execution),
+# chat (TUI), execution (unattended frozen brief).

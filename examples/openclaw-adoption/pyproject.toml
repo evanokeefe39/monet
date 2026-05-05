@@ -1,0 +1,11 @@
+[project]
+name = "monet-openclaw-adoption"
+version = "0.0.0"
+description = "monet example — four external agents (pi, zeroclaw, hermes, openclaw) composed by the planner via agents.toml."
+requires-python = ">=3.12"
+dependencies = [
+    "monet[examples]",
+]
+
+[tool.uv.sources]
+monet = { path = "../..", editable = true }
