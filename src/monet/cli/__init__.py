@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import click
 
+from monet.cli._adapter import adapter
 from monet.cli._db import db
 from monet.cli._dev import dev
 from monet.cli._run import run
@@ -33,6 +34,7 @@ def cli() -> None:
     """monet — multi-agent orchestration platform."""
 
 
+cli.add_command(adapter)
 cli.add_command(chat)
 cli.add_command(db)
 cli.add_command(dev)

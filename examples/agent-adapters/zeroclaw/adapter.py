@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# DEPRECATED: use configs/zeroclaw.toml + zeroclaw_plugin.py with `monet adapter serve`
 """Monet /task adapter wrapping ZeroClaw via ACP (JSON-RPC 2.0 over stdio).
 
 Starts ZeroClaw ACP server as a subprocess on startup, then serves the

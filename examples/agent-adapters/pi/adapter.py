@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# DEPRECATED: use examples/agent-adapters/configs/pi.toml with `monet adapter serve`
 """Monet /task adapter wrapping the Pi coding agent.
 
 Starts Pi on PI_PORT (default 9000) as a subprocess, then serves the

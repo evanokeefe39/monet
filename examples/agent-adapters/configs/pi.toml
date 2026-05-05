@@ -1,0 +1,23 @@
+name = "pi"
+type = "http"
+url = "http://localhost:9000/chat"
+health = "/health"
+
+[request]
+body.message = "$.payload.task"
+body.session_id = "$.task_id"
+params = { stream = "false" }
+
+[response]
+output = "$.message"
+
+[process]
+command = ["npx", "tsx", "server.ts"]
+workdir = "/pi"
+
+[process.env]
+PORT = "9000"
+LLM_PROVIDER = "openai"
+LLM_MODEL = "deepseek-ai/deepseek-v4-pro"
+OPENAI_BASE_URL = "https://integrate.api.nvidia.com/v1"
+OPENAI_API_KEY = "${NVIDIA_NIM_API_KEY}"

@@ -1,0 +1,10 @@
+name = "zeroclaw"
+type = "stdio"
+
+[stdio]
+command = ["zeroclaw", "acp", "--config-dir", "/etc/zeroclaw"]
+plugin = "zeroclaw_plugin:run_task"
+init_rpc = "initialize"
+
+[process.env]
+NVIDIA_API_KEY = "${NVIDIA_NIM_API_KEY}"

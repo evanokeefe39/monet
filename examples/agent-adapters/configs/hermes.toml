@@ -1,0 +1,4 @@
+name = "hermes"
+type = "openai"
+url = "http://localhost:8642"
+# command = ["hermes-server", "--port", "8642"]
