@@ -12,6 +12,7 @@ communicate with the platform through the data plane gateway.
 from __future__ import annotations
 
 import tomllib
+import uuid
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
@@ -27,22 +28,44 @@ logger = logging.getLogger("monet.agents_config")
 # ── Typed config models (extra="forbid" so typos surface immediately) ────────
 
 
+class AgentHTTPRequest(BaseModel):
+    """JSONPath request body template for protocol='http'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    body: dict[str, Any] = {}
+    params: dict[str, str] = {}
+    method: str = "POST"
+
+
+class AgentHTTPResponse(BaseModel):
+    """JSONPath response extraction for protocol='http'."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    output: str = "$.output"
+
+
 class AgentTransportConfig(BaseModel):
     """Transport declaration for a config-declared agent."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["http", "sse", "cli"]
+    protocol: Literal["openai", "http", "zeroclaw", "custom"]
     url: str | None = None
-    cmd: list[str] | None = None
     timeout: float = 30.0
+    model: str | None = None
+    request: AgentHTTPRequest | None = None
+    response: AgentHTTPResponse | None = None
+    adapter: str | None = None
+    config_dir: str | None = None
 
     @model_validator(mode="after")
     def _check_requirements(self) -> AgentTransportConfig:
-        if self.type in ("http", "sse") and not self.url:
-            raise ValueError(f"{self.type.upper()} transport requires 'url'")
-        if self.type == "cli" and not self.cmd:
-            raise ValueError("CLI transport requires 'cmd' as an array of strings")
+        if self.protocol in ("openai", "http") and not self.url:
+            raise ValueError(f"{self.protocol!r} protocol requires 'url'")
+        if self.protocol == "custom" and not self.adapter:
+            raise ValueError("'custom' protocol requires 'adapter'")
         return self
 
 
@@ -121,7 +144,9 @@ def _register_agent(config: AgentEntryConfig, path: Path, index: int) -> None:
         )
         raise ValueError(msg)
 
-    handler.__doc__ = config.description or f"External {config.transport.type} agent"
+    handler.__doc__ = (
+        config.description or f"External {config.transport.protocol} agent"
+    )
 
     from monet.core.decorator import agent
 
@@ -133,10 +158,10 @@ def _register_agent(config: AgentEntryConfig, path: Path, index: int) -> None:
     )(handler)
 
     logger.info(
-        "Registered config-declared agent %s/%s (transport=%s, pool=%s)",
+        "Registered config-declared agent %s/%s (protocol=%s, pool=%s)",
         config.id,
         config.command,
-        config.transport.type,
+        config.transport.protocol,
         config.pool,
     )
 
@@ -146,61 +171,52 @@ def _make_handler(
     agent_id: str,
     command: str,
 ) -> Any:
-    """Create an async handler backed by a transport adapter."""
+    """Create an async handler backed by a native protocol caller."""
+    caller = _make_protocol_caller(transport)
 
     async def handler(
         task: str,
         context: list[dict[str, Any]] | None = None,
     ) -> str | None:
-        payload = {
+        ctx: dict[str, Any] = {
             "task": task,
+            "task_id": str(uuid.uuid4()),
             "context": context or [],
             "command": command,
             "agent_id": agent_id,
         }
-        adapter = _resolve_adapter(transport)
-        endpoint = _make_endpoint(transport)
-        session = await adapter.connect(endpoint)
-        try:
-            await session.submit(payload)
-            async for event in session.receive():
-                if event.type == "result":
-                    output = event.data.get("output")
-                    return output if isinstance(output, str) else None
-        finally:
-            await session.close()
-        return None
+        result = await caller(task, ctx)
+        return result if isinstance(result, str) else None
 
     return handler
 
 
-def _resolve_adapter(transport: AgentTransportConfig) -> Any:
-    """Return the transport adapter matching *transport.type*."""
-    if transport.type == "http":
-        from monet.worker.transport._http import HTTPTransport
-
-        return HTTPTransport()
-    if transport.type == "sse":
-        from monet.worker.transport._sse import SSETransport
-
-        return SSETransport()
-    # cli — transport.cmd is guaranteed non-None by AgentTransportConfig validator
-    from monet.worker.transport._cli import CLITransport
-
-    return CLITransport()
-
-
-def _make_endpoint(transport: AgentTransportConfig) -> Any:
-    """Build an Endpoint for direct (non-worker) transport invocation."""
-    from monet.worker.execution._protocol import Endpoint
-
-    metadata: dict[str, Any] = {}
-    if transport.type == "cli" and transport.cmd:
-        metadata["cmd"] = transport.cmd
-
-    return Endpoint(
-        address=transport.url or "",
-        process_id="direct",
-        backend_type="none",
-        metadata=metadata,
+def _make_protocol_caller(transport: AgentTransportConfig) -> Any:
+    from monet.worker.transport._direct import (
+        custom_caller,
+        http_caller,
+        openai_caller,
+        zeroclaw_caller,
     )
+
+    if transport.protocol == "openai":
+        assert transport.url is not None
+        return openai_caller(transport.url, transport.model, transport.timeout)
+
+    if transport.protocol == "http":
+        assert transport.url is not None
+        return http_caller(
+            transport.url,
+            transport.request or AgentHTTPRequest(),
+            transport.response or AgentHTTPResponse(),
+            transport.timeout,
+        )
+
+    if transport.protocol == "zeroclaw":
+        return zeroclaw_caller(transport.config_dir, transport.timeout)
+
+    if transport.protocol == "custom":
+        assert transport.adapter is not None
+        return custom_caller(transport.adapter, transport.url, transport.timeout)
+
+    raise ValueError(f"Unknown protocol: {transport.protocol!r}")  # pragma: no cover

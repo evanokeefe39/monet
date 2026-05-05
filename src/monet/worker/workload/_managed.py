@@ -120,7 +120,6 @@ async def execute_managed_workload(
     """
     spec = ContainerSpec(
         image=pool.image,
-        entrypoint=agent.transport.cmd,
         expose_port=pool.agent_port,
     )
     endpoint = await backend.start(spec, {**gateway_env, **_task_env(record)})

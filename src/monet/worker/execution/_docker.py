@@ -61,7 +61,7 @@ class DockerBackend:
         expose = spec.expose_port
 
         def _run() -> tuple[str, str]:
-            client = docker.from_env()
+            client = docker.from_env()  # type: ignore[attr-defined]
             ports: dict[str, object] | None = None
             if expose is not None:
                 ports = {f"{expose}/tcp": ("127.0.0.1", 0)}
@@ -113,7 +113,7 @@ class DockerBackend:
             ) from exc
 
         def _poll() -> JobStatus:
-            client = docker.from_env()
+            client = docker.from_env()  # type: ignore[attr-defined]
             try:
                 container = client.containers.get(endpoint.process_id)
                 container.reload()
@@ -148,7 +148,7 @@ class DockerBackend:
             ) from exc
 
         def _stop() -> None:
-            client = docker.from_env()
+            client = docker.from_env()  # type: ignore[attr-defined]
             with contextlib.suppress(docker.errors.NotFound):
                 client.containers.get(endpoint.process_id).stop(
                     timeout=int(grace_period_s)
@@ -173,7 +173,7 @@ class DockerBackend:
             ) from exc
 
         def _kill() -> None:
-            client = docker.from_env()
+            client = docker.from_env()  # type: ignore[attr-defined]
             try:
                 client.containers.get(endpoint.process_id).kill()
             except docker.errors.NotFound:

@@ -1,0 +1,37 @@
+# Four-agent harness: zeroclaw + pi + hermes + openclaw
+#
+# Workers translate each agent's native protocol directly — no adapter
+# server processes required. Start the agents themselves, then start the
+# monet worker pointing at this file.
+#
+# Agent descriptions are planner-visible: the planning graph reads
+# these docstrings when routing tasks to agents.
+
+[[agent]]
+id = "zeroclaw"
+command = "run"
+description = "Shell-native code agent. Executes shell commands, runs scripts, installs packages, and inspects process outputs. Use for: running code to verify it works, environment setup, file system operations, any task requiring real shell execution."
+transport = { protocol = "zeroclaw", timeout = 120.0 }
+
+[[agent]]
+id = "pi"
+command = "code"
+description = "Code generation agent. Writes, explains, and refactors code without executing it. Use for: implementing new functions or modules, generating test suites, translating pseudocode to a target language, explaining how existing code works."
+transport.protocol = "http"
+transport.url = "http://localhost:9000/chat"
+transport.timeout = 60.0
+transport.request.body.message = "$.task"
+transport.request.body.session_id = "$.task_id"
+transport.response.output = "$.message"
+
+[[agent]]
+id = "hermes"
+command = "reason"
+description = "General-purpose reasoning and writing agent. Analyzes problems, writes documentation, summarizes content, and answers questions. Use for: planning, technical writing, code review feedback, structured analysis, tasks that do not require code execution."
+transport = { protocol = "openai", url = "http://localhost:8642", timeout = 60.0 }
+
+[[agent]]
+id = "openclaw"
+command = "code"
+description = "Agentic code editing agent with full tool use. Reads files, applies multi-step edits, runs tests, and iterates until the task is complete. Use for: complex multi-file changes, debugging failing tests, end-to-end feature implementation that requires reading and writing the actual codebase."
+transport = { protocol = "openai", url = "http://localhost:3000", timeout = 180.0 }

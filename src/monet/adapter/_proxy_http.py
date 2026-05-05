@@ -4,8 +4,9 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from monet.core._jsonpath import extract
+
 from ._errors import AdapterError
-from ._jsonpath import extract
 from ._types import TaskRequest, TaskResponse
 
 if TYPE_CHECKING:

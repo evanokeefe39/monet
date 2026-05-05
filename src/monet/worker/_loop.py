@@ -81,22 +81,17 @@ def _resolve_transport(agent_cfg: AgentEntryConfig | None) -> TransportAdapter:
 
     Defaults to HTTPTransport when no agent config is available.
     """
-    transport_type = agent_cfg.transport.type if agent_cfg is not None else "http"
-    match transport_type:
-        case "http":
-            from monet.worker.transport._http import HTTPTransport
+    # Managed workloads run agents in containers that expose the monet
+    # adapter HTTP protocol regardless of the agent's native protocol.
+    # zeroclaw is subprocess-only and cannot run as a managed container.
+    if agent_cfg is not None and agent_cfg.transport.protocol == "zeroclaw":
+        raise ValueError(
+            "protocol='zeroclaw' uses subprocess mode and cannot be used "
+            "with a managed container pool (docker/subprocess/kubernetes)"
+        )
+    from monet.worker.transport._http import HTTPTransport
 
-            return HTTPTransport()
-        case "sse":
-            from monet.worker.transport._sse import SSETransport
-
-            return SSETransport()
-        case "cli":
-            from monet.worker.transport._cli import CLITransport
-
-            return CLITransport()
-        case _:
-            raise ValueError(f"Unknown transport type: {transport_type!r}")
+    return HTTPTransport()
 
 
 def _mint_token(record: TaskRecord, pool: PoolConfig, signing_key: str) -> str:
