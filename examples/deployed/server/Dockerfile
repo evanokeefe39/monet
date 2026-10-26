@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm AS base
+FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -12,7 +12,7 @@ RUN addgroup --system app && adduser --system --ingroup app app
 # -----------------------------
 FROM base AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.10.0@sha256:78a7ff97cd27b7124a5f3c2aefe146170793c56a1e03321dd31a289f6d82a04f /uv /bin/uv
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
